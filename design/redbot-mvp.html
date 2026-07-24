@@ -1,0 +1,513 @@
+<title>redbot — MVP</title>
+<style>
+:root{
+  --paper:#FBFAF7; --field:#F1EDE6; --ink:#17161A; --ink-2:#4A4852; --ink-3:#6E747C;
+  --line:#E2DCD2; --line-2:#C9CDD2;
+  --accent:#C41E1A; --accent-soft:rgba(196,30,26,.09);
+  --silver:#7C8288;
+  --go:#1F6F4A; --go-soft:rgba(31,111,74,.10);
+  --hold:#8A6A2B; --hold-soft:rgba(138,106,43,.10);
+  --sans:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+  --mono:"Cascadia Mono",ui-monospace,"SF Mono",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --paper:#131316;--field:#1B1A1F;--ink:#EDEAE4;--ink-2:#B4B0AB;--ink-3:#87838C;
+  --line:#2A2830;--line-2:#37343E;--accent:#E8352A;--accent-soft:rgba(232,53,42,.16);
+  --silver:#A9AFB6;--go:#5FBF8E;--go-soft:rgba(95,191,142,.13);--hold:#D8A94E;--hold-soft:rgba(216,169,78,.13)}}
+:root[data-theme="light"]{--paper:#FBFAF7;--field:#F1EDE6;--ink:#17161A;--ink-2:#4A4852;--ink-3:#6E747C;--line:#E2DCD2;--line-2:#C9CDD2;--accent:#C41E1A;--accent-soft:rgba(196,30,26,.09);--silver:#7C8288;--go:#1F6F4A;--go-soft:rgba(31,111,74,.10);--hold:#8A6A2B;--hold-soft:rgba(138,106,43,.10)}
+:root[data-theme="dark"]{--paper:#131316;--field:#1B1A1F;--ink:#EDEAE4;--ink-2:#B4B0AB;--ink-3:#87838C;--line:#2A2830;--line-2:#37343E;--accent:#E8352A;--accent-soft:rgba(232,53,42,.16);--silver:#A9AFB6;--go:#5FBF8E;--go-soft:rgba(95,191,142,.13);--hold:#D8A94E;--hold-soft:rgba(216,169,78,.13)}
+
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.62;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:3rem 2.2rem 6rem}
+.lede{max-width:78ch}
+p,ul,ol{max-width:76ch}
+.cols2{display:grid;grid-template-columns:1fr 1fr;gap:1.6rem;align-items:start}
+@media (max-width:900px){.wrap{padding:1.8rem 1.1rem 4rem}.cols2{grid-template-columns:1fr}}
+table{font-size:.9rem}
+h1{font-size:2rem;letter-spacing:-.022em;margin:0 0 .3rem;text-wrap:balance}
+h2{font-size:1.35rem;letter-spacing:-.018em;margin:3.2rem 0 1rem;text-wrap:balance;padding-top:1.4rem;border-top:1px solid var(--line)}
+h3{font-size:1.02rem;margin:2rem 0 .6rem;letter-spacing:-.01em}
+p{margin:0 0 1rem}
+.lede{font-size:1.18rem;line-height:1.6;color:var(--ink-2);margin-bottom:1.8rem;max-width:70ch}
+.meta{font-family:var(--mono);font-size:.75rem;color:var(--ink-3);margin-bottom:2rem;display:flex;gap:.9rem;flex-wrap:wrap}
+.meta span{display:inline-flex;align-items:center;gap:.35rem}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--go);display:inline-block}
+.dot.warn{background:var(--hold)}
+hr{border:0;border-top:1px solid var(--line);margin:2.4rem 0}
+code{font-family:var(--mono);font-size:.87em;background:var(--field);padding:.1em .35em;border-radius:3px;border:1px solid var(--line)}
+pre{background:var(--field);border:1px solid var(--line);border-radius:9px;padding:1.15rem 1.3rem;overflow-x:auto;font-family:var(--mono);font-size:.82rem;line-height:1.7;color:var(--ink-2);margin:1.2rem 0 1.6rem}
+pre code{background:none;border:0;padding:0;font-size:inherit}
+table{width:100%;border-collapse:collapse;font-size:.9rem;margin:1.2rem 0 1.8rem}
+th{text-align:left;font-family:var(--mono);font-size:.65rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);padding:.6rem .8rem;border-bottom:1px solid var(--line-2);white-space:nowrap}
+td{padding:.7rem .8rem;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.55}
+.tag{display:inline-block;font-family:var(--mono);font-size:.66rem;padding:.1rem .42rem;border-radius:3px;border:1px solid var(--line-2);color:var(--ink-3);white-space:nowrap}
+.tag.ok{color:var(--go);border-color:color-mix(in srgb,var(--go) 35%,transparent);background:var(--go-soft)}
+.tag.no{color:var(--hold);border-color:color-mix(in srgb,var(--hold) 35%,transparent);background:var(--hold-soft)}
+.tag.stop{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);background:var(--accent-soft)}
+.call{border-left:3px solid var(--accent);background:var(--accent-soft);padding:1.1rem 1.3rem;border-radius:0 8px 8px 0;margin:1.8rem 0;max-width:80ch}
+.call b{display:block;font-family:var(--mono);font-size:.68rem;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);margin-bottom:.3rem}
+.link-card{display:block;border:1px solid var(--line-2);border-radius:9px;padding:1.05rem 1.2rem;text-decoration:none;color:inherit;background:var(--field);margin:1.4rem 0;transition:border-color .15s}
+.link-card:hover{border-color:var(--accent)}
+.link-card b{display:block;font-size:1.02rem;margin-bottom:.25rem}
+.link-card span{font-size:.87rem;color:var(--ink-3)}
+.link-card .go{font-family:var(--mono);font-size:.75rem;color:var(--accent);margin-top:.55rem;display:block}
+.quote{font-family:var(--serif);font-size:1rem;line-height:1.65;color:var(--ink-2);border-left:2px solid var(--line-2);padding-left:1rem;margin:1.2rem 0}
+ul{margin:0 0 1rem;padding-left:1.2rem}
+li{margin-bottom:.35rem}
+.foot{margin-top:3rem;padding-top:1.2rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--ink-3)}
+</style>
+
+<div class="wrap">
+
+<h1 style="display:flex;align-items:center;gap:.65rem">
+  <svg viewBox="0 0 32 32" fill="none" style="width:38px;height:38px;flex:none" aria-hidden="true">
+      <!-- antenna -->
+      <path d="M16 6V3.4" stroke="var(--silver,#7C8288)" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="16" cy="2.4" r="1.7" fill="var(--accent)"/>
+      <!-- boxed head -->
+      <rect x="5.2" y="6" width="21.6" height="14.6" rx="4.2"
+            stroke="var(--silver,#7C8288)" stroke-width="2.1"/>
+      <!-- eyes -->
+      <circle cx="11.4" cy="13.3" r="2.05" fill="var(--accent)"/>
+      <circle cx="20.6" cy="13.3" r="2.05" fill="var(--accent)"/>
+      <!-- fingers on keys -->
+      <path d="M10.4 23.4v3.4M16 23.4v4.2M21.6 23.4v3.4"
+            stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round"/>
+      <!-- keyboard line -->
+      <path d="M6.4 29.4h19.2" stroke="var(--silver,#7C8288)" stroke-width="1.7" stroke-linecap="round"/>
+    </svg>
+  <span><span style="color:var(--silver)">red</span><span style="color:var(--accent)">bot</span></span>
+</h1>
+<p class="lede">Finds the Reddit conversations worth your time, drafts a reply, and posts only what you approve. Anyone on the team can run it &mdash; support, marketing, sales, engineering. It is not an engineering tool.</p>
+
+<div class="meta">
+  <span><i class="dot"></i>reading, identity, ranking, drafting all verified live</span>
+  <span><i class="dot warn"></i>a lint-clean draft is queued &mdash; awaiting a human yes</span>
+  <span>2026-07-22</span>
+</div>
+
+<a class="link-card" href="https://claude.ai/code/artifact/684a4328-bc85-4c88-b615-ce81ebce3219" target="_blank" rel="noopener">
+  <b>→ Interface mockup</b>
+  <span>Accounts-first. Enable accounts, pick threads, generate replies individually or in bulk, review and send. Interactive, built on real output from the live run.</span>
+  <span class="go">open the mockup</span>
+</a>
+
+<hr>
+
+<h2>What it does</h2>
+<ol>
+  <li><b>You</b> open Reddit in a browser and sign in — once.</li>
+  <li><b>redbot</b> reads a subreddit and collects the threads.</li>
+  <li><b>redbot</b> scores each one: could SGEN genuinely help here?</li>
+  <li><b>redbot</b> drafts a reply to the best ones.</li>
+  <li><b>You</b> read it, edit it, approve or reject.</li>
+  <li><b>redbot</b> posts what you approved and records what happened.</li>
+</ol>
+<p>Step 5 is the point. Nothing reaches Reddit without a person saying yes.</p>
+
+<h2>Where it actually stands</h2>
+<p><b>Validated by adversarial testing, not by assertion.</b> <b>Nine</b> defects have been found
+by trying to break it &mdash; three of them critical. Eight are fixed outright with regression
+tests. One was reduced to a known, bounded residue, described below rather than hidden.</p>
+
+<p>Two were found <i>after</i> the first certification pass, by attempting a real publish. Both
+were silent-failure bugs, which is the class this project keeps producing.</p>
+
+<p>Nothing here is broken code. What remains is <b>one measurement that needs a bigger
+sample</b> and <b>one decision deliberately reserved for a person</b>.</p>
+
+<table>
+<thead><tr><th>Step</th><th>State</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td>Sign in</td><td><span class="tag ok">verified</span></td><td>deterministic flag; 4/4 auth tests; two accounts across two profiles</td></tr>
+<tr><td>Identity</td><td><span class="tag ok">verified</span></td><td>names the signed-in account; confirmed live as <code>docs-architect</code> and <code>jrum_sgen</code></td></tr>
+<tr><td>Reuse session</td><td><span class="tag ok">verified</span></td><td>lives in the Chrome profile; no credential stored</td></tr>
+<tr><td>Browse subreddits</td><td><span class="tag ok">verified</span></td><td>15/15 threads across 5 subreddits, 0 skipped, metadata 100%</td></tr>
+<tr><td>Search</td><td><span class="tag ok">verified</span></td><td>works after fixing feed contamination</td></tr>
+<tr><td>Rank opportunities</td><td><span class="tag ok">much improved</span></td><td>score spread <b>19.2 &rarr; 6.7</b>; 3 of 6 threads now identical across runs, 5 of 6 within 10 points</td></tr>
+<tr><td>Generate a draft</td><td><span class="tag ok">verified</span></td><td>real drafts on real threads; every one that passes the linter is publishable as written</td></tr>
+<tr><td>Safety linter</td><td><span class="tag ok">verified</span></td><td>31/31 adversarial cases blocked, 0 false positives; caught a real leaked draft on re-check</td></tr>
+<tr><td>Approve / edit / reject</td><td><span class="tag ok">verified</span></td><td>re-lints after every edit</td></tr>
+<tr><td>Publish</td><td><span class="tag no">awaiting a person</span></td><td>built and wired; a lint-clean draft is queued and ready to send</td></tr>
+<tr><td>Activity log</td><td><span class="tag ok">verified</span></td><td>account, thread, status, permalink on every entry</td></tr>
+</tbody>
+</table>
+
+<div class="call">
+  <b>Why &ldquo;publish&rdquo; is not green</b>
+  Not a bug, and not a missing feature. redbot will not post without a human keystroke, and
+  <b>nobody has pressed the key yet</b>. That is the design working. An automated approval was
+  attempted during testing and was correctly refused &mdash; if a script can approve, the approval
+  step is decoration. It turns green the moment someone reads a draft and says yes.
+</div>
+
+<h3>Is the writing the problem? No.</h3>
+<p>Worth stating plainly, because &ldquo;ranking unstable&rdquo; reads like the replies were bad.
+These are two different steps, and only one ever wobbled.</p>
+
+<table>
+<thead><tr><th>Step</th><th>Model</th><th>Job</th><th>State</th></tr></thead>
+<tbody>
+<tr><td>Triage</td><td>Haiku</td><td>score 15 threads 0&ndash;100, cheaply</td><td>was inconsistent &mdash; largely fixed</td></tr>
+<tr><td>Drafting</td><td>Sonnet</td><td>write one reply properly</td><td>never the problem</td></tr>
+</tbody>
+</table>
+
+<p>The wobble was in <i>triage</i>: the prompt said &ldquo;score 0&ndash;100&rdquo; and left the model to
+invent a number, so the same thread came back 95, then 85, then 20. The fix was not a better
+model &mdash; it was removing the free choice. Scoring now runs through fixed gates
+(is it a question &rarr; is it in scope &rarr; how specific is it), each landing on a set value.</p>
+
+<p><b>The honest residue.</b> Across three runs of six threads, three scored identically every
+time and five landed within ten points. Two borderline threads still flip between
+&ldquo;worth answering&rdquo; and &ldquo;not worth answering&rdquo; &mdash; both sitting near the
+cut-off, where a small score change crosses the line. The practical cost is that a marginal
+thread may or may not appear in the queue on a given run. It does not affect what gets written,
+and a person still chooses from the queue.</p>
+
+<div class="quote">From an actual draft, unedited, on a live thread about database load:
+&ldquo;&hellip;WP Super Cache does not cache URLs with a query string unless you explicitly allow it.
+If your newsletter links carry tracking parameters, every recipient who clicks lands on an
+uncached page at the same time &mdash; the same load pattern as having no cache at all.&rdquo;</div>
+
+<p>Specific, checkable, non-obvious. The writing was never the risk. The risk was <i>which
+thread it picks</i>, and that is the part that got fixed.</p>
+
+<h3>DEFECT-08 &mdash; the approval gate failed open</h3>
+<p>The prompt helper resolved any unrecognised answer to the <i>first</i> option. The publish gate
+offers <code>a / e / r</code> &mdash; approve, edit, reject &mdash; so the fallback for a blank line, a
+typo, or a stray newline was <b>approve, and post</b>. A gate whose default is &ldquo;yes&rdquo; is
+not a gate.</p>
+
+<p>It had never fired because the one non-interactive run to date died at end-of-input before
+deciding. A single stray newline would have published. The safe answer is now a required argument
+that the caller must name explicitly &mdash; <code>reject</code> for publishing &mdash; unrecognised
+input re-asks instead of guessing, and a non-interactive stdin refuses outright rather than
+proceeding. Four regression tests pin it, including one that reads the call site to catch anyone
+re-introducing a positional default.</p>
+
+<h3>DEFECT-09 &mdash; the failure that reported nothing</h3>
+<p>Drafting stopped working and said only <code>claude CLI exited 1:</code> &mdash; with nothing after
+the colon. A batch run produced no drafts for forty minutes with no usable explanation.</p>
+
+<p>The real cause was correct behaviour: per-operator authentication refused to borrow the
+machine&rsquo;s ambient Claude login, exactly as intended. But the &ldquo;not signed in&rdquo; check sat
+<i>after</i> the exit-code branch, so a non-zero exit skipped it &mdash; and the CLI writes
+&ldquo;Not logged in&rdquo; to stdout, while the error path only read stderr. The check now runs first
+and reads both streams, and any other non-zero exit reports whichever stream actually spoke rather
+than an empty string. The message now names the operator and prints the exact sign-in command.</p>
+
+<h3>The two critical defects from the first pass</h3>
+<p><b>DEFECT-01 &mdash; live session cookies were committable to git.</b> redbot sits inside a
+git repo and was entirely untracked: 4.6&nbsp;GB of Chrome profile including <code>Login Data</code>
+and working Reddit session cookies for two accounts. One <code>git add -A</code> would have
+committed them. This is the same failure class flagged in the Appilot teardown, and it appeared
+in our own repo within a day. Fixed, with a regression test.</p>
+
+<p><b>DEFECT-06 &mdash; agent text leaked into drafts.</b> Early drafts contained plan-mode notes,
+internal tool names, and <b>a local Windows path</b> &mdash; text that would have been posted
+publicly. Root cause: the CLI ran as a full coding agent inside the project and inherited a
+<code>plan</code> default mode. Fixed three ways, and the linter now blocks
+<b>31 of 31</b> adversarial leakage cases with zero false positives.</p>
+
+<p>That linter earned its place on re-check. One draft written before the rule existed opened
+with <i>&ldquo;Draft below, WP Super Cache diagnosis angle, ready to edit/post&rdquo;</i> &mdash; text
+addressed to the operator, not to Reddit. Re-running the current linter across every stored draft
+blocked that one and passed the rest. It is now marked rejected and cannot be posted.</p>
+
+<h3>Measured operating envelope</h3>
+<table>
+<thead><tr><th>Metric</th><th>Value</th><th>How it was established</th></tr></thead>
+<tbody>
+<tr><td>Rate limit hit at</td><td>~75 loads in minutes</td><td>we triggered a real HTTP 429</td></tr>
+<tr><td>Recovery</td><td>under 5 minutes</td><td>polled until content returned</td></tr>
+<tr><td>Verified safe rate</td><td><b>9.5 loads/min</b></td><td>20 loads, 5 subreddits, no limiting</td></tr>
+<tr><td>Threads per run</td><td>15</td><td>reduced from 25 after the 429</td></tr>
+</tbody>
+</table>
+
+<h3>Release gate</h3>
+<table>
+<thead><tr><th>Condition</th><th>Status</th><th>Who clears it</th></tr></thead>
+<tbody>
+<tr><td>Zero leakage across the corpus</td><td><span class="tag ok">pass</span> 31/31 blocked</td><td>done</td></tr>
+<tr><td>Linter covers every known class</td><td><span class="tag ok">pass</span></td><td>done</td></tr>
+<tr><td>Identity and login detection correct</td><td><span class="tag ok">pass</span></td><td>done</td></tr>
+<tr><td>Critical defects fixed</td><td><span class="tag ok">pass</span> both</td><td>done</td></tr>
+<tr><td>Ranking consistency</td><td><span class="tag ok">pass with residue</span> spread 19.2 &rarr; 6.7; 2 borderline threads still flip</td><td>done, bounded</td></tr>
+<tr><td>Draft quality at a real sample</td><td><span class="tag no">sample growing</span></td><td>runs itself &mdash; no decision needed</td></tr>
+<tr><td>First live reply</td><td><span class="tag no">awaiting approval</span></td><td><b>a person, once</b></td></tr>
+</tbody>
+</table>
+
+<div class="call">
+  <b>Recommendation</b>
+  <b>Ready for a first supervised reply.</b> Both critical defects are fixed and
+  regression-tested, and the step that was genuinely unreliable &mdash; picking which thread to
+  answer &mdash; now scores the same thread the same way in most cases, with a known residue on
+  borderline threads that a person filters anyway. What is left is to post one reply, watch it,
+  and see whether it survives and earns a response. One comment, one account, on a thread where
+  the answer is genuinely useful. Then decide about the second.
+</div>
+
+<h2>The finding that made it work</h2>
+<p>Every attempt where the software <i>launched</i> a browser was blocked by Reddit — Chromium and real Chrome, headless and headed, plus <code>old.reddit.com</code> at HTTP 403. The block even arrives as HTTP&nbsp;200 with a block page in the body, so a naive status check would have called it success.</p>
+
+<p>Attaching to a Chrome window <b>you</b> opened works.</p>
+
+<pre><code>node dist/cli.js read wordpress
+
+  Found 25 post links.
+    [1/25] [Guide] Complete cleanup and securing of WordPress after REST Batch AP…
+    [2/25] How do you keep track of a handful of WordPress client sites?
+    …
+  OK  Collected 25 threads (25 new).</code></pre>
+
+<p>One architectural rule — <b>attach, never launch</b> — turned zero threads into twenty-five. It is also the better design: the session is genuinely yours, no password ever reaches redbot, and there is no session file to leak.</p>
+
+
+<h2>The accounts, and the real bottleneck</h2>
+<p>Two accounts exist and were verified signed in on 2026-07-22: <code>docs-architect</code> and
+<code>jrum_sgen</code>. Both sit at <b>1 karma</b> &mdash; measured on the live profiles, not assumed.
+Neither has posted anything.</p>
+
+<p>This is the constraint that actually governs the next six weeks, and it is not a software
+problem. A 1-karma account has precisely the profile Reddit&rsquo;s filters are built to catch. Early
+comments get removed, collapsed, or held for a moderator &mdash; often <b>silently</b>, still visible
+to you while signed in and invisible to everyone else. Checking your own profile does not detect
+this; a signed-out window does.</p>
+
+<h3>Warming plan</h3>
+<table>
+<thead><tr><th>Stage</th><th>Target</th><th>What it looks like</th></tr></thead>
+<tbody>
+<tr><td><b>1</b> &middot; weeks 1&ndash;2</td><td>50&ndash;100 karma each</td>
+<td>2&ndash;4 comments a day maximum, threads under two hours old, <b>zero links and zero product
+names</b>. Comment in a few subreddits outside the work topic &mdash; an account whose entire history
+is WordPress support reads as a marketing asset. Verify the first ten comments signed out.</td></tr>
+<tr><td><b>2</b> &middot; weeks 3&ndash;6</td><td>300&ndash;500 karma each</td>
+<td>Narrow to two or three subreddits and appear regularly. Prioritise questions with few existing
+answers &mdash; a good reply to an unanswered question earns far more than the tenth reply to a
+popular one. Stay in the thread and answer follow-ups.</td></tr>
+<tr><td><b>3</b> &middot; week 7 on</td><td>normal operation</td>
+<td>The accounts clear most automatic filters and redbot&rsquo;s ordinary loop applies. Still no
+unprompted promotion; four comments a day from an established account is plenty.</td></tr>
+</tbody>
+</table>
+
+<div class="call">
+  <b>Rules that never relax</b>
+  The two accounts never touch &mdash; not the same thread, no replies to each other, no votes on each
+  other. That is the single behaviour that turns two accounts into vote manipulation, and Reddit bans
+  across the whole network for it. There is no voting at all; redbot has no code path for it. And if
+  an account is suspended, <b>stop</b> &mdash; a replacement from the same machine is ban evasion, and
+  turns one suspension into a permanent one.
+</div>
+
+<p><b>How many accounts can this run?</b> Technically the ceiling is memory &mdash; each account is a
+Chrome profile on its own port at roughly 300&ndash;400&nbsp;MB, so eight to twelve on a normal
+workstation. The real limit is much lower: <b>two active accounts</b>, because Reddit treats several
+accounts posting from one network about one subject as a single operator, which is what they are. A
+third is only worth creating once the first two plainly behave like separate people.</p>
+
+<p>redbot helps with finding threads, drafting, pacing under the rate limit, refusing anything
+promotional, and logging removals so silent ones become visible. It does not shorten the waiting.
+Karma comes from other people finding the comments useful, and no automation changes that. Full plan:
+<code>ACCOUNT-WARMING.md</code>.</p>
+
+<h2>How this differs from Appilot</h2>
+<table>
+<thead><tr><th></th><th>Appilot</th><th>redbot</th></tr></thead>
+<tbody>
+<tr><td>Runs on</td><td>a physical Android phone per account</td><td>a browser profile &mdash; a folder on disk</td></tr>
+<tr><td>Cost of account #2</td><td>phone + SIM + mobile proxy</td><td>a config entry</td></tr>
+<tr><td>Reaches Reddit by</td><td>Accessibility Service on the app</td><td>attaching to a Chrome you already run</td></tr>
+<tr><td>New behaviour</td><td>a new APK, redistributed to every device</td><td>a JSON file</td></tr>
+<tr><td>Secrets</td><td><b>two live API keys compiled into the APK</b></td><td>environment only; CI check and .gitignore enforce it</td></tr>
+<tr><td>Voting</td><td><b>on at 50%, absent from their user guide</b></td><td>not built &mdash; cannot vote at all</td></tr>
+<tr><td>Disclosure</td><td>requested in a prompt</td><td>enforced by a linter that blocks the draft</td></tr>
+<tr><td>AI-detection evasion</td><td>instructed: deliberate typos, invented war stories</td><td>forbidden, and rejected automatically</td></tr>
+<tr><td>Test evidence</td><td>none visible</td><td>25 unit tests, 31 fuzz cases, 4 evidence logs</td></tr>
+<tr><td>Rate limits</td><td>unknown</td><td>measured: 9.5 loads/min safe, recovery under 5 min</td></tr>
+</tbody>
+</table>
+<p>The honest summary of the comparison: <b>Appilot&rsquo;s bot works today and redbot does not
+yet.</b> What redbot has instead is a known list of everything wrong with it, and evidence for
+each claim it makes.</p>
+
+<h2>Why there are no phones in this</h2>
+<p>Appilot runs on real Android devices because mobile-device automation <i>is the product they sell</i>. SGEN wants replies on Reddit.</p>
+
+<div class="call">
+  <b>The fact that settles it</b>
+  Reddit does not treat a comment differently depending on where it was written. App or browser — same account, same service, same visibility, same ranking. There is no engagement, reach or trust benefit to posting from a phone.
+</div>
+
+<p>Android buys exactly one thing: device-fingerprint diversity, which only matters if you are concealing a connection between accounts. redbot's accounts are disclosed SGEN staff — the connection is public on purpose.</p>
+
+<p>The cost difference compounds with every account. In Appilot's model an account is a phone, a SIM, a proxy and a shelf slot. Here it is a folder on disk.</p>
+
+<table>
+<thead><tr><th></th><th>Appilot</th><th>redbot</th></tr></thead>
+<tbody>
+<tr><td>Cost of account #2</td><td>phone + SIM + proxy</td><td>a directory</td></tr>
+<tr><td>10 accounts, hardware</td><td>~$2,000</td><td>$0</td></tr>
+<tr><td>10 accounts, network / year</td><td>$3,600–9,600</td><td>$0 (or ~$480 for separate IPs)</td></tr>
+<tr><td>Time to add one</td><td>order, provision, rack</td><td>minutes</td></tr>
+</tbody>
+</table>
+
+
+<h2>One computer, several accounts — will Reddit flag it?</h2>
+<p>Ranked by what actually ends accounts, not by what people worry about.</p>
+<table>
+<thead><tr><th>Signal</th><th>Real risk</th><th>What redbot does</th></tr></thead>
+<tbody>
+<tr><td>Automated voting</td><td><span class="tag stop">highest</span></td><td>not built — cannot vote at all</td></tr>
+<tr><td>Accounts interacting with each other</td><td><span class="tag stop">very high</span></td><td>never share a thread, never reply to each other</td></tr>
+<tr><td>Replacing a suspended account</td><td><span class="tag stop">very high</span></td><td>rule: stop, do not create another</td></tr>
+<tr><td>Same link pushed from several accounts</td><td><span class="tag no">high</span></td><td>disclosure required; pitch-only threads refused</td></tr>
+<tr><td>Accounts acting in lockstep</td><td><span class="tag no">medium</span></td><td>serial execution, staggered hours, quiet hours</td></tr>
+<tr><td>Shared IP address</td><td><span class="tag ok">low alone</span></td><td>optional per-account IP, ~$0.30–6/month</td></tr>
+<tr><td>Shared device fingerprint</td><td><span class="tag ok">low</span></td><td>deliberately left ordinary — see below</td></tr>
+</tbody>
+</table>
+
+<p>redbot runs <b>one Chrome profile per account</b>. That separates cookies, session tokens,
+storage, cache and history — which is the layer Reddit&rsquo;s own session tracking reads. Two
+accounts on one machine look like two browsers on one household connection, which is what two
+colleagues in an office look like.</p>
+
+<div class="call">
+  <b>The fingerprint point is backwards from the folklore</b>
+  A fingerprint links two accounts only when it is <i>rare</i>. Two standard Chrome-on-Windows
+  profiles are not linked by it — that is the most common configuration on earth. Randomising
+  canvas noise makes each profile unique and inconsistent between page loads, which is itself
+  a detectable spoofing signature. redbot stays ordinary on purpose.
+</div>
+
+<p>And the framing that makes most of it moot: every proxy and anti-detect technique exists to
+make <b>connected accounts look unconnected</b>. redbot&rsquo;s accounts are disclosed SGEN
+people — the connection is public by construction. The question is not whether Reddit notices
+they are related. Colleagues are related. The question is whether the <i>behaviour</i> looks
+like manipulation, and that is answered by conduct, not infrastructure.</p>
+
+
+<h2>Signing in — once per account, silent after that</h2>
+
+<p>The goal is that nobody thinks about authentication day to day. That is achievable, and
+here is exactly how far it goes.</p>
+
+<table>
+<thead><tr><th>Moment</th><th>Who does what</th><th>How often</th></tr></thead>
+<tbody>
+<tr><td><b>First set-up of an account</b></td><td>a person signs in, in a real browser window</td><td><b>once</b>, ~60 seconds</td></tr>
+<tr><td>Every run after that</td><td>nothing — redbot reuses the stored session</td><td>always silent</td></tr>
+<tr><td>Keeping it alive</td><td>redbot loads Reddit in that profile on a schedule so the session does not age out</td><td>automatic</td></tr>
+<tr><td>Moving to another machine or person</td><td>export the encrypted session, import it there</td><td>silent — the second person never signs in</td></tr>
+<tr><td>Session finally expires</td><td>redbot flags <i>which</i> account needs attention, before a run fails</td><td>rare</td></tr>
+</tbody>
+</table>
+
+<p>So the honest shape is: <b>one sign-in per account, ever</b> — not per user, not per device,
+not per session. A second operator on a second machine imports the session and never sees a
+login form. That is as close to silent as this can get without storing passwords.</p>
+
+<div class="call">
+  <b>What redbot will not do, and why</b>
+  It will not store your password and replay it into the login form. That is a permanent
+  liability rather than an expiring one, it breaks the moment two-factor is switched on, and
+  it is the precise mistake that made the Appilot APK a problem — two live keys sitting inside
+  a zip file on disk. A session can be revoked from Reddit&rsquo;s own settings without redbot
+  knowing; a stored password cannot.
+</div>
+
+<h3>What is stored, concretely</h3>
+<ul>
+  <li>A per-account Chrome profile directory — cookies, session tokens, storage, history.</li>
+  <li>An encrypted export of that session when you move it between machines.</li>
+  <li>Never a password. Never a recovery email. Never a 2FA secret.</li>
+</ul>
+
+<p>Status: the persistent session and the sign-in check are <span class="tag ok">working</span>
+— proven today. Encrypted export/import and the keep-alive schedule are
+<span class="tag no">specified, not yet built</span>.</p>
+
+<hr>
+<h2>Credentials — what redbot stores, and what it never stores</h2>
+<p><b>redbot never stores a password.</b> You sign in once per account in a real browser window.
+What persists is the <i>session</i>, inside that account&rsquo;s own Chrome profile. Moving an
+account to a second machine is an export and import of that encrypted session file, not a
+credential hand-off.</p>
+<p>This matters because a stored password is a permanent liability, while a session expires on
+its own and can be revoked from Reddit&rsquo;s own settings without touching redbot. It is also
+why the Appilot APK shipping two live API keys inside a zip file was such a bad sign.</p>
+
+<hr>
+<h2>What it refuses to do</h2>
+<p>These are enforced in code, not politely requested of the model. A draft that breaks one cannot be posted even if you approve it.</p>
+<ul>
+  <li>If a reply mentions SGEN, it must say you work there.</li>
+  <li>No invented war stories — it will not write “I hit this exact problem last year”.</li>
+  <li>No fake typos or forced casualness to seem human.</li>
+  <li>No “hope this helps!” filler.</li>
+  <li>No threads that can only be answered with a sales pitch — r/WordPress rule 1 is “No promotions of products or services”.</li>
+</ul>
+<p>There is no voting. redbot cannot upvote or downvote anything.</p>
+
+<h2>The scoring, judged on its own output</h2>
+<p>From the live run, the four it turned down without being asked:</p>
+<div class="quote">
+  A cleanup guide — “solved content being shared, not help being requested”.<br>
+  A client-workflow thread — “already answered in-thread”.<br>
+  The community FAQ megathread — “a reference resource, not a problem to solve”.<br>
+  A plugin author’s own tool — “not a help request”.
+</div>
+<p>Refusing well is most of the value. Fifteen of twenty-five were filtered out before anyone spent time on them.</p>
+
+<h2>Running it</h2>
+<pre><code># once per session — the browser redbot attaches to
+&amp; "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+    --remote-debugging-port=9222 `
+    --user-data-dir="…\redbot\data\chrome-profile" `
+    --no-first-run --no-default-browser-check
+
+# sign in to Reddit in that window, then
+$env:REDBOT_OPERATOR = "jerome"
+
+node dist/cli.js login       # confirm the session
+node dist/cli.js read wordpress
+node dist/cli.js analyze     # a few minutes
+node dist/cli.js draft
+node dist/cli.js reply       # review, approve or reject, post
+node dist/cli.js history</code></pre>
+
+<p>Claude sign-in is <b>per operator</b> — redbot never borrows whichever account happens to be signed in on the machine. That rule is currently what stops it running unattended, which is the correct behaviour.</p>
+
+<h2>What is left</h2>
+<ul>
+  <li>Sign in to Reddit in the attached browser.</li>
+  <li>Sign in to Claude as an operator, once.</li>
+  <li>Run <code>draft</code> and read what comes out — <b>this is the real test</b>. If the writing is not something you would put your name on, nothing else matters.</li>
+  <li>Publish one reply, aimed at a post you control.</li>
+</ul>
+
+<div class="call">
+  <b>Open honestly</b>
+  Reading and scoring are proven. Whether the <i>writing</i> is good enough to sign your name to is still unanswered, and it decides whether multi-account, scheduling and everything downstream is worth building at all.
+</div>
+
+<a class="link-card" href="https://claude.ai/code/artifact/684a4328-bc85-4c88-b615-ce81ebce3219" target="_blank" rel="noopener">
+  <b>→ Interface mockup</b>
+  <span>See how it would be operated: accounts first, then per-thread and bulk reply generation with expertise-based routing.</span>
+  <span class="go">open the mockup</span>
+</a>
+
+<div class="foot">
+  Node · TypeScript · Playwright · Claude. One dependency beyond the toolchain. All data stays in local files.
+  Source at <code>Projects/redbot/</code> — see <code>STATUS.md</code>, <code>WHY-NO-ANDROID.md</code>, and the access experiment log under <code>certification/evidence/</code>.
+</div>
+
+</div>

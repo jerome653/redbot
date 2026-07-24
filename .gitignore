@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------------
+# DEFECT-01 (2026-07-22, severity CRITICAL): without this file, `git add -A` in
+# the parent SGEN repo would commit 4.6 GB of Chrome profile including
+# `Login Data`, `Local Storage` and live Reddit session cookies for two accounts.
+# Verified with: git check-ignore -v data/chrome-profile/Default/Cookies
+# ---------------------------------------------------------------------------
+
+# Browser profiles — contain live session cookies. NEVER commit.
+data/chrome-profile*/
+data/**/Cookies
+data/**/Login Data
+data/**/Local Storage/
+data/**/IndexedDB/
+
+# Per-operator Claude credentials
+data/operators/
+
+# Collected content, drafts, and the activity log — local working state
+data/*.json
+data/*.jsonl
+data/*.png
+
+# Build output
+dist/
+node_modules/
+
+# Scratch
+*.tmp
+*.log
+qa/evidence/*.png

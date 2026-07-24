@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>redbot — Action Plan</title>
+<meta name="description" content="Approval-stage proposal for redbot: a Reddit user agent for SGEN, with a side-by-side against the Appilot bot it replaces.">
+<meta name="robots" content="noindex, nofollow">
+<style>
+/* ===================================================================
+   SGEN — 24-Month Strategy Report (self-contained artifact stylesheet)
+   All colors flow through tokens; theme-aware; no external assets.
+   =================================================================== */
+
+:root{
+  /* LIGHT palette (default) */
+  --paper:#FBFAF8;
+  --ink:#1B1A18;
+  --ink-2:#4A4744;
+  --ink-3:#6E6A65;
+  --line:#E7E3DD;
+  --surface:#F3EFE9;
+  --surface-2:#EFEAE2;
+  --accent:#C8181C;
+  --link:#B01218;
+  --accent-soft:rgba(200,24,28,.10);
+
+  /* Type */
+  --font-display:"Poppins","Segoe UI Semibold",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --font-body:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"Cascadia Code","SF Mono",Consolas,monospace;
+
+  --topbar-h:3.25rem;
+  --measure:74ch;
+}
+
+/* DARK via system preference */
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#121110;
+    --ink:#F2EEE8;
+    --ink-2:#B8B2AA;
+    --ink-3:#8A847C;
+    --line:#2C2A27;
+    --surface:#1B1A18;
+    --surface-2:#211F1C;
+    --accent:#ff5760;
+    --link:#ff8088;
+    --accent-soft:rgba(255,87,96,.14);
+  }
+}
+
+/* Explicit theme stamps win in BOTH directions (higher specificity than :root) */
+:root[data-theme="light"]{
+  --paper:#FBFAF8;
+  --ink:#1B1A18;
+  --ink-2:#4A4744;
+  --ink-3:#6E6A65;
+  --line:#E7E3DD;
+  --surface:#F3EFE9;
+  --surface-2:#EFEAE2;
+  --accent:#C8181C;
+  --link:#B01218;
+  --accent-soft:rgba(200,24,28,.10);
+}
+:root[data-theme="dark"]{
+  --paper:#121110;
+  --ink:#F2EEE8;
+  --ink-2:#B8B2AA;
+  --ink-3:#8A847C;
+  --line:#2C2A27;
+  --surface:#1B1A18;
+  --surface-2:#211F1C;
+  --accent:#ff5760;
+  --link:#ff8088;
+  --accent-soft:rgba(255,87,96,.14);
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+
+html{
+  scroll-behavior:smooth;
+  scroll-padding-top:calc(var(--topbar-h) + 20px);
+  -webkit-text-size-adjust:100%;
+}
+
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--font-body);
+  font-size:1.12rem;
+  line-height:1.7;
+  letter-spacing:.001em;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+
+::selection{ background:var(--accent-soft); color:inherit; }
+
+:focus-visible{
+  outline:2px solid var(--accent);
+  outline-offset:2px;
+  border-radius:3px;
+}
+
+/* ---------------- Top bar ---------------- */
+.topbar{
+  position:fixed; inset:0 0 auto 0;
+  height:var(--topbar-h);
+  z-index:50;
+  background:color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter:saturate(1.4) blur(10px);
+  -webkit-backdrop-filter:saturate(1.4) blur(10px);
+  border-bottom:1px solid var(--line);
+}
+.topbar-inner{
+  height:100%;
+  max-width:1240px; margin-inline:auto;
+  padding:0 1.25rem;
+  display:flex; align-items:center; justify-content:space-between; gap:1rem;
+}
+.brand{ display:flex; align-items:center; gap:.75rem; min-width:0; }
+.wordmark{
+  font-family:var(--font-display);
+  font-weight:700;
+  font-size:1.18rem;
+  letter-spacing:-.02em;
+  color:var(--ink);
+  line-height:1;
+}
+.vrule{
+  width:2px; height:1.15rem;
+  background:var(--accent);
+  border-radius:2px;
+  flex:0 0 auto;
+}
+.brand-sub{
+  font-size:.82rem;
+  color:var(--ink-3);
+  letter-spacing:.02em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.stamp{
+  font-family:var(--font-mono);
+  font-size:.72rem;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  white-space:nowrap;
+}
+
+/* ---------------- Scroll progress ---------------- */
+.progress{
+  position:fixed; left:0; right:0; top:var(--topbar-h);
+  height:3px; z-index:49;
+  background:transparent;
+}
+.progress-fill{
+  display:block; height:100%; width:0%;
+  background:var(--accent);
+  transition:width .08s linear;
+}
+
+/* ---------------- Shell / layout ---------------- */
+.shell{
+  width:100%;
+  padding:calc(var(--topbar-h) + 3px + 1.75rem) 1.25rem 5rem;
+}
+@media (min-width:1000px){
+  .shell{
+    display:grid;
+    grid-template-columns:262px minmax(0,1fr);
+    gap:3.25rem;
+    max-width:1240px; margin-inline:auto;
+    padding-left:2rem; padding-right:2rem;
+  }
+}
+
+/* ---------------- Sidebar / TOC ---------------- */
+.sidebar{ min-width:0; }
+@media (min-width:1000px){
+  .sidebar{
+    position:sticky;
+    top:calc(var(--topbar-h) + 3px + 1.5rem);
+    align-self:start;
+    max-height:calc(100vh - var(--topbar-h) - 3rem);
+    overflow:auto;
+    overscroll-behavior:contain;
+  }
+}
+.toc{
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:var(--surface);
+  padding:.35rem .35rem;
+}
+@media (min-width:1000px){
+  .toc{ border:none; background:transparent; padding:0; }
+  .toc > summary{ display:none; }
+}
+.toc > summary{
+  list-style:none;
+  cursor:pointer;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:.55rem .75rem;
+  font-family:var(--font-display);
+  font-weight:700;
+  font-size:.9rem;
+  letter-spacing:.02em;
+  color:var(--ink);
+  user-select:none;
+}
+.toc > summary::-webkit-details-marker{ display:none; }
+.toc-caret{
+  width:.5rem; height:.5rem;
+  border-right:2px solid var(--ink-3);
+  border-bottom:2px solid var(--ink-3);
+  transform:rotate(45deg);
+  transition:transform .2s ease;
+}
+.toc[open] > summary .toc-caret{ transform:rotate(-135deg); }
+
+.nav-head{
+  font-size:.7rem;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  padding:.2rem .6rem .6rem;
+  font-weight:600;
+}
+.nav-list{ list-style:none; margin:0; padding:.25rem; }
+.nav-list li{ margin:0; }
+.nav-list a{
+  display:flex; gap:.55rem; align-items:baseline;
+  padding:.36rem .6rem;
+  border-radius:8px;
+  text-decoration:none;
+  color:var(--ink-2);
+  font-size:.83rem;
+  line-height:1.3;
+  border-left:2px solid transparent;
+  transition:background .15s ease, color .15s ease, border-color .15s ease;
+}
+.nav-list a:hover{ background:var(--accent-soft); color:var(--ink); }
+.nav-list a.active{
+  background:var(--accent-soft);
+  color:var(--ink);
+  border-left-color:var(--accent);
+  font-weight:600;
+}
+.nav-list a .n-mark{
+  flex:0 0 auto;
+  font-family:var(--font-mono);
+  font-size:.74rem;
+  font-weight:700;
+  color:var(--accent);
+  letter-spacing:0;
+}
+.nav-list a .n-text{ min-width:0; }
+
+/* ---------------- Article ---------------- */
+.article{
+  min-width:0;
+  max-width:var(--measure);
+}
+@media (min-width:1000px){
+  .article{ margin-inline:auto; }
+}
+.article{ display:flex; flex-direction:column; }
+.article > *{ margin:0; }
+.article > * + *{ margin-top:1.05rem; }
+.article > h1{ margin-top:0; }
+.article > h2{ margin-top:2.6rem; }
+.article > h3{ margin-top:1.9rem; }
+.article > hr{ margin-top:2.4rem; }
+.article > .table-wrap{ margin-top:1.4rem; }
+.article > blockquote{ margin-top:1.5rem; }
+
+.loading{ color:var(--ink-3); font-style:italic; }
+
+/* Headings */
+h1,h2,h3,h4{
+  font-family:var(--font-display);
+  font-weight:700;
+  letter-spacing:-.01em;
+  line-height:1.18;
+  text-wrap:balance;
+  color:var(--ink);
+}
+.article h1{
+  font-size:2.4rem;
+  line-height:1.1;
+  margin-bottom:.4rem;
+  letter-spacing:-.02em;
+}
+.article h2{
+  font-size:1.7rem;
+  padding-top:2rem;
+  border-top:1px solid var(--line);
+  scroll-margin-top:calc(var(--topbar-h) + 24px);
+  display:flex; flex-direction:column; gap:.35rem;
+}
+.article h3{
+  font-size:1.25rem;
+  color:var(--ink);
+  scroll-margin-top:calc(var(--topbar-h) + 24px);
+}
+.article h4{ font-size:1.05rem; }
+.eyebrow{
+  font-family:var(--font-mono);
+  font-size:.82rem;
+  font-weight:700;
+  letter-spacing:.06em;
+  color:var(--accent);
+  line-height:1;
+}
+.htitle{ display:block; }
+
+/* Paragraphs & inline */
+.article p{ color:var(--ink); }
+.article strong{ font-weight:700; color:var(--ink); }
+.article em{ font-style:italic; }
+.article a{
+  color:var(--link);
+  text-decoration:none;
+  border-bottom:1px solid color-mix(in srgb, var(--link) 32%, transparent);
+  overflow-wrap:anywhere;
+  transition:border-color .15s ease, background .15s ease;
+}
+.article a:hover,.article a:focus-visible{
+  border-bottom-color:var(--link);
+  background:var(--accent-soft);
+}
+
+code{
+  font-family:var(--font-mono);
+  font-size:.86em;
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:5px;
+  padding:.08em .38em;
+  overflow-wrap:anywhere;
+  color:var(--ink);
+}
+
+/* Horizontal rule */
+hr{
+  border:none;
+  height:1px;
+  background:var(--line);
+  width:100%;
+}
+/* An <hr> directly followed by a section heading is redundant with the
+   heading's own top border — soften it so sections don't double-rule. */
+.article > hr + h2{ border-top:none; padding-top:0; }
+
+/* Lists */
+.article ul,.article ol{
+  padding-left:1.35rem;
+  color:var(--ink);
+}
+.article li{ margin:.28rem 0; }
+.article li::marker{ color:var(--ink-3); }
+.article ol{ list-style:decimal; }
+.article ul{ list-style:disc; }
+.article li > ul,.article li > ol{ margin-top:.28rem; }
+
+/* Task lists */
+.article ul.task-list{ list-style:none; padding-left:.1rem; }
+.article li.task{
+  list-style:none;
+  display:flex; gap:.6rem; align-items:flex-start;
+  margin:.34rem 0;
+}
+.article li.task .chk{
+  flex:0 0 auto;
+  width:1.05em; height:1.05em;
+  margin-top:.28em;
+  border:2px solid var(--ink-3);
+  border-radius:4px;
+  position:relative;
+  background:transparent;
+}
+.article li.task.done .chk{
+  border-color:var(--accent);
+  background:var(--accent);
+}
+.article li.task.done .chk::after{
+  content:"";
+  position:absolute;
+  left:.28em; top:.05em;
+  width:.28em; height:.55em;
+  border:solid var(--paper);
+  border-width:0 2px 2px 0;
+  transform:rotate(42deg);
+}
+.article li.task .task-body{ min-width:0; }
+
+/* Blockquotes */
+.article blockquote{
+  border-left:3px solid var(--accent);
+  background:var(--surface);
+  border-radius:0 10px 10px 0;
+  padding:.9rem 1.15rem;
+  color:var(--ink-2);
+}
+.article blockquote > *{ margin:0; }
+.article blockquote > * + *{ margin-top:.6rem; }
+.article blockquote strong{ color:var(--ink); }
+.article blockquote ul,.article blockquote ol{ margin:.2rem 0; }
+
+/* Tables */
+.table-wrap{
+  overflow-x:auto;
+  max-width:100%;
+  border:1px solid var(--line);
+  border-radius:10px;
+  -webkit-overflow-scrolling:touch;
+}
+table{
+  border-collapse:collapse;
+  width:100%;
+  font-size:.92rem;
+  line-height:1.5;
+}
+table.wide{ width:auto; min-width:1040px; }
+thead th{
+  background:var(--surface-2);
+  color:var(--ink);
+  font-family:var(--font-display);
+  font-weight:700;
+  font-size:.82rem;
+  letter-spacing:.01em;
+  text-align:left;
+  vertical-align:bottom;
+  white-space:nowrap;
+  padding:.6rem .7rem;
+  border-bottom:1px solid var(--line);
+}
+tbody td{
+  padding:.55rem .7rem;
+  border-bottom:1px solid var(--line);
+  color:var(--ink-2);
+  vertical-align:top;
+  font-variant-numeric:tabular-nums;
+}
+tbody tr:last-child td{ border-bottom:none; }
+tbody tr:nth-child(even){ background:var(--surface); }
+td.num,th.num{
+  font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums;
+  color:var(--ink);
+}
+.ta-center{ text-align:center; }
+.ta-right{ text-align:right; }
+.ta-left{ text-align:left; }
+tbody td.ta-center,tbody td.ta-right{ white-space:nowrap; }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce){
+  html{ scroll-behavior:auto; }
+  *,*::before,*::after{
+    transition:none !important;
+    animation:none !important;
+  }
+}
+
+/* Small screens */
+@media (max-width:640px){
+  body{ font-size:1.04rem; }
+  .article h1{ font-size:1.95rem; }
+  .article h2{ font-size:1.42rem; }
+  .article h3{ font-size:1.14rem; }
+  .stamp{ display:none; }
+}
+</style>
+
+
+<style>
+/* ---- additions for this report: code blocks + diagrams ---- */
+.codeblock{
+  margin:1.6rem 0;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:var(--surface);
+  overflow:hidden;
+  position:relative;
+}
+.codeblock[data-lang]::before{
+  content:attr(data-lang);
+  position:absolute; top:0; right:0;
+  font-family:var(--font-mono);
+  font-size:.66rem; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--ink-3);
+  background:var(--surface-2);
+  border-left:1px solid var(--line); border-bottom:1px solid var(--line);
+  border-radius:0 8px 0 8px;
+  padding:.25rem .6rem;
+}
+.codeblock pre{
+  margin:0; padding:1.1rem 1.15rem;
+  overflow-x:auto;
+  font-family:var(--font-mono);
+  font-size:.86rem; line-height:1.6;
+  color:var(--ink-2);
+  tab-size:2;
+}
+.codeblock code{
+  background:none; border:0; padding:0; font-size:inherit; color:inherit;
+  white-space:pre;
+}
+.diagram{
+  margin:1.9rem 0;
+  padding:1.1rem;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:var(--surface);
+  overflow-x:auto;
+}
+.diagram pre.mermaid{
+  margin:0;
+  font-family:var(--font-mono);
+  font-size:.8rem; line-height:1.5;
+  color:var(--ink-3);
+  white-space:pre;
+}
+.diagram svg{ max-width:100%; height:auto; display:block; margin-inline:auto; }
+.callout{
+  border-left:3px solid var(--accent);
+  background:var(--accent-soft);
+  padding:.9rem 1.1rem;
+  border-radius:0 6px 6px 0;
+  margin:1.5rem 0;
+}
+@media print{ .codeblock, .diagram{ break-inside:avoid; } }
+</style>
+<style>
+  /* standalone-only: page chrome + print */
+  body{ margin:0; }
+  @media print{
+    .topbar, .progress, .sidebar{ display:none !important; }
+    .shell{ display:block; max-width:none; padding:0; }
+    .article{ max-width:none; padding:0; }
+    a[href^="http"]::after{ content:" (" attr(href) ")"; font-size:.72em; color:#666; word-break:break-all; }
+    h1,h2,h3{ break-after:avoid; }
+    table, .diagram, .codeblock{ break-inside:avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="topbar" role="banner">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="wordmark">SGEN</span>
+      <span class="vrule" aria-hidden="true"></span>
+      <span class="brand-sub">redbot — Action Plan</span>
+    </div>
+    <div class="stamp">v1 &middot; 2026-07-22</div>
+  </div>
+</div>
+
+<div class="progress" aria-hidden="true"><span class="progress-fill" id="progressFill"></span></div>
+
+<div class="shell">
+  <aside class="sidebar">
+    <details class="toc" id="toc">
+      <summary><span>Contents</span><span class="toc-caret" aria-hidden="true"></span></summary>
+      <nav aria-label="Report sections">
+        <div class="nav-head">Sections</div>
+        <ul class="nav-list" id="navList">
+        <li><a href="#0--evidence-discipline" data-target="0--evidence-discipline"><span class="n-mark">§0</span><span class="n-text">Evidence discipline</span></a></li>
+        <li><a href="#1--what-is-being-built" data-target="1--what-is-being-built"><span class="n-mark">§1</span><span class="n-text">What is being built</span></a></li>
+        <li><a href="#2--why-not-just-keep-using-appilot" data-target="2--why-not-just-keep-using-appilot"><span class="n-mark">§2</span><span class="n-text">Why not just keep using Appilot</span></a></li>
+        <li><a href="#3--cost-and-effort-with-the-assumptions-exposed" data-target="3--cost-and-effort-with-the-assumptions-exposed"><span class="n-mark">§3</span><span class="n-text">Cost and effort, with the assumptions exposed</span></a></li>
+        <li><a href="#4--the-fleet-what-is-verified-what-is-not" data-target="4--the-fleet-what-is-verified-what-is-not"><span class="n-mark">§4</span><span class="n-text">The fleet: what is verified, what is not</span></a></li>
+        <li><a href="#5--work-breakdown" data-target="5--work-breakdown"><span class="n-mark">§5</span><span class="n-text">Work breakdown</span></a></li>
+        <li><a href="#6--what-is-deliberately-not-in-the-mvp" data-target="6--what-is-deliberately-not-in-the-mvp"><span class="n-mark">§6</span><span class="n-text">What is deliberately not in the MVP</span></a></li>
+        <li><a href="#7--definition-of-done" data-target="7--definition-of-done"><span class="n-mark">§7</span><span class="n-text">Definition of done</span></a></li>
+        <li><a href="#8--risks" data-target="8--risks"><span class="n-mark">§8</span><span class="n-text">Risks</span></a></li>
+        <li><a href="#9--status" data-target="9--status"><span class="n-mark">§9</span><span class="n-text">Status</span></a></li>
+        <li><a href="#10--decisions-needed-to-start" data-target="10--decisions-needed-to-start"><span class="n-mark">§10</span><span class="n-text">Decisions needed to start</span></a></li>
+        </ul>
+      </nav>
+    </details>
+  </aside>
+  <main class="article" id="article">
+<h1 id="redbot--action-plan">redbot — Action Plan</h1>
+<p><strong>Type:</strong> action plan, not a proposal. Work items with owners, dates and verification methods.<br><strong>Date:</strong> 2026-07-22 · <strong>Owner:</strong> Jerome (SGEN)<br><strong>Supersedes:</strong> <code>MVP-PROPOSAL.md</code> (same date, two drafts — both superseded)<br><strong>Depends on:</strong> <code>REDBOT-CANON.md</code>, <code>ADR/</code>, <code>Requirements/</code><br><strong>Companion:</strong> <code>Projects/appilot-analysis/</code></p>
+<hr>
+<h2 id="0--evidence-discipline"><span class="eyebrow">§0</span><span class="htitle">Evidence discipline</span></h2>
+<p>Every factual claim in this document carries a tag. If a claim has no tag it is a defect.</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Tag</th><th>Meaning</th></tr></thead><tbody><tr><td><strong>[V]</strong></td><td><strong>Verified</strong> — checked against primary source on 2026-07-22, source named</td></tr><tr><td><strong>[M]</strong></td><td><strong>Measured</strong> — from the Appilot APK static analysis in <code>Projects/appilot-analysis/</code></td></tr><tr><td><strong>[E]</strong></td><td><strong>Estimate</strong> — engineering judgement, not a quote. Range given. Will be replaced by a measurement at the stated phase</td></tr><tr><td><strong>[A]</strong></td><td><strong>Assumption</strong> — believed true, not proven. Named test that will prove or kill it</td></tr></tbody></table></div>
+<h3 id="01-what-is-not-known-stated-up-front">§0.1 What is NOT known, stated up front</h3>
+<p>These are the things it would be easy to gloss over, so they are listed before anything else.</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>#</th><th>Unknown</th><th>Consequence if it goes badly</th><th>Resolved at</th></tr></thead><tbody><tr><td>U-1</td><td>Whether r/WordPress permits vendor/employee participation</td><td><strong>Kills the publishing half entirely.</strong> Listening survives</td><td>W1 — 5 minutes of reading</td></tr><tr><td>U-2</td><td>Whether Playwright + <code>ip netns</code> per-Chrome binding works cleanly on the target host</td><td>Falls back to per-context proxy, which is verified [V] and costs $0.30–6/IP/mo</td><td>P1</td></tr><tr><td>U-3</td><td>Whether the drafts are actually good enough that a human posts them</td><td>The whole publishing thesis fails; listening still has value</td><td>P5</td></tr><tr><td>U-4</td><td>Real per-profile RAM cost, so real fleet capacity per host</td><td>Changes topology choice, not feasibility</td><td>P3</td></tr><tr><td>U-5</td><td>Whether Reddit's DOM is stable enough that a selector pack lasts weeks not days</td><td>Raises maintenance cost toward Appilot's</td><td>P4–P5</td></tr><tr><td>U-6</td><td>Whether SGEN's people already have usable Reddit accounts</td><td>3–6 month delay on the pilot; nothing to do about it in code</td><td>W1</td></tr></tbody></table></div>
+<p><strong>Nothing in this plan requires U-1..U-6 to be answered before engineering starts</strong>, and no<br>phase gate is passed by assuming them.</p>
+<h3 id="02-the-synthetic-fixture-caveat">§0.2 The synthetic-fixture caveat</h3>
+<p>P1–P3 test against a <strong>fixture site built for the purpose</strong> — Reddit-shaped pages served<br>locally. This proves the engine, the workflow interpreter, the ledger, the linter, the<br>orchestrator and the isolation guarantees. **It does not prove the selectors work on real<br>Reddit.** That is what P4 exists for, and P4 is a hard gate, not a formality. Any claim that<br>redbot "works" before P4 means "works against the fixture" and will be written that way.</p>
+<hr>
+<h2 id="1--what-is-being-built"><span class="eyebrow">§1</span><span class="htitle">What is being built</span></h2>
+<p>A fleet of Reddit accounts operated by software. Each account reads, searches, browses,<br>writes and replies as its owner would — across several subreddits, at human pace, on its own<br>schedule, from its own browser profile and its own network identity.</p>
+<p>Accounts are <strong>real SGEN people, disclosed as such</strong> [A, design constraint]. Coverage comes<br>from several engineers with genuinely different expertise. This is the assumption the<br>disclosure linter enforces in code, and it is why the linter is a gate rather than a prompt<br>instruction.</p>
+<p><strong>Not being built:</strong> phone farm, fake personas, vote automation (ADR-0007), any platform<br>other than Reddit.</p>
+<hr>
+<h2 id="2--why-not-just-keep-using-appilot"><span class="eyebrow">§2</span><span class="htitle">Why not just keep using Appilot</span></h2>
+<p>Facts from the teardown, all <strong>[M]</strong> — read directly out of the APK SGEN was given.</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Finding</th><th>Evidence</th></tr></thead><tbody><tr><td>Two live-format API keys compiled into the shipped APK</td><td>Anthropic <code>sk-ant-api03-…</code> 108 chars, OpenRouter <code>sk-or-v1-…</code> 73 chars, neither placeholder-shaped</td></tr><tr><td>Voting is active and undocumented</td><td><code>attemptUpvote</code>/<code>attemptDownVote</code>, <code>UPVOTE_CHANCE=50</code>, per-minute ledger, confirmed execution logs. The user guide never mentions voting</td></tr><tr><td>One class holds 608 of ~1,500 methods</td><td><code>RedditAutomation</code></td></tr><tr><td>~60 Reddit view IDs compiled into the binary</td><td><code>com.reddit.frontpage:id/*</code> string table</td></tr><tr><td>TLS bypass helper present</td><td><code>UnsafeHttpClient.getUnsafeOkHttpClient()</code></td></tr><tr><td>Cleartext + user CA trust in the shipped network config</td><td><code>res/8G.xml</code></td></tr><tr><td>Self-update pulls an APK from a repo that 404s publicly</td><td><code>api.github.com/repos/BitBashOwn/appilot-reddit-karma-bot-apk</code></td></tr><tr><td>One physical phone required per account</td><td>architecture</td></tr></tbody></table></div>
+<p><strong>Two of these need action this week regardless of whether redbot is ever built:</strong> rotate<br>the keys, and ask Appilot whether voting can be turned off.</p>
+<p><strong>And the fair part:</strong> Appilot's bot works. It is competent Android engineering, and its<br>human-approval design is better than the marketing implies. redbot's case is architecture<br>and cost, not quality.</p>
+<hr>
+<h2 id="3--cost-and-effort-with-the-assumptions-exposed"><span class="eyebrow">§3</span><span class="htitle">Cost and effort, with the assumptions exposed</span></h2>
+<h3 id="31-effort">§3.1 Effort</h3>
+<p><strong>[E]</strong> — engineering estimate against the 20 modules in <code>MODULES.md</code>, which were scoped<br>from the measured Appilot surface. Not a quote.</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Phase</th><th>Engineer-days [E]</th><th>Calendar, 1 dev</th><th>Calendar, 2 devs</th></tr></thead><tbody><tr><td>P1 Engineer</td><td class="num">21</td><td>4–5 wks</td><td>2–3 wks</td></tr><tr><td>P2 Platform</td><td class="num">21</td><td>4–5 wks</td><td>2–3 wks</td></tr><tr><td>P3 Test</td><td class="num">8</td><td>1.5 wks</td><td>1 wk</td></tr><tr><td>P4 Real test</td><td class="num">2</td><td>2 days</td><td>2 days</td></tr><tr><td><strong>To a tested fleet</strong></td><td><strong>~52</strong></td><td><strong>~11 wks</strong></td><td><strong>~6–7 wks</strong></td></tr></tbody></table></div>
+<p>The "8 weeks" figure used in the earlier draft assumed two developers and is only true with<br>two. With one developer it is ~11 weeks. Stated plainly because the earlier draft did not.</p>
+<h3 id="32-money">§3.2 Money</h3>
+<p><strong>[E]</strong>, and the rate assumption is the whole number — stated so it can be corrected:</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Rate assumption</th><th>Build cost, 52 days</th></tr></thead><tbody><tr><td>$50/hr blended (offshore senior)</td><td>~$21k</td></tr><tr><td>$75/hr</td><td>~$31k</td></tr><tr><td>$100/hr (Western contract)</td><td>~$42k</td></tr></tbody></table></div>
+<p>Running costs:</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Item</th><th>Cost</th><th>Tag</th></tr></thead><tbody><tr><td>Infrastructure, 3–10 disclosed accounts, shared IP</td><td>$0</td><td>[V] no product needed</td></tr><tr><td>Optional distinct exits, 10 accounts</td><td>~$40/mo</td><td>[V] static residential $0.30–6/IP/mo, Webshare/Oxylabs public pricing</td></tr><tr><td>LLM</td><td>$50–200/mo</td><td>[E] scales with volume, not accounts</td></tr><tr><td>Hosting</td><td>~$20/mo</td><td>[E]</td></tr><tr><td>Selector maintenance</td><td>$3–5k/yr</td><td><strong>[E], and the softest number here.</strong> Depends entirely on U-5</td></tr><tr><td><strong>Year 2+ total</strong></td><td><strong>~$4–8k/yr</strong></td><td>[E]</td></tr></tbody></table></div>
+<h3 id="33-appilot-comparison">§3.3 Appilot comparison</h3>
+<p>Appilot's running cost figures are <strong>[E]</strong> — reconstructed from their published $30/hr and<br>$1k–10k project pricing plus observable hardware requirements, <strong>not</strong> from an invoice. If<br>SGEN has real numbers they should replace these.</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th></th><th>Appilot [E]</th><th>redbot [E]</th></tr></thead><tbody><tr><td>Build</td><td>5–6 months, ~$100k</td><td>~6–11 wks, $21–42k</td></tr><tr><td>Cost per additional account</td><td>a phone + SIM + mobile proxy</td><td>a config row</td></tr><tr><td>10 accounts, hardware</td><td>~$2,000</td><td>$0</td></tr><tr><td>10 accounts, network/yr</td><td>$3,600–9,600</td><td>$0–480</td></tr><tr><td>Selector maintenance/yr</td><td>$25–40k</td><td>$3–5k</td></tr><tr><td><strong>Year 2+</strong></td><td>~$30–50k</td><td>~$4–8k</td></tr></tbody></table></div>
+<hr>
+<h2 id="4--the-fleet-what-is-verified-what-is-not"><span class="eyebrow">§4</span><span class="htitle">The fleet: what is verified, what is not</span></h2>
+<h3 id="41-verified-today-v--playwright-docs-2026-07-22">§4.1 Verified today [V] — Playwright docs, 2026-07-22</h3>
+<ul><li><code>browser.newContext()</code> isolates cookies, localStorage, sessionStorage, cache</li><li><code>context.storageState({ path })</code> saves a login; <code>newContext({ storageState })</code> restores it</li><li>Per-context: <code>proxy</code>, <code>locale</code>, <code>timezoneId</code>, <code>viewport</code>, <code>geolocation</code>, <code>colorScheme</code>, <code>permissions</code></li><li><code>chromium.launchPersistentContext(userDataDir, opts)</code> — a real Chrome profile directory</li></ul>
+<p><em>(Playwright's own caveat: fresh directory, never Chrome's main "User Data", never shared)</em></p>
+<ul><li><code>chromium.launchServer({ port, host })</code> → <code>wsEndpoint()</code> → <code>chromium.connect(ws)</code></li><li><code>chromium.connectOverCDP('http://127.0.0.1:9222')</code> — attach to any Chrome you launched</li></ul>
+<p>That is the port model, confirmed. Account count is bounded by RAM and by egress identities,<br><strong>not</strong> by Playwright or by redbot.</p>
+<h3 id="42-topologies">§4.2 Topologies</h3>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Topology</th><th>Capacity per 16 GB host</th><th>Tag</th></tr></thead><tbody><tr><td>A. Contexts in one browser</td><td>~20–40, ≈40–80 MB each</td><td><strong>[E] — measured in P3, U-4</strong></td></tr><tr><td>B. Persistent profiles, one browser each</td><td>~25–40, ≈200–400 MB each</td><td><strong>[E] — measured in P3, U-4</strong></td></tr><tr><td>C. Server/port model</td><td>as B, processes outlive the script, may be remote</td><td>[V] API confirmed</td></tr><tr><td>D. Containers, own network namespace</td><td>bounded by RAM and exits</td><td>[A] — proven in P1, U-2</td></tr></tbody></table></div>
+<h3 id="43-network-identity">§4.3 Network identity</h3>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Method</th><th>Cost</th><th>Tag</th></tr></thead><tbody><tr><td>Shared IP</td><td>$0</td><td>[A] — see §4.5</td></tr><tr><td>Per-context proxy</td><td>$0.30–6 /IP/mo</td><td><strong>[V]</strong> Playwright API + public pricing</td></tr><tr><td>WireGuard + network namespace per profile</td><td>$0 software, ~$3–5/mo per VPS exit</td><td><strong>[A] — standard Linux technique, but the Chrome-in-netns binding is unproven on our target host. U-2, proven or dropped in P1</strong></td></tr><tr><td>Container + VPN sidecar</td><td>$0 local, ~$5/mo remote</td><td>[A], same test</td></tr></tbody></table></div>
+<p>Ten accounts with ten distinct exits ≈ <strong>$40/month</strong> [E]. If U-2 fails, the fallback is<br>per-context proxy, which is [V] and costs about the same.</p>
+<h3 id="44-device-identity--the-reasoning-and-its-status">§4.4 Device identity — the reasoning, and its status</h3>
+<p>Contexts share one browser binary on one GPU, so canvas, WebGL, audio and font fingerprints<br>are identical across them [V, how browsers work].</p>
+<p>The anti-detect industry's answer is to randomise each profile. **That is the wrong move<br>here*<em> [A, reasoned]: a fingerprint links accounts only when it is </em>rare*. Two accounts both<br>presenting a standard Chrome-on-Windows fingerprint are not linked by it — that is the modal<br>browser. Randomised canvas noise makes each profile unique and inconsistent between loads,<br>which is itself detectable as spoofing. Randomisation converts a non-signal into a signal.</p>
+<p>So redbot aims to be <strong>common, not unique</strong>:</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Surface</th><th>Approach</th><th>Tag</th></tr></thead><tbody><tr><td><code>navigator.webdriver</code> and automation tells</td><td>remove via <code>addInitScript()</code> + <code>--disable-blink-features=AutomationControlled</code></td><td>[V] API exists · [A] effectiveness, tested in P3</td></tr><tr><td>TLS handshake</td><td><code>channel: 'chrome'</code> uses the <strong>installed Chrome</strong> rather than bundled Chromium</td><td><strong>[V]</strong> that it uses real Chrome. <strong>[A]</strong> that this materially changes the TLS fingerprint — not measured</td></tr><tr><td>UA / platform / languages</td><td>match installed Chrome exactly, never invent</td><td>[V]</td></tr><tr><td>Viewport</td><td>drawn from common real resolutions</td><td>[V]</td></tr><tr><td>Canvas / WebGL / audio</td><td>left alone</td><td>policy</td></tr><tr><td>Profile state</td><td>separate <code>userDataDir</code></td><td>[V]</td></tr></tbody></table></div>
+<p><strong>Honest limit:</strong> redbot does not make ten accounts look like ten different computers. If<br>that is ever required, the answer is ten different computers — topology D, a few dollars a<br>month — not JS patching.</p>
+<h3 id="45-what-is-actually-load-bearing">§4.5 What is actually load-bearing</h3>
+<p>Everything above exists to make <strong>connected accounts look unconnected</strong>. redbot's accounts<br>are disclosed — the connection is public by construction — so that stack is hygiene, not<br>concealment.</p>
+<p>Reddit does not action accounts for sharing an IP alone **[A, reasoned from how shared<br>networks work — households, offices, universities, carrier NAT — not a Reddit statement].**<br>What Reddit does state it acts on <strong>[V]</strong> is coordinated behaviour: multiple accounts used<br>to manipulate, coordinated voting, correlated IP + login + vote timing.</p>
+<p>What matters, and is free:</p>
+<ol><li>One session per account, never shared</li><li>Never two accounts acting simultaneously — serial, staggered by hours</li><li>Per-account persona: own subreddits, own hours, own register, own ceiling</li><li>Accounts never interact — no shared threads, no replying to each other, no same links</li></ol>
+<p>All four enforced by the orchestrator, all four asserted by tests in §7.</p>
+<hr>
+<h2 id="5--work-breakdown"><span class="eyebrow">§5</span><span class="htitle">Work breakdown</span></h2>
+<h3 id="w1--this-week-before-engineering">W1 — this week, before engineering</h3>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>#</th><th>Task</th><th>Owner</th><th>Output</th></tr></thead><tbody><tr><td class="num">1.1</td><td><strong>Rotate the Anthropic + OpenRouter keys in the Appilot APK</strong></td><td>Jerome</td><td>new keys, old revoked</td></tr><tr><td class="num">1.2</td><td>Ask Appilot: can voting be disabled, and was it ever on for SGEN's device</td><td>Jerome</td><td>written answer</td></tr><tr><td class="num">1.3</td><td><strong>Read r/WordPress rules on vendor/employee participation</strong> (U-1)</td><td>Jerome</td><td>go / no-go on publishing</td></tr><tr><td class="num">1.4</td><td>List the people who would be in the fleet + their existing accounts (U-6)</td><td>Jerome</td><td>names, handles, karma</td></tr><tr><td class="num">1.5</td><td>Confirm dev resourcing: 1 or 2 developers</td><td>Jerome</td><td>sets the 11-week vs 7-week track</td></tr></tbody></table></div>
+<h3 id="p1--engineer-m-01m-08--fleet-session-manager">P1 — engineer (M-01..M-08 + fleet session manager)</h3>
+<p>Config · store · selector pack · page driver · <strong>fleet session manager</strong> · action registry ·<br>workflow parser · humanize · per-account ledger.<br><strong>Also P1:</strong> prove or kill U-2 (netns binding) in the first three days, so the network design<br>is settled before anything depends on it.<br><strong>Exit:</strong> unit tests green offline; a <code>netns</code> decision recorded in an ADR.</p>
+<h3 id="p2--platform-m-09m-17">P2 — platform (M-09..M-17)</h3>
+<p>Engine · <strong>orchestrator</strong> · LLM · qualify/draft/lint · approval queue with account<br>attribution · fleet dashboard · audit log · CLI · kill switch.<br><strong>Exit:</strong> one workflow runs a full cycle across two profiles against the fixture site.</p>
+<h3 id="p3--test-m-18m-20--fingerprint-harness">P3 — test (M-18..M-20 + fingerprint harness)</h3>
+<p>Fixture site · golden-page corpus · offline suite · fingerprint differential harness.<br><strong>Also P3:</strong> measure real per-profile RAM (U-4) and record it, replacing the [E] in §4.2.<br><strong>Exit:</strong> the nine assertions in §7, network disabled.</p>
+<h3 id="p4--real-test">P4 — real test</h3>
+<p>Live, <strong>logged out, read-only</strong>, several profiles, one subreddit.<br>Proves selectors, driver, extraction, scoring, qualification, drafting and orchestration<br>against real Reddit. No account. No writes. No API access.<br><strong>Exit:</strong> real threads returned, scored and qualified; selector tier-win rates recorded as<br>the baseline for degradation alerting.</p>
+<h3 id="p5--pilot">P5 — pilot</h3>
+<p>2–3 real accounts, human-approved writes only, r/WordPress, two weeks, measured.<br><strong>Exit:</strong> U-3 answered with evidence.</p>
+<h3 id="p6--scale">P6 — scale</h3>
+<p>Add accounts and subreddits only as evidence supports. Explicit go/no-go.</p>
+<hr>
+<h2 id="6--what-is-deliberately-not-in-the-mvp"><span class="eyebrow">§6</span><span class="htitle">What is deliberately not in the MVP</span></h2>
+<p>Original posts · edit/delete · direct messages · join/leave/save/follow/hide/report ·<br>vote actions (ADR-0007) · mention monitoring · MOE integration · any platform but Reddit.</p>
+<p>All are specified in <code>engineering/ACTION-REGISTRY.md</code>, none is implemented, and none is<br>counted in the §3.1 estimate.</p>
+<hr>
+<h2 id="7--definition-of-done"><span class="eyebrow">§7</span><span class="htitle">Definition of done</span></h2>
+<p>Nine assertions. Seven require no Reddit account and no network.</p>
+<ol><li><code>npm test</code> green <strong>with the network disabled</strong></li><li>A JSON workflow drives read → score → qualify → draft against the fixture site</li><li><strong>Three profiles run the same workflow with fully isolated sessions</strong> — no cookie, storage</li></ol>
+<p>or history bleed — proven by test</p>
+<ol><li><strong>The orchestrator never runs two accounts concurrently</strong> — proven by test</li><li>A draft mentioning SGEN without the disclosure line is rejected — proven by test</li><li>A write exceeding that account's ledger is blocked — proven by test</li><li>A workflow referencing <code>upvote</code> fails validation — proven by test</li><li>The kill switch halts the whole fleet mid-step — proven by test</li><li>A live logged-out read-only run against reddit.com returns real, scored, qualified threads</li></ol>
+<p>Plus: zero secrets in the repo, asserted by CI.</p>
+<p>**"Done" before item 9 means "done against a synthetic fixture" and will be reported that<br>way.**</p>
+<hr>
+<h2 id="8--risks"><span class="eyebrow">§8</span><span class="htitle">Risks</span></h2>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>#</th><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Mitigation</th></tr></thead><tbody><tr><td>R-1</td><td>r/WordPress forbids vendor participation (U-1)</td><td>unknown</td><td><strong>fatal to publishing</strong></td><td>W1.3, before engineering</td></tr><tr><td>R-2</td><td>Account suspended or shadowbanned</td><td>medium</td><td>high</td><td>per-account ledger, human pace, disclosure, no interaction</td></tr><tr><td>R-3</td><td>Reddit changes its DOM (U-5)</td><td><strong>certain</strong></td><td>low if pack works, high if not</td><td>pack + golden pages + degradation alerts; measured at P4</td></tr><tr><td>R-4</td><td>Accounts correlated and actioned together</td><td>medium</td><td><strong>high — the fleet risk</strong></td><td>serial scheduling, per-account egress, no shared threads, no voting</td></tr><tr><td>R-5</td><td>Public astroturfing accusation</td><td>low <em>(disclosed)</em></td><td>high</td><td>disclosure enforced, human gate, kill criteria</td></tr><tr><td>R-6</td><td>FTC undisclosed endorsement</td><td>low</td><td>high</td><td>linter + audit log as evidence</td></tr><tr><td>R-7</td><td>Drafts mediocre, nobody posts them (U-3)</td><td>medium</td><td>medium</td><td>P5 measures before P6 spends</td></tr><tr><td>R-8</td><td>Nobody operates it and it rots</td><td>medium</td><td>high</td><td>named operator required before P5</td></tr><tr><td>R-9</td><td>Effort estimate is wrong</td><td><strong>medium — it is an [E]</strong></td><td>medium</td><td>P1 re-forecasts against actuals and this table is updated</td></tr></tbody></table></div>
+<p><strong>Kill criteria:</strong> any moderator removal, any public astroturfing accusation, any account<br>health degradation, or two consecutive unknown-outcome writes → publishing stops fleet-wide,<br>listening continues, restart requires a written note saying what changed.</p>
+<hr>
+<h2 id="9--status"><span class="eyebrow">§9</span><span class="htitle">Status</span></h2>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Item</th><th>Status</th><th>Date</th></tr></thead><tbody><tr><td>P0 — plan, canon, ADRs, requirements, specs</td><td><strong>complete</strong></td><td>2026-07-22</td></tr><tr><td>W1 — the five tasks in §5</td><td><strong>not started</strong></td><td>—</td></tr><tr><td>P1 — engineer</td><td><strong>not started</strong></td><td>—</td></tr><tr><td>Code written</td><td><strong>none that runs.</strong> 4 scaffolding files in <code>app/src/</code>, unwired</td><td>2026-07-22</td></tr></tbody></table></div>
+<p><strong>Nothing in this repository executes yet.</strong> The plan is real; the software is not. That<br>distinction will be maintained in every status report.</p>
+<hr>
+<h2 id="10--decisions-needed-to-start"><span class="eyebrow">§10</span><span class="htitle">Decisions needed to start</span></h2>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>#</th><th>Decision</th><th>Default if unanswered</th></tr></thead><tbody><tr><td>D-a</td><td>1 developer or 2</td><td>assume 1 → 11-week track</td></tr><tr><td>D-b</td><td>Fleet size at pilot</td><td>assume 2 accounts</td></tr><tr><td>D-c</td><td>Publishing go/no-go pending U-1</td><td>assume listening-only until U-1 answered</td></tr><tr><td>D-d</td><td>Primary objective — defence, leads, or presence</td><td>assume leads; reorders P2 modules only</td></tr></tbody></table></div>
+<p>None of these blocks P1 starting. All four can be answered while engineering runs.</p>
+  </main>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var links = Array.prototype.slice.call(document.querySelectorAll("#navList a"));
+  var toc = document.getElementById("toc");
+  var sb  = document.querySelector(".sidebar");
+  var byId = {};
+  links.forEach(function(a){
+    byId[a.dataset.target] = a;
+    a.addEventListener("click", function(){
+      if(!window.matchMedia("(min-width:1000px)").matches){ toc.open = false; }
+    });
+  });
+  var current = null;
+  function setActive(id){
+    if(current === id) return;
+    current = id;
+    links.forEach(function(a){ a.classList.toggle("active", a.dataset.target === id); });
+    var link = byId[id];
+    if(link && sb && window.matchMedia("(min-width:1000px)").matches){
+      var lr = link.getBoundingClientRect(), sr = sb.getBoundingClientRect();
+      if(lr.top < sr.top || lr.bottom > sr.bottom){ sb.scrollTop += (lr.top - sr.top) - 48; }
+    }
+  }
+  var h2s = Array.prototype.slice.call(document.querySelectorAll("#article h2"));
+  if("IntersectionObserver" in window){
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ if(e.isIntersecting) setActive(e.target.id); });
+    }, { rootMargin: "-80px 0px -70% 0px", threshold: 0 });
+    h2s.forEach(function(h){ io.observe(h); });
+  }
+  if(h2s.length) setActive(h2s[0].id);
+
+  var fill = document.getElementById("progressFill");
+  function onScroll(){
+    var de = document.documentElement;
+    var max = de.scrollHeight - de.clientHeight;
+    var p = max > 0 ? (de.scrollTop / max) : 0;
+    if(p < 0) p = 0; if(p > 1) p = 1;
+    fill.style.width = (p * 100).toFixed(2) + "%";
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll);
+  onScroll();
+
+  function applyToc(){ toc.open = window.matchMedia("(min-width:1000px)").matches; }
+  applyToc();
+  window.addEventListener("resize", applyToc);
+})();
+</script>
+
+<script type="module">
+  try{
+    const m = await import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs");
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    m.default.initialize({ startOnLoad:true, theme: dark ? "dark" : "neutral", securityLevel:"strict" });
+    await m.default.run({ querySelector:"pre.mermaid" });
+  }catch(e){
+    /* offline or blocked: diagrams remain readable as monospace source */
+    document.querySelectorAll(".diagram").forEach(d => d.setAttribute("data-fallback","text"));
+  }
+</script>
+</body>
+</html>

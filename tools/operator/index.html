@@ -1,0 +1,1703 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>redbot — operator workstation</title>
+<style>
+/* ==================================================================
+ * Tokens. Dark-first. Brand red marks identity and the active nav;
+ * semantic colour carries state, so a red chip always means one thing.
+ * ================================================================== */
+:root{
+  --bg:#0A0B0D; --panel:#101216; --panel-2:#15181D; --panel-3:#1A1E24; --panel-4:#20252C;
+  --line:#21252C; --line-2:#2C323B;
+  --fg:#E8EBF0; --dim:#98A1AE; --faint:#5F6875;
+  --brand:#F0474C; --brand-wash:rgba(240,71,76,.12);
+  --ok:#3FB950; --ok-wash:rgba(63,185,80,.13);
+  --warn:#D29922; --warn-wash:rgba(210,153,34,.13);
+  --bad:#F85149; --bad-wash:rgba(248,81,73,.13);
+  --info:#58A6FF; --info-wash:rgba(88,166,255,.13);
+  --violet:#A371F7; --violet-wash:rgba(163,113,247,.13);
+  --r:9px; --r-sm:6px;
+  --mono:ui-monospace,"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+  --sans:ui-sans-serif,"Inter","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+  --term-h:280px;
+}
+:root[data-theme="light"]{
+  --bg:#F6F7F9; --panel:#FFFFFF; --panel-2:#F2F4F7; --panel-3:#E9ECF1; --panel-4:#DFE4EB;
+  --line:#E2E6EC; --line-2:#CFD5DE;
+  --fg:#12151A; --dim:#525B67; --faint:#7C8695;
+  --brand:#CE2B30; --brand-wash:rgba(206,43,48,.09);
+  --ok:#1A7F37; --ok-wash:rgba(26,127,55,.10);
+  --warn:#8A6212; --warn-wash:rgba(138,98,18,.10);
+  --bad:#C93C37; --bad-wash:rgba(201,60,55,.10);
+  --info:#2A6FC4; --info-wash:rgba(42,111,196,.10);
+  --violet:#7B4BC9; --violet-wash:rgba(123,75,201,.10);
+  --shadow:0 1px 2px rgba(16,22,30,.06),0 8px 24px -14px rgba(16,22,30,.18);
+}
+*{box-sizing:border-box;min-width:0}
+html,body{margin:0;padding:0;height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--fg);font:13.5px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+code,pre,.mono,.num{font-family:var(--mono)}
+.num{font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:3px}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:6px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-track{background:transparent}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* shell */
+.app{display:grid;grid-template-columns:228px minmax(0,1fr);grid-template-rows:1fr auto;height:100vh}
+aside{grid-row:1/3;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+.brand{display:flex;align-items:center;gap:9px;padding:15px 15px 13px;border-bottom:1px solid var(--line)}
+.brand .logo{width:26px;height:26px;border-radius:7px;background:var(--brand-wash);border:1px solid var(--brand);display:grid;place-items:center;color:var(--brand);font:700 12px/1 var(--mono)}
+.brand .t{font:600 13.5px/1.1 var(--sans)}
+.brand .s{font:10px/1.1 var(--mono);color:var(--faint);margin-top:2px}
+nav.side{padding:8px;overflow-y:auto;flex:1}
+nav.side .grp{font:10px/1 var(--mono);color:var(--faint);text-transform:uppercase;letter-spacing:.1em;padding:13px 10px 6px}
+nav.side button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:7px 10px;border-radius:var(--r-sm);color:var(--dim);cursor:pointer;text-align:left;font-size:13px;transition:background .12s,color .12s}
+nav.side button:hover{background:var(--panel-2);color:var(--fg)}
+nav.side button[aria-current="true"]{background:var(--panel-3);color:var(--fg);font-weight:500}
+nav.side button[aria-current="true"] .ic{color:var(--brand)}
+nav.side .ic{width:15px;height:15px;flex-shrink:0;color:var(--faint)}
+nav.side .kbd{margin-left:auto;font:9.5px/1 var(--mono);color:var(--faint);opacity:.7}
+.sidefoot{border-top:1px solid var(--line);padding:9px 11px;display:flex;gap:6px;flex-wrap:wrap}
+.iconbtn{background:none;border:1px solid var(--line-2);color:var(--dim);border-radius:var(--r-sm);padding:5px 8px;cursor:pointer;font:10.5px/1 var(--mono)}
+.iconbtn:hover{color:var(--fg);border-color:var(--faint)}
+
+main{overflow-y:auto;overflow-x:hidden}
+.topbar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:11px 22px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.topbar h1{font:600 15px/1.2 var(--sans);margin:0}
+.topbar .sub{color:var(--faint);font-size:11.5px}
+.spacer{margin-left:auto}
+.searchbtn{display:flex;align-items:center;gap:8px;background:var(--panel-2);border:1px solid var(--line-2);color:var(--faint);border-radius:var(--r-sm);padding:6px 11px;cursor:pointer;font-size:12px;min-width:190px}
+.searchbtn:hover{border-color:var(--faint);color:var(--dim)}
+.searchbtn kbd{margin-left:auto;font:10px/1 var(--mono);background:var(--panel-3);border:1px solid var(--line-2);border-radius:3px;padding:2px 5px}
+.wrap{padding:18px 22px 40px;max-width:1620px}
+.page{display:none}
+.page.on{display:block}
+
+/* primitives */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+.card-h{display:flex;align-items:center;gap:9px;padding:12px 15px;border-bottom:1px solid var(--line)}
+.card-h h3{font:600 12px/1 var(--sans);margin:0}
+.card-h .hint{font:10px/1 var(--mono);color:var(--faint);margin-left:auto;text-transform:uppercase;letter-spacing:.08em}
+.card-b{padding:15px}
+.grid{display:grid;gap:13px}
+.c4{grid-template-columns:repeat(auto-fit,minmax(228px,1fr))}
+.c3{grid-template-columns:repeat(auto-fit,minmax(296px,1fr))}
+.c2{grid-template-columns:repeat(auto-fit,minmax(384px,1fr))}
+.sec{margin:20px 0 10px;display:flex;align-items:baseline;gap:10px}
+.sec h2{font:600 12px/1 var(--mono);margin:0;text-transform:uppercase;letter-spacing:.11em;color:var(--dim)}
+.sec .n{font:11px/1 var(--sans);color:var(--faint)}
+.mut{color:var(--dim)}.fnt{color:var(--faint)}.tiny{font-size:11.5px}
+.stat{position:relative;overflow:hidden;padding:15px 16px;border-radius:var(--r);background:var(--panel);border:1px solid var(--line)}
+.stat::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--c)}
+.stat .lb{display:flex;align-items:center;gap:7px;font:10px/1 var(--mono);color:var(--faint);text-transform:uppercase;letter-spacing:.1em}
+.stat .vv{font:600 21px/1.2 var(--sans);margin-top:10px;color:var(--c)}
+.stat .dd{font-size:11.5px;color:var(--dim);margin-top:5px}
+.stat .meta{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;gap:13px;font:10.5px/1 var(--mono);color:var(--faint);flex-wrap:wrap}
+.stat.s-ok{--c:var(--ok)}.stat.s-warn{--c:var(--warn)}.stat.s-bad{--c:var(--bad)}.stat.s-info{--c:var(--info)}
+.met{padding:14px 15px;border-radius:var(--r);background:var(--panel);border:1px solid var(--line)}
+.met .k{font:10px/1 var(--mono);color:var(--faint);text-transform:uppercase;letter-spacing:.1em}
+.met .v{font:600 25px/1.1 var(--sans);margin-top:9px;font-variant-numeric:tabular-nums}
+.met .d{font-size:11px;color:var(--faint);margin-top:5px}
+.met.zero .v{color:var(--bad)}.met.good .v{color:var(--ok)}.met.warnv .v{color:var(--warn)}
+.chip{display:inline-flex;align-items:center;gap:6px;font:10.5px/1 var(--mono);padding:5px 9px;border-radius:20px;border:1px solid var(--line-2);background:var(--panel-2);color:var(--dim);white-space:nowrap}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+.chip.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent);background:var(--ok-wash)}
+.chip.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent);background:var(--warn-wash)}
+.chip.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent);background:var(--bad-wash)}
+.chip.info{color:var(--info);border-color:color-mix(in srgb,var(--info) 45%,transparent);background:var(--info-wash)}
+.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.vb{display:inline-flex;align-items:center;gap:6px;font:600 11px/1 var(--mono);padding:6px 10px;border-radius:var(--r-sm);letter-spacing:.05em}
+.vb.REJECT,.vb.incorrect,.vb.false{background:var(--bad-wash);color:var(--bad);border:1px solid color-mix(in srgb,var(--bad) 45%,transparent)}
+.vb.CERTIFIED,.vb.correct,.vb.true,.vb.approved,.vb.yes{background:var(--ok-wash);color:var(--ok);border:1px solid color-mix(in srgb,var(--ok) 45%,transparent)}
+.vb.ESCALATE,.vb.pending,.vb.partial{background:var(--warn-wash);color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 45%,transparent)}
+.vb.unlabelled,.vb.none,.vb.null{background:var(--panel-3);color:var(--dim);border:1px solid var(--line-2)}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--panel)}
+table{border-collapse:collapse;width:100%;font:12.5px/1.5 var(--mono)}
+th{text-align:left;font:10px/1 var(--mono);color:var(--faint);text-transform:uppercase;letter-spacing:.09em;padding:10px 13px;border-bottom:1px solid var(--line);white-space:nowrap;background:var(--panel-2);position:sticky;top:0;z-index:1}
+td{padding:10px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tr.clk{cursor:pointer}
+tr.clk:hover td{background:var(--panel-2)}
+td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;gap:7px;background:var(--panel-2);border:1px solid var(--line-2);color:var(--fg);padding:7px 12px;border-radius:var(--r-sm);cursor:pointer;font-size:12.5px}
+.btn:hover{border-color:var(--faint);background:var(--panel-3)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.pri{border-color:var(--brand);color:var(--brand);background:var(--brand-wash)}
+.btn.sm{padding:5px 9px;font-size:11.5px}
+.bar-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:11px}
+.cli{font:10.5px/1 var(--mono);color:var(--faint);background:var(--panel-2);padding:6px 9px;border-radius:var(--r-sm);border:1px solid var(--line)}
+.note{border-left:2px solid var(--info);background:var(--info-wash);padding:11px 14px;border-radius:0 var(--r-sm) var(--r-sm) 0;color:var(--dim);max-width:96ch}
+.note.warn{border-left-color:var(--warn);background:var(--warn-wash)}
+.note.bad{border-left-color:var(--bad);background:var(--bad-wash)}
+.note strong{color:var(--fg)}
+.note code{background:var(--panel);padding:1px 5px;border-radius:3px;font-size:11.5px}
+details.col{border:1px solid var(--line);border-radius:var(--r);background:var(--panel);margin-top:10px;overflow:hidden}
+details.col>summary{cursor:pointer;padding:11px 14px;font:600 12px/1 var(--sans);color:var(--dim);display:flex;align-items:center;gap:9px;list-style:none}
+details.col>summary::-webkit-details-marker{display:none}
+details.col>summary:hover{color:var(--fg);background:var(--panel-2)}
+details.col>summary .cnt{margin-left:auto;font:10px/1 var(--mono);color:var(--faint)}
+details.col>summary .caret{width:13px;height:13px;transition:transform .15s;color:var(--faint)}
+details.col[open]>summary{border-bottom:1px solid var(--line);color:var(--fg)}
+details.col[open]>summary .caret{transform:rotate(90deg)}
+details.col .in{padding:14px}
+input.search,input.txt{background:var(--panel-2);border:1px solid var(--line-2);color:var(--fg);padding:8px 12px;border-radius:var(--r-sm);font:12.5px/1 var(--sans)}
+input.search::placeholder,input.txt::placeholder{color:var(--faint)}
+.idx{display:flex;flex-direction:column;gap:3px;max-height:min(66vh,700px);overflow-y:auto;padding-right:4px}
+.idx button{text-align:left;background:none;border:1px solid transparent;border-radius:var(--r-sm);padding:8px 10px;cursor:pointer;color:var(--dim);width:100%;font-size:12.5px}
+.idx button:hover{background:var(--panel-2);color:var(--fg)}
+.idx button[aria-current="true"]{background:var(--panel-3);color:var(--fg);border-color:var(--line-2)}
+.idx .t{display:block;font-weight:500;margin-bottom:2px;word-break:break-word}
+.idx .s{display:block;color:var(--faint);font:10px/1.3 var(--mono)}
+.split{display:grid;gap:15px;grid-template-columns:270px minmax(0,1fr);align-items:start}
+@media (max-width:1020px){.split{grid-template-columns:minmax(0,1fr)}}
+.kv{display:flex;align-items:baseline;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.kv:last-child{border-bottom:0}
+.kv .k{font:10.5px/1.4 var(--mono);color:var(--faint);text-transform:uppercase;letter-spacing:.08em;min-width:150px;flex-shrink:0}
+.kv .v{font:12.5px/1.5 var(--mono);flex:1;word-break:break-word}
+@media (max-width:640px){.kv{flex-direction:column;gap:4px}.kv .k{min-width:0}}
+
+/* markdown */
+.md{font-size:13.5px;line-height:1.68;max-width:84ch}
+.md h1{font:600 22px/1.28 var(--sans);margin:0 0 15px}
+.md h2{font:600 16.5px/1.35 var(--sans);margin:28px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line);scroll-margin-top:80px}
+.md h3{font:600 14px/1.4 var(--sans);margin:20px 0 8px;scroll-margin-top:80px}
+.md p,.md li{color:var(--dim);margin:0 0 9px}
+.md ul,.md ol{margin:0 0 12px;padding-left:22px}
+.md strong{color:var(--fg);font-weight:600}
+.md a{color:var(--info);text-decoration:none}.md a:hover{text-decoration:underline}
+.md code{font:12px/1.5 var(--mono);background:var(--panel-2);padding:2px 5px;border-radius:4px;color:var(--fg)}
+.md pre{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;overflow-x:auto;margin:0 0 13px}
+.md pre code{background:none;padding:0;font-size:12px}
+.md blockquote{margin:0 0 13px;padding:3px 0 3px 14px;border-left:2px solid var(--brand);color:var(--dim)}
+.md hr{border:0;border-top:1px solid var(--line);margin:22px 0}
+.md table{font-size:12px}.md th,.md td{border:1px solid var(--line)}
+.md .tw{margin:0 0 13px}
+.hl-k{color:#FF7B72}.hl-s{color:#A5D6FF}.hl-n{color:#79C0FF}.hl-c{color:#8B949E;font-style:italic}.hl-p{color:#D2A8FF}.hl-a{color:#7EE787}
+.toc{position:sticky;top:80px;font-size:12px;max-height:calc(100vh - 200px);overflow-y:auto}
+.toc a{display:block;padding:5px 10px;color:var(--faint);border-left:2px solid var(--line);text-decoration:none;line-height:1.4}
+.toc a:hover{color:var(--fg);border-left-color:var(--faint)}
+.toc a.h3{padding-left:22px;font-size:11.5px}
+svg.dag{display:block;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-sm)}
+.dagwrap{overflow-x:auto}
+.legend{display:flex;gap:15px;flex-wrap:wrap;margin-top:10px;font:10.5px/1 var(--mono);color:var(--faint)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.bar{height:4px;border-radius:3px;background:var(--panel-3);overflow:hidden;margin-top:10px}
+.bar i{display:block;height:100%;border-radius:3px;background:var(--c,var(--info));width:0;transition:width .9s cubic-bezier(.2,.8,.2,1)}
+.pipe{display:flex;flex-wrap:wrap}
+.pstep{flex:1 1 145px;min-width:145px;padding:13px 14px;border:1px solid var(--line);background:var(--panel-2)}
+.pstep:first-child{border-radius:var(--r) 0 0 var(--r)}
+.pstep:last-child{border-radius:0 var(--r) var(--r) 0}
+.pstep+.pstep{border-left:0}
+.pstep .n{font:10px/1 var(--mono);color:var(--faint);text-transform:uppercase;letter-spacing:.1em}
+.pstep .v{font:600 16px/1.15 var(--sans);margin-top:8px}
+.pstep .s{font-size:11px;color:var(--dim);margin-top:4px}
+.pstep.done{background:var(--ok-wash);border-color:color-mix(in srgb,var(--ok) 32%,var(--line))}.pstep.done .v{color:var(--ok)}
+.pstep.block{background:var(--warn-wash);border-color:color-mix(in srgb,var(--warn) 32%,var(--line))}.pstep.block .v{color:var(--warn)}
+.pstep.stop{background:var(--bad-wash);border-color:color-mix(in srgb,var(--bad) 32%,var(--line))}.pstep.stop .v{color:var(--bad)}
+.tl{position:relative;padding-left:21px}
+.tl::before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:1px;background:var(--line-2)}
+.tl .ev{position:relative;padding:8px 0}
+.tl .ev::before{content:"";position:absolute;left:-20px;top:14px;width:9px;height:9px;border-radius:50%;background:var(--panel);border:2px solid var(--k,var(--faint))}
+.tl .ev .h{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.tl .ev .kind{font:10px/1 var(--mono);color:var(--k,var(--dim));text-transform:uppercase;letter-spacing:.08em}
+.tl .ev .ts{font:10px/1 var(--mono);color:var(--faint);margin-left:auto}
+.tl .ev .sm{font-size:12.5px;margin-top:4px}
+.tl .ev .src{font:10px/1 var(--mono);color:var(--faint);margin-top:3px}
+
+/* ---------- terminal drawer ---------- */
+.term-drawer{grid-column:2;background:var(--panel);border-top:1px solid var(--line-2);display:flex;flex-direction:column;height:var(--term-h);transition:height .18s ease}
+.term-drawer.min{height:38px}
+.term-h{display:flex;align-items:center;gap:9px;padding:0 14px;height:38px;flex-shrink:0;border-bottom:1px solid var(--line);cursor:pointer;user-select:none}
+.term-h .ttl{font:600 11px/1 var(--mono);text-transform:uppercase;letter-spacing:.1em;color:var(--dim)}
+.term-h .st{font:10.5px/1 var(--mono);color:var(--faint)}
+.term-drawer.min .term-body{display:none}
+.term-body{flex:1;overflow:auto;padding:12px 14px;background:#07080A;font:12px/1.6 var(--mono);white-space:pre-wrap;word-break:break-word}
+:root[data-theme="light"] .term-body{background:#12151A;color:#DDE2E9}
+.term-body .e{color:#FF7B72}
+.term-body .sysline{color:#8B949E}
+.a-blk{color:#6E7681}.a-red{color:#FF7B72}.a-grn{color:#7EE787}.a-yel{color:#E3B341}.a-blu{color:#79C0FF}.a-mag{color:#D2A8FF}.a-cyn{color:#76E3EA}.a-wht{color:#F0F6FC}.a-bold{font-weight:700}.a-dim{opacity:.65}
+
+/* ---------- overlays ---------- */
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:none;padding-top:11vh;justify-content:center}
+.ov.on{display:flex}
+.ov-box{width:min(720px,94vw);max-height:74vh;background:var(--panel);border:1px solid var(--line-2);border-radius:12px;box-shadow:0 24px 64px -12px rgba(0,0,0,.7);display:flex;flex-direction:column;overflow:hidden}
+.ov-in{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.ov-in input{flex:1;background:none;border:0;color:var(--fg);font:15px/1.3 var(--sans);outline:none}
+.ov-in input::placeholder{color:var(--faint)}
+.ov-in .esc{font:10px/1 var(--mono);color:var(--faint);border:1px solid var(--line-2);border-radius:3px;padding:3px 6px}
+.ov-list{overflow-y:auto;padding:6px}
+.ov-item{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:var(--r-sm);cursor:pointer}
+.ov-item[aria-selected="true"]{background:var(--panel-3)}
+.ov-item .nm{font:12.5px/1.3 var(--mono);color:var(--fg)}
+.ov-item .ds{font-size:11.5px;color:var(--faint);margin-left:auto;text-align:right;max-width:52%}
+.ov-item .tag{font:9.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.08em;padding:3px 6px;border-radius:3px;background:var(--panel-3);color:var(--faint)}
+.ov-empty{padding:26px 16px;text-align:center;color:var(--faint);font-size:12.5px}
+.ov-foot{border-top:1px solid var(--line);padding:8px 14px;display:flex;gap:14px;font:10px/1 var(--mono);color:var(--faint)}
+mark{background:rgba(210,153,34,.3);color:var(--fg);border-radius:2px;padding:0 2px}
+.hit{padding:8px 12px;border-radius:var(--r-sm);cursor:pointer}
+.hit:hover,.hit[aria-selected="true"]{background:var(--panel-3)}
+.hit .p{font:11px/1.3 var(--mono);color:var(--info)}
+.hit .l{font:11.5px/1.5 var(--mono);color:var(--dim);margin-top:3px;white-space:pre-wrap;word-break:break-word}
+
+/* tree */
+.tree{font:12.5px/1.6 var(--mono)}
+.tree .dir>.row{color:var(--dim);font-weight:500}
+.tree .row{display:flex;align-items:center;gap:7px;padding:3px 7px;border-radius:4px;cursor:pointer}
+.tree .row:hover{background:var(--panel-2)}
+.tree .row[aria-current="true"]{background:var(--panel-3);color:var(--fg)}
+.tree .kids{padding-left:15px;border-left:1px solid var(--line);margin-left:8px}
+.tree .sz{margin-left:auto;font-size:10px;color:var(--faint)}
+.tree .ic{width:13px;height:13px;color:var(--faint);flex-shrink:0}
+@media (max-width:900px){
+  .app{grid-template-columns:1fr}
+  aside{position:fixed;inset:0 auto 0 0;width:228px;z-index:60;transform:translateX(-100%);transition:transform .2s}
+  aside.open{transform:none}
+  .menu{display:inline-flex!important}
+  .term-drawer{grid-column:1}
+  .wrap{padding:14px 13px 32px}
+}
+.menu{display:none}
+.scrim{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:55}
+.scrim.on{display:block}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside id="side">
+    <div class="brand">
+      <div class="logo">rb</div>
+      <div><div class="t">redbot</div><div class="s" id="brand-sub">operator workstation</div></div>
+    </div>
+    <nav class="side" id="nav"></nav>
+    <div class="sidefoot">
+      <button class="iconbtn" id="theme">theme</button>
+      <button class="iconbtn" id="refresh">refresh</button>
+      <button class="iconbtn" id="termToggle">terminal</button>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <main id="main">
+    <div class="topbar">
+      <button class="iconbtn menu" id="menu">≡</button>
+      <div><h1 id="pt">Dashboard</h1><div class="sub" id="ps">system state</div></div>
+      <span class="spacer"></span>
+      <button class="searchbtn" id="openSearch"><span>Search everything…</span><kbd>/</kbd></button>
+      <button class="searchbtn" id="openPalette" style="min-width:150px"><span>Commands</span><kbd>Ctrl K</kbd></button>
+      <span class="chip" id="c-op"></span>
+      <span class="chip" id="c-freeze"></span>
+      <span class="chip bad"><i class="dot"></i>read-only</span>
+    </div>
+    <div class="wrap" id="wrap"></div>
+  </main>
+
+  <div class="term-drawer min" id="drawer">
+    <div class="term-h" id="termHead">
+      <span class="ttl">Terminal</span>
+      <span class="st" id="termStatus">idle</span>
+      <span class="spacer"></span>
+      <button class="iconbtn" id="termCancel" disabled>cancel</button>
+      <button class="iconbtn" id="termCopy">copy</button>
+      <button class="iconbtn" id="termClear">clear</button>
+      <button class="iconbtn" id="termMin">▲</button>
+    </div>
+    <div class="term-body" id="termBody"><span class="sysline">Ready. Press Ctrl+K to run a command.</span></div>
+  </div>
+</div>
+
+<div class="ov" id="palette"><div class="ov-box">
+  <div class="ov-in">
+    <span class="fnt mono" style="font-size:12px">&gt;</span>
+    <input id="palInput" placeholder="Run a command…" autocomplete="off" spellcheck="false">
+    <span class="esc">Esc</span>
+  </div>
+  <div class="ov-list" id="palList"></div>
+  <div class="ov-foot"><span>↑↓ navigate</span><span>⏎ run</span><span>output streams to the terminal</span></div>
+</div></div>
+
+<div class="ov" id="search"><div class="ov-box">
+  <div class="ov-in">
+    <span class="fnt mono" style="font-size:12px">⌕</span>
+    <input id="srchInput" placeholder="Search reports, ground truth, certifications, logs…" autocomplete="off" spellcheck="false">
+    <span class="esc">Esc</span>
+  </div>
+  <div class="ov-list" id="srchList"><div class="ov-empty">Type at least two characters.</div></div>
+  <div class="ov-foot"><span>⏎ open</span><span id="srchMeta"></span></div>
+</div></div>
+
+<script>
+/* ==================================================================
+ * NO BUSINESS LOGIC HERE, AND NONE EVER MAY.
+ * Every figure is fetched from the local server, which runs the real
+ * command or reads the real file. This layer arranges pixels.
+ * ================================================================== */
+const $=(s,r=document)=>r.querySelector(s);
+const $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const el=(t,c,x)=>{const n=document.createElement(t);if(c)n.className=c;if(x!=null)n.textContent=x;return n};
+const esc=s=>String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const api=async p=>(await fetch(p)).json();
+const html=(t,c,h)=>{const n=el(t,c);n.innerHTML=h;return n};
+const ms=n=>n==null?'—':n<1000?n+' ms':n<60000?(n/1000).toFixed(1)+' s':(n/60000).toFixed(1)+' min';
+const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
+function ago(iso){if(!iso)return '';const d=(Date.now()-new Date(iso).getTime())/1000;
+  if(d<60)return Math.max(0,Math.round(d))+'s ago';if(d<3600)return Math.round(d/60)+'m ago';
+  if(d<86400)return Math.round(d/3600)+'h ago';return Math.round(d/86400)+'d ago'}
+
+/* ---------- local settings (localStorage only) ---------- */
+const DEF={theme:'dark',refreshMs:0,operatorLabel:'',port:location.port||'7890',devMode:false};
+const CFG=Object.assign({},DEF,JSON.parse(localStorage.getItem('redbot.ws')||'{}'));
+const saveCfg=()=>localStorage.setItem('redbot.ws',JSON.stringify(CFG));
+if(CFG.theme==='light')document.documentElement.setAttribute('data-theme','light');
+
+const ICON={
+  dashboard:'M3 3h7v7H3zM14 3h7v5h-7zM14 11h7v10h-7zM3 13h7v8H3z',
+  timeline:'M12 8v8M12 3v2M12 19v2M5 12H3M21 12h-2M7.8 7.8L6.4 6.4M17.6 17.6l-1.4-1.4M7.8 16.2l-1.4 1.4M17.6 6.4l-1.4 1.4',
+  queue:'M4 6h16M4 12h16M4 18h10M18 16l2 2 3-3',
+  cert:'M9 12l2 2 4-4M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z',
+  truth:'M9 11l3 3 8-8M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h9',
+  report:'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M8 13h8M8 17h5',
+  files:'M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z',
+  bench:'M3 20h18M6 20V10M11 20V4M16 20v-7M21 20v-4',
+  replay:'M3 12a9 9 0 109-9M3 12V6M3 12h6',
+  valid:'M9 12l2 2 4-4M21 12a9 9 0 11-18 0 9 9 0 0118 0',
+  history:'M12 8v5l3 2M3 12a9 9 0 109-9 9 9 0 00-9 9zM3 12H1M3 12l2-2',
+  logs:'M4 4h16v16H4zM8 9h8M8 13h8M8 17h4',
+  settings:'M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.6 1.6 0 00.3 1.8a2 2 0 11-2.8 2.8a1.6 1.6 0 00-2.7 1.1a2 2 0 11-4 0A1.6 1.6 0 007 19.4a1.6 1.6 0 00-1.8.3a2 2 0 11-2.8-2.8A1.6 1.6 0 003 15a2 2 0 010-4a1.6 1.6 0 001.1-2.7a2 2 0 112.8-2.8A1.6 1.6 0 009 4.6V4a2 2 0 114 0a1.6 1.6 0 002.7 1.1a2 2 0 112.8 2.8A1.6 1.6 0 0021 11a2 2 0 010 4z',
+  about:'M12 16v-4M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0',
+  arrow:'M9 6l6 6-6 6',caret:'M9 6l6 6-6 6',
+  file:'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6',
+  folder:'M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z'
+};
+const svgIcon=(d,cls='ic')=>`<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
+
+const PAGES=[
+  {id:'dashboard',label:'Dashboard',icon:'dashboard',grp:'Overview',sub:'system state',kbd:'g d'},
+  {id:'timeline',label:'Timeline',icon:'timeline',grp:'Overview',sub:'every certification, chronological'},
+  {id:'queue',label:'Queue',icon:'queue',grp:'Overview',sub:'what has been certified, what has not'},
+  {id:'certifications',label:'Certifications',icon:'cert',grp:'Evidence',sub:'full certification records',kbd:'g c'},
+  {id:'groundtruth',label:'Ground Truth',icon:'truth',grp:'Evidence',sub:'the human-labelled corpus'},
+  {id:'reports',label:'Reports',icon:'report',grp:'Evidence',sub:'generated evidence reports',kbd:'g r'},
+  {id:'files',label:'Files',icon:'files',grp:'Engineering',sub:'browse the readable surface',dev:true},
+  {id:'benchmark',label:'Benchmark',icon:'bench',grp:'Engineering',sub:'certification regression suite',dev:true},
+  {id:'replay',label:'Replay',icon:'replay',grp:'Engineering',sub:'ARE-001 deterministic replay',dev:true},
+  {id:'validation',label:'Validation',icon:'valid',grp:'Engineering',sub:'every gate, one click',kbd:'g v',dev:true},
+  {id:'runhistory',label:'Run History',icon:'history',grp:'Engineering',sub:'every command this console ran',dev:true},
+  {id:'logs',label:'Logs',icon:'logs',grp:'Engineering',sub:'append-only streams',dev:true},
+  {id:'settings',label:'Settings',icon:'settings',grp:'System',sub:'local preferences'},
+  {id:'about',label:'About',icon:'about',grp:'System',sub:'what this is'}
+];
+/**
+ * Which pages an operator sees by default.
+ *
+ * The operator's job is to read evidence and decide about a draft. The regression suite,
+ * the replay harness, the raw file tree, the console's own run log and the append-only
+ * streams are all instruments for whoever is working ON redbot — they answer questions
+ * about the engine, not about the draft in front of you. Hidden by default, one toggle
+ * away in Settings, and never removed: a hidden page is still routable once revealed.
+ */
+const visiblePages=()=>PAGES.filter(p=>!p.dev||CFG.devMode);
+let CUR='dashboard',DASH=null,CMDS=null,REFRESH_TIMER=null;
+
+/* ================================================================== *
+ * TERMINAL — one drawer, one running command
+ * ================================================================== */
+const T={body:null,status:null,drawer:null,es:null,running:null,t0:0,tick:null,raw:''};
+const ANSI={'30':'a-blk','31':'a-red','32':'a-grn','33':'a-yel','34':'a-blu','35':'a-mag','36':'a-cyn','37':'a-wht',
+  '90':'a-blk','91':'a-red','92':'a-grn','93':'a-yel','94':'a-blu','95':'a-mag','96':'a-cyn','97':'a-wht','1':'a-bold','2':'a-dim'};
+function ansi(text){
+  let out='',open=0;
+  const parts=String(text).split(/\u001b\[([0-9;]*)m/);
+  for(let i=0;i<parts.length;i++){
+    if(i%2===0){out+=esc(parts[i]);continue}
+    const codes=parts[i].split(';').filter(Boolean);
+    if(!codes.length||codes.includes('0')){out+='</span>'.repeat(open);open=0;continue}
+    const cls=codes.map(c=>ANSI[c]).filter(Boolean).join(' ');
+    if(cls){out+=`<span class="${cls}">`;open++}
+  }
+  return out+'</span>'.repeat(open);
+}
+function termOpen(){T.drawer.classList.remove('min');$('#termMin').textContent='▼'}
+function termWrite(h){const at=T.body.scrollHeight-T.body.scrollTop-T.body.clientHeight<40;
+  T.body.insertAdjacentHTML('beforeend',h);if(at)T.body.scrollTop=T.body.scrollHeight}
+function termSys(t){termWrite(`<span class="sysline">${esc(t)}</span>\n`)}
+
+function runCommand(key,label){
+  if(T.running){termSys(`"${T.running}" is still running — cancel it first.`);termOpen();return}
+  termOpen();
+  T.running=key;T.t0=Date.now();T.raw='';
+  $('#termCancel').disabled=false;
+  T.body.innerHTML='';
+  termWrite(`<span class="a-yel">▸ ${esc(label||key)}</span>\n`);
+  const es=new EventSource('/api/stream?cmd='+encodeURIComponent(key));
+  T.es=es;
+  T.tick=setInterval(()=>{T.status.innerHTML=`<span class="a-yel pulse">● running</span> ${key} · ${((Date.now()-T.t0)/1000).toFixed(1)}s`},100);
+  es.addEventListener('start',e=>{const d=JSON.parse(e.data);termWrite(`<span class="sysline">$ ${esc(d.cli)}</span>\n\n`)});
+  es.addEventListener('out',e=>{const c=JSON.parse(e.data).chunk;T.raw+=c;termWrite(ansi(c))});
+  es.addEventListener('err',e=>{const c=JSON.parse(e.data).chunk;T.raw+=c;termWrite(`<span class="e">${ansi(c)}</span>`)});
+  es.addEventListener('exit',e=>{
+    const d=JSON.parse(e.data);
+    clearInterval(T.tick);es.close();T.es=null;T.running=null;
+    $('#termCancel').disabled=true;
+    const okc=d.code===0?'a-grn':'a-red';
+    const tag=d.cancelled?'cancelled':d.code===0?'✓ exit 0':`✕ exit ${d.code}`;
+    termWrite(`\n<span class="${d.cancelled?'a-yel':okc}">${tag}</span><span class="sysline"> · ${ms(d.ms)}</span>\n`);
+    if(d.error)termWrite(`<span class="e">${esc(d.error)}</span>\n`);
+    T.status.innerHTML=`<span class="${d.cancelled?'a-yel':okc}">${tag}</span> ${key} · ${ms(d.ms)}`;
+    document.dispatchEvent(new CustomEvent('cmd:done',{detail:{key,...d}}));
+  });
+  es.onerror=()=>{
+    if(!T.running)return;
+    clearInterval(T.tick);es.close();T.es=null;T.running=null;
+    $('#termCancel').disabled=true;
+    termWrite('\n<span class="e">✕ stream interrupted</span>\n');
+    T.status.textContent='stream interrupted';
+  };
+}
+async function runUnavailable(key){
+  const r=await api('/api/stream?cmd='+encodeURIComponent(key));
+  termOpen();T.body.innerHTML='';
+  termWrite(`<span class="a-yel">◐ ${esc(key)} — not available</span>\n<span class="sysline">${esc(r.err||r.error||'')}</span>\n`);
+  T.status.textContent='not available';
+  return r;
+}
+async function exec(key,label){
+  const meta=(CMDS?.scripts||[]).find(s=>s.key===key);
+  if(meta&&(key==='replay'||meta.external)){
+    const probe=await fetch('/api/stream?cmd='+encodeURIComponent(key));
+    const ct=probe.headers.get('content-type')||'';
+    if(ct.includes('json')){const r=await probe.json();if(r.unavailable){await runUnavailable(key);return}}
+    probe.body?.cancel?.();
+  }
+  runCommand(key,label);
+}
+
+/* ================================================================== *
+ * COMMAND PALETTE
+ * ================================================================== */
+const PAL={items:[],filtered:[],sel:0};
+function buildPalette(){
+  const items=[];
+  (CMDS?.commands||[]).forEach(c=>items.push({type:'command',key:c.key,name:c.key,desc:c.blurb,tag:'cli',run:()=>exec(c.key,c.cli)}));
+  (CMDS?.scripts||[]).forEach(s=>items.push({type:'command',key:s.key,name:s.key,desc:s.blurb,tag:'gate',run:()=>exec(s.key,s.cli)}));
+  visiblePages().forEach(p=>items.push({type:'nav',key:p.id,name:'go '+p.label.toLowerCase(),desc:p.sub,tag:'page',run:()=>go(p.id)}));
+  items.push({type:'action',key:'cancel',name:'cancel',desc:'stop the running command',tag:'action',run:cancelRun});
+  items.push({type:'action',key:'clear',name:'clear terminal',desc:'empty the output pane',tag:'action',run:()=>{T.body.innerHTML='';T.raw=''}});
+  items.push({type:'action',key:'theme',name:'toggle theme',desc:'dark / light',tag:'action',run:toggleTheme});
+  PAL.items=items;
+}
+function palRender(q){
+  const list=$('#palList');
+  const needle=q.trim().toLowerCase();
+  // Rank name matches above description matches. Typing "health" must select the
+  // `health` command, not `doctor` — whose description happens to contain the
+  // word "health". Found by QA: the first Enter ran the wrong command.
+  if(!needle)PAL.filtered=PAL.items;
+  else{
+    const score=i=>{
+      const n=i.name.toLowerCase(),d=(i.desc||'').toLowerCase();
+      if(n===needle)return 0;
+      if(n.startsWith(needle))return 1;
+      if(n.includes(needle))return 2;
+      if(d.includes(needle))return 3;
+      return 99;
+    };
+    PAL.filtered=PAL.items.map(i=>[score(i),i]).filter(([s])=>s<99)
+      .sort((a,b)=>a[0]-b[0]).map(([,i])=>i);
+  }
+  PAL.sel=0;list.textContent='';
+  if(!PAL.filtered.length){list.append(html('div','ov-empty',`Nothing matches “${esc(q)}”.`));return}
+  PAL.filtered.forEach((it,i)=>{
+    const row=el('div','ov-item');row.setAttribute('aria-selected',String(i===0));row.dataset.i=i;
+    row.innerHTML=`<span class="tag">${esc(it.tag)}</span><span class="nm">${esc(it.name)}</span><span class="ds">${esc(it.desc||'')}</span>`;
+    row.onclick=()=>{closeOverlays();it.run()};
+    list.append(row);
+  });
+}
+function palMove(d){
+  const rows=$$('#palList .ov-item');if(!rows.length)return;
+  PAL.sel=(PAL.sel+d+rows.length)%rows.length;
+  rows.forEach((r,i)=>r.setAttribute('aria-selected',String(i===PAL.sel)));
+  rows[PAL.sel].scrollIntoView({block:'nearest'});
+}
+
+/* ================================================================== *
+ * GLOBAL SEARCH
+ * ================================================================== */
+const SR={rows:[],sel:0,timer:null};
+function hilite(text,q){
+  const i=text.toLowerCase().indexOf(q.toLowerCase());
+  if(i<0)return esc(text);
+  return esc(text.slice(0,i))+'<mark>'+esc(text.slice(i,i+q.length))+'</mark>'+esc(text.slice(i+q.length));
+}
+async function doSearch(q){
+  const list=$('#srchList'),meta=$('#srchMeta');
+  if(q.trim().length<2){list.innerHTML='<div class="ov-empty">Type at least two characters.</div>';meta.textContent='';return}
+  list.innerHTML='<div class="ov-empty">Searching…</div>';
+  const r=await api('/api/search?q='+encodeURIComponent(q));
+  list.textContent='';SR.rows=[];SR.sel=0;
+  if(!r.available||!r.files.length){
+    list.append(html('div','ov-empty',`No matches for “${esc(q)}”.`));
+    meta.textContent=r.available?`${r.scanned} files scanned`:'';return;
+  }
+  r.files.forEach(f=>{
+    list.append(html('div','',`<div style="padding:9px 12px 3px;font:10px/1 var(--mono);color:var(--faint);text-transform:uppercase;letter-spacing:.09em">${esc(f.path)} · ${f.count} match${f.count===1?'':'es'}</div>`));
+    f.rows.forEach(row=>{
+      const d=el('div','hit');d.dataset.i=SR.rows.length;
+      d.innerHTML=`<div class="p">line ${row.line}</div><div class="l">${hilite(row.text,q)}</div>`;
+      d.onclick=()=>{closeOverlays();openPath(f.path,q)};
+      list.append(d);SR.rows.push({path:f.path,q});
+    });
+  });
+  $$('#srchList .hit')[0]?.setAttribute('aria-selected','true');
+  meta.textContent=`${r.total} match${r.total===1?'':'es'} in ${r.files.length} file(s)${r.truncated?' — truncated':''} · ${r.scanned} scanned`;
+}
+function srchMove(d){
+  const rows=$$('#srchList .hit');if(!rows.length)return;
+  SR.sel=(SR.sel+d+rows.length)%rows.length;
+  rows.forEach((r,i)=>r.setAttribute('aria-selected',String(i===SR.sel)));
+  rows[SR.sel].scrollIntoView({block:'nearest'});
+}
+function openPath(path,q){
+  if(path.startsWith('data/')&&path.endsWith('.jsonl')){go('logs');setTimeout(()=>logOpenPath(path,q),140);return}
+  go('files');setTimeout(()=>filesOpen(path,q),140);
+}
+
+/* ---------- markdown + highlighting ---------- */
+function hl(code,lang){
+  const e=esc(code);
+  if(/^json$/i.test(lang))
+    return e.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"(\s*:)/g,'<span class="hl-p">"$1"</span>$2')
+            .replace(/:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g,': <span class="hl-s">"$1"</span>')
+            .replace(/\b(true|false|null)\b/g,'<span class="hl-n">$1</span>')
+            .replace(/\b(-?\d+\.?\d*)\b/g,'<span class="hl-n">$1</span>');
+  if(/^(bash|sh|shell|console|powershell)$/i.test(lang))
+    return e.replace(/^(#.*)$/gm,'<span class="hl-c">$1</span>')
+            .replace(/\b(node|npm|npx|git|cd|echo|export|if|then|else|fi|for|do|done)\b/g,'<span class="hl-k">$1</span>')
+            .replace(/(\s)(--?[a-zA-Z][\w-]*)/g,'$1<span class="hl-a">$2</span>');
+  if(/^ya?ml$/i.test(lang))
+    return e.replace(/^(\s*#.*)$/gm,'<span class="hl-c">$1</span>').replace(/^(\s*)([\w.-]+)(:)/gm,'$1<span class="hl-p">$2</span>$3');
+  return e.replace(/\/\/.*$/gm,'<span class="hl-c">$&</span>')
+          .replace(/\b(const|let|var|function|return|if|else|for|while|import|from|export|await|async|new|class|throw|try|catch)\b/g,'<span class="hl-k">$1</span>')
+          .replace(/'([^']*)'/g,'<span class="hl-s">\'$1\'</span>');
+}
+const slug=s=>s.toLowerCase().replace(/[^\w]+/g,'-').replace(/^-|-$/g,'');
+function md(src){
+  const fences=[];let s=String(src).replace(/\r\n/g,'\n');
+  s=s.replace(/```([\w-]*)\n([\s\S]*?)```/g,(m,l,b)=>{fences.push([l,b]);return ' \u0000'+(fences.length-1)+'\u0000 '});
+  const inl=t=>esc(t).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href="$2" rel="noreferrer">$1</a>');
+  const out=[],L=s.split('\n');let i=0;
+  const isF=x=>/^\s*\u0000\d+\u0000\s*$/.test(x);
+  while(i<L.length){
+    const x=L[i];
+    if(isF(x)){const[l,b]=fences[+x.replace(/[^\d]/g,'')];out.push(`<pre><code>${hl(b,l)}</code></pre>`);i++;continue}
+    if(/^\s*$/.test(x)){i++;continue}
+    if(/^#{1,6}\s/.test(x)){const n=Math.min(x.match(/^#+/)[0].length,3),tx=x.replace(/^#+\s*/,'');
+      out.push(`<h${n} id="s-${slug(tx)}">${inl(tx)}</h${n}>`);i++;continue}
+    if(/^(-{3,}|\*{3,}|_{3,})\s*$/.test(x)){out.push('<hr>');i++;continue}
+    if(/^\s*\|/.test(x)&&/^\s*\|[\s:|-]+\|?\s*$/.test(L[i+1]||'')){
+      const row=r=>r.trim().replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
+      const hd=row(x);i+=2;const bd=[];
+      while(i<L.length&&/^\s*\|/.test(L[i])){bd.push(row(L[i]));i++}
+      out.push('<div class="tw"><table><thead><tr>'+hd.map(h=>`<th>${inl(h)}</th>`).join('')+'</tr></thead><tbody>'+
+        bd.map(r=>'<tr>'+r.map(c=>`<td>${inl(c)}</td>`).join('')+'</tr>').join('')+'</tbody></table></div>');continue}
+    if(/^\s*>/.test(x)){const b=[];while(i<L.length&&/^\s*>/.test(L[i])){b.push(L[i].replace(/^\s*>\s?/,''));i++}
+      out.push('<blockquote>'+b.filter(y=>y.trim()).map(y=>`<p>${inl(y)}</p>`).join('')+'</blockquote>');continue}
+    if(/^\s*([-*+]|\d+[.)])\s/.test(x)){
+      const ord=/^\s*\d+[.)]/.test(x),it=[];
+      while(i<L.length&&/^\s*([-*+]|\d+[.)])\s/.test(L[i])){it.push(L[i].replace(/^\s*([-*+]|\d+[.)])\s/,''));i++}
+      out.push(`<${ord?'ol':'ul'}>`+it.map(y=>`<li>${inl(y)}</li>`).join('')+`</${ord?'ol':'ul'}>`);continue}
+    const p=[];
+    while(i<L.length&&!/^\s*$/.test(L[i])&&!isF(L[i])&&!/^(#{1,6}\s|\s*[-*+]\s|\s*\d+[.)]\s|\s*>|\s*\|)/.test(L[i])){p.push(L[i]);i++}
+    if(p.length)out.push(`<p>${inl(p.join(' '))}</p>`);else i++;
+  }
+  return out.join('\n');
+}
+const sec=(t,n)=>{const s=el('div','sec');s.append(el('h2',null,t));if(n)s.append(el('span','n',n));return s};
+function metric(k,v,d,cls){const m=el('div','met '+(cls||''));m.append(el('div','k',k),el('div','v',String(v)));if(d)m.append(el('div','d',d));return m}
+function countTo(node,to,dur=700){
+  const n=Number(to);if(!isFinite(n)||REDUCED){node.textContent=String(to);return}
+  const t0=performance.now();
+  const step=t=>{const p=Math.min(1,(t-t0)/dur);node.textContent=String(Math.round(n*(1-Math.pow(1-p,3))));if(p<1)requestAnimationFrame(step)};
+  requestAnimationFrame(step);
+}
+function ring(pct,{size=120,stroke=10,color='var(--info)',sub=''}={}){
+  const r=(size-stroke)/2,c=2*Math.PI*r,off=c*(1-pct/100);
+  return html('div','',`<svg viewBox="0 0 ${size} ${size}" style="width:${size}px;height:${size}px" role="img" aria-label="${pct}%">
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--panel-3)" stroke-width="${stroke}"/>
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round"
+      stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 ${size/2} ${size/2})"
+      style="transition:stroke-dashoffset 1s cubic-bezier(.2,.8,.2,1)"/>
+    <text x="50%" y="47%" text-anchor="middle" fill="var(--fg)" font-family="var(--sans)" font-size="21" font-weight="600">${pct}%</text>
+    <text x="50%" y="64%" text-anchor="middle" fill="var(--faint)" font-family="var(--mono)" font-size="9">${esc(sub)}</text></svg>`);
+}
+function sparkArea(series,{w=560,h=104,pad=6,color='var(--info)',key='v'}={}){
+  if(!series.length)return html('div','note','No series available.');
+  const ys=series.map(p=>p[key]??0),max=Math.max(...ys,1),n=ys.length;
+  const X=i=>pad+(i*(w-pad*2))/Math.max(1,n-1),Y=v=>h-pad-(v/max)*(h-pad*2);
+  const line=ys.map((v,i)=>`${i?'L':'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+  const grid=[0,.5,1].map(f=>`<line x1="${pad}" y1="${(pad+f*(h-pad*2)).toFixed(1)}" x2="${w-pad}" y2="${(pad+f*(h-pad*2)).toFixed(1)}" stroke="var(--line)"/>`).join('');
+  const dots=ys.map((v,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="${i===n-1?3.5:2}" fill="${i===n-1?color:'var(--panel)'}" stroke="${color}" stroke-width="1.5"><title>${esc(series[i].at||'')} — ${v}</title></circle>`).join('');
+  return html('div','',`<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">
+    <defs><linearGradient id="ga" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity=".28"/><stop offset="100%" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
+    ${grid}<path d="${line} L${X(n-1).toFixed(1)},${h-pad} L${X(0).toFixed(1)},${h-pad} Z" fill="url(#ga)"/>
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="1.8"/>${dots}</svg>`);
+}
+function barsH(rows,colorOf){
+  const max=Math.max(...rows.map(r=>r.v),1),box=el('div');
+  rows.forEach(r=>{
+    const w=Math.round((r.v/max)*100),c=colorOf?colorOf(r):'var(--info)';
+    box.append(html('div','',`<div style="display:flex;align-items:baseline;gap:10px;margin:10px 0 5px">
+      <span style="font:10.5px/1 var(--mono);color:var(--faint);min-width:96px">${esc(r.k)}</span>
+      <span class="num" style="font:600 15px/1 var(--sans);color:${c}">${r.v}</span>
+      <span class="tiny fnt" style="margin-left:auto">${esc(r.note??'')}</span></div>
+      <div class="bar" style="--c:${c}"><i style="width:${r.v?Math.max(w,3):0}%"></i></div>`));
+  });
+  return box;
+}
+
+/* ================================================================== *
+ * PAGES
+ * ================================================================== */
+const R={};
+
+R.dashboard=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const [d,ch,rdy,act]=await Promise.all([api('/api/dashboard'),api('/api/charts'),api('/api/readiness'),api('/api/activity?n=22')]);
+  DASH=d;root.textContent='';paintTop(d);
+  const bm=d.benchmark,c=d.counts;
+  const gtA=+d.corpus.groundTruthApproved||0,gtC=+d.corpus.cases||0,calA=+d.corpus.calibrationApproved||0;
+  const engineOk=d.freeze.frozen&&d.corpus.exit===0,valOk=bm&&bm.failed===0&&d.corpus.exit===0;
+  const sc=(l,v,dd,tone,meta)=>{const n=el('div','stat s-'+tone);
+    n.append(html('div','lb',`<i class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--c)"></i>${esc(l)}`),el('div','vv',v));
+    if(dd)n.append(el('div','dd',dd));
+    if(meta?.length)n.append(html('div','meta',meta.map(m=>`<span>${esc(m)}</span>`).join('')));return n};
+  const r1=el('div','grid c4');
+  r1.append(
+    sc('Engine',engineOk?'FROZEN':'ATTENTION',engineOk?'Certification logic immutable':'needs review',engineOk?'info':'warn',[d.freeze.version??'',`branch ${d.git.branch??'?'}`]),
+    sc('Validation',valOk?'PASSING':'ATTENTION',bm?`benchmark ${bm.passed}/${bm.cases} · corpus exit ${d.corpus.exit}`:'no benchmark on disk',valOk?'ok':'bad',[d.replay.available?'replay ready':'replay blocked',d.extraction.available?'extraction available':'extraction n/a']),
+    sc('Corpus',calA>0?'CALIBRATED':gtA>0?'PARTIAL':'UNCALIBRATED',`${gtA}/${gtC} ground truth approved · ${calA} calibrated`,calA>0?'ok':gtA>0?'warn':'bad',[`${d.corpus.structuralFailures??0} structural failures`]),
+    sc('Publication',rdy.available?(rdy.percent>=80?'READY':'BLOCKED'):'N/A',rdy.available?`${rdy.done}/${rdy.total} release checks pass`:'no publication repository',rdy.available&&rdy.percent>=80?'ok':'bad',rdy.available?[`${rdy.total-rdy.done} blockers`]:[]));
+  root.append(sec('Status',''),r1);
+
+  const gtP=gtC?Math.round(gtA/gtC*100):0,calP=gtC?Math.round(calA/gtC*100):0;
+  const bmP=bm&&bm.cases?Math.round(bm.passed/bm.cases*100):0,rpP=d.replay.available?100:0;
+  const readyP=Math.round((gtP+calP+bmP+rpP)/4);
+  const steps=[
+    {n:'Ground Truth',v:`${gtA}/${gtC}`,s:gtA?'approved':'none approved',p:gtP,cls:gtP===100?'done':gtP?'block':'stop',c:gtP===100?'var(--ok)':gtP?'var(--warn)':'var(--bad)'},
+    {n:'Calibration',v:`${calA}/${gtC}`,s:calA?'calibrated':'blocked — needs human adjudication',p:calP,cls:calP?'block':'stop',c:calP?'var(--warn)':'var(--bad)'},
+    {n:'Benchmark',v:bm?`${bm.passed}/${bm.cases}`:'—',s:bm?`${bm.failed} failed`:'not run',p:bmP,cls:bmP===100?'done':'block',c:bmP===100?'var(--ok)':'var(--warn)'},
+    {n:'Replay',v:d.replay.available?'READY':'BLOCKED',s:d.replay.available?`${d.replay.records} records`:'no data',p:rpP,cls:d.replay.available?'done':'block',c:d.replay.available?'var(--ok)':'var(--warn)'},
+    {n:'Ready',v:readyP+'%',s:calA?'complete':'blocked at calibration',p:readyP,cls:readyP===100?'done':readyP>50?'block':'stop',c:readyP===100?'var(--ok)':readyP>50?'var(--warn)':'var(--bad)'}];
+  const pipe=el('div','pipe');
+  steps.forEach(s=>{const b=el('div','pstep '+s.cls);
+    b.append(el('div','n',s.n),el('div','v',s.v),el('div','s',s.s));
+    const bar=html('div','bar','<i></i>');bar.style.setProperty('--c',s.c);b.append(bar);pipe.append(b);
+    requestAnimationFrame(()=>{const i=bar.querySelector('i');if(i)i.style.width=Math.max(s.p,2)+'%'})});
+  const pc=el('div','card');
+  pc.append(html('div','card-h','<h3>Certification pipeline</h3><span class="hint">ground truth → calibration → benchmark → replay → ready</span>'));
+  const pb=el('div','card-b');pb.append(pipe);
+  if(calA===0)pb.append(html('div','note warn','<strong>Blocked at calibration.</strong> No case has both a human verdict and complete per-claim labels. This is the one stage no amount of engineering clears.'));
+  pc.append(pb);root.append(sec('Pipeline',''),pc);
+
+  const dist=ch.verdictDistribution.counts,r3=el('div','grid c4');
+  [['Total certifications',c.certificationRecords,'records on disk',c.certificationRecords?'':'zero'],
+   ['CERTIFIED',dist.CERTIFIED,'never produced on real input',dist.CERTIFIED?'good':'zero'],
+   ['ESCALATE',dist.ESCALATE,'never produced on real input',dist.ESCALATE?'warnv':'zero'],
+   ['REJECT',dist.REJECT,'every verdict so far',dist.REJECT?'warnv':''],
+   ['Ground truth cases',gtC,`${gtA} approved`,''],
+   ['Calibration approved',calA,'blocked on human adjudication',calA?'good':'zero'],
+   ['Published',c.draftsPublished,'nothing has been posted',c.draftsPublished?'good':'zero'],
+   ['Operator reviews',c.reviews,'no draft decided at the prompt',c.reviews?'good':'zero']]
+   .forEach(([k,v,dd,cls])=>{const m=metric(k,0,dd,cls);r3.append(m);countTo(m.querySelector('.v'),v)});
+  root.append(sec('Live metrics','every figure read from disk'),r3);
+
+  const cw=el('div','grid c2');
+  const cg=ch.corpusGrowth,c1=el('div','card');
+  c1.append(html('div','card-h','<h3>Corpus growth</h3><span class="hint">data/history.jsonl</span>'));
+  const cb1=el('div','card-b');
+  if(cg.available){cb1.append(sparkArea(cg.series,{color:'var(--info)',key:'cumulative'}));
+    cb1.append(html('div','tiny fnt',`cumulative added <strong style="color:var(--fg)">${cg.series.at(-1).cumulative}</strong> · current corpus <strong style="color:var(--fg)">${cg.currentThreads}</strong> — ${esc(cg.note)}`))}
+  else cb1.append(html('div','note warn','No collection history.'));
+  c1.append(cb1);
+  const c2=el('div','card');
+  c2.append(html('div','card-h','<h3>Certification distribution</h3><span class="hint">data/certifications.jsonl</span>'));
+  const cb2=el('div','card-b');
+  cb2.append(barsH([{k:'CERTIFIED',v:dist.CERTIFIED,note:'never produced'},{k:'ESCALATE',v:dist.ESCALATE,note:'never produced'},{k:'REJECT',v:dist.REJECT,note:'every record'}],
+    r=>r.k==='CERTIFIED'?'var(--ok)':r.k==='ESCALATE'?'var(--warn)':'var(--bad)'));
+  cb2.append(html('div','note bad','<strong>Every verdict on real input is REJECT.</strong> An engine that has only ever said no is not yet distinguishable from one that always says no.'));
+  c2.append(cb2);cw.append(c1,c2);
+  root.append(sec('Trends','series derived from files on disk'),cw);
+
+  const ac=el('div','card');
+  ac.append(html('div','card-h','<h3>Recent activity</h3><span class="hint">newest first</span>'));
+  const ab=el('div','card-b'),tl=el('div','tl');
+  const KC={read:'var(--info)',analyze:'var(--violet)',draft:'var(--violet)',login:'var(--dim)',error:'var(--bad)','gate.block':'var(--bad)',opportunity:'var(--info)',benchmark:'var(--ok)',certify:'var(--warn)','ground-truth':'var(--ok)',report:'var(--info)',console:'var(--violet)',search:'var(--dim)'};
+  (act.events||[]).forEach(e=>{const ev=el('div','ev');ev.style.setProperty('--k',KC[e.kind]||'var(--faint)');
+    ev.append(html('div','h',`<span class="kind">${esc(e.kind||'event')}</span><span class="ts">${esc(ago(e.at))}</span>`),
+      el('div','sm',e.summary||''),el('div','src',e.source||''));tl.append(ev)});
+  if(!(act.events||[]).length)tl.append(html('div','note','No activity recorded.'));
+  ab.append(tl);ac.append(ab);root.append(sec('Activity',''),ac);
+};
+
+/* ---------- timeline ---------- */
+R.timeline=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const t=await api('/api/timeline');root.textContent='';
+  if(!t.available){root.append(html('div','note warn',esc(t.reason)));return}
+  root.append(html('p','mut','Every certification on disk, newest first. Durations are joined from <code>data/trace.jsonl</code> by run id; a record with no matching trace run shows no duration rather than an invented one.'));
+  const withMs=t.events.filter(e=>e.ms!=null);
+  if(withMs.length){
+    const g=el('div','grid c4');
+    const arr=withMs.map(e=>e.ms);
+    g.append(metric('Certifications',t.events.length,'records'),
+      metric('Timed',withMs.length,'have a trace run'),
+      metric('Fastest',ms(Math.min(...arr)),''),
+      metric('Slowest',ms(Math.max(...arr)),''),
+      metric('Median',ms(arr.slice().sort((a,b)=>a-b)[Math.floor(arr.length/2)]),''));
+    root.append(g);
+  }
+  const tl=el('div','tl');tl.style.marginTop='16px';
+  t.events.forEach(e=>{
+    const ev=el('div','ev');
+    ev.style.setProperty('--k',e.verdict==='REJECT'?'var(--bad)':e.verdict==='CERTIFIED'?'var(--ok)':'var(--warn)');
+    const head=el('div','h');
+    head.append(html('span','vb '+e.verdict,esc(e.verdict)),
+      html('span','cli',esc(e.draftId)),
+      html('span','ts',`${esc(ago(e.at))} · ${esc((e.at||'').replace('T',' ').slice(0,19))}`));
+    ev.append(head);
+    ev.append(html('div','sm tiny',
+      `<span class="num">${e.claims}</span> claims · <span class="num">${e.contradictions}</span> contradictions · `+
+      `<span class="num" style="color:${e.fatal?'var(--bad)':'inherit'}">${e.fatal}</span> fatal · `+
+      `<span class="num">${e.epistemic}</span> epistemic · <span class="num">${e.invalidated}</span> invalidated`+
+      (e.ms!=null?` · <strong style="color:var(--fg)">${ms(e.ms)}</strong>`:' · <span class="fnt">duration unrecorded</span>')+
+      (e.refutationMs!=null?` <span class="fnt">(refutation ${ms(e.refutationMs)})</span>`:'')));
+    const b=el('button','btn sm','open →');b.style.marginTop='7px';
+    b.onclick=()=>{go('certifications');setTimeout(()=>selectCert(e.index),140)};
+    ev.append(b);tl.append(ev);
+  });
+  root.append(tl);
+};
+
+/* ---------- queue ---------- */
+R.queue=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const q=await api('/api/queue');root.textContent='';
+  const g=el('div','grid c4');
+  g.append(metric('Pending',q.pending.length,'never certified',q.pending.length?'warnv':'good'),
+    metric('Completed',q.completed.length,'have a record',q.completed.length?'good':'zero'),
+    metric('Console runs',q.consoleRuns.total,'commands run here'),
+    metric('Failed',q.consoleRuns.failed,'non-zero exit',q.consoleRuns.failed?'zero':'good'),
+    metric('Cancelled',q.consoleRuns.cancelled,'stopped by operator'));
+  root.append(sec('Queue',''),g);
+  root.append(html('div','note',esc(q.note)));
+
+  const mk=(title,rows,pending)=>{
+    if(!rows.length)return;
+    root.append(sec(title,`${rows.length}`));
+    const tw=el('div','tw'),t=el('table');
+    t.innerHTML=`<thead><tr><th>draft</th><th>status</th><th>size</th>${pending?'<th>command</th>':'<th>verdict</th><th>claims</th><th>fatal</th>'}</tr></thead>`;
+    const tb=el('tbody');
+    rows.forEach(r=>{
+      const tr=el('tr');
+      let cells=`<td class="mono">${esc(r.id)}</td><td class="tiny">${esc(r.status)}</td><td class="n tiny">${r.bodyChars} ch</td>`;
+      if(pending){
+        cells+=`<td><span class="cli" style="user-select:all">${esc(r.command)}</span></td>`;
+      }else{
+        cells+=`<td></td><td class="n">${r.claims??'—'}</td><td class="n" style="color:${r.fatal?'var(--bad)':'inherit'}">${r.fatal??'—'}</td>`;
+      }
+      tr.innerHTML=cells;
+      if(!pending){tr.children[3].append(html('span','vb '+r.verdict,esc(r.verdict)));tr.classList.add('clk');
+        tr.onclick=()=>{go('timeline')}}
+      tb.append(tr);
+    });
+    t.append(tb);tw.append(t);root.append(tw);
+  };
+  mk('Pending certification',q.pending,true);
+  mk('Completed',q.completed,false);
+};
+
+/* ---------- run history ---------- */
+R.runhistory=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const h=await api('/api/run-history');root.textContent='';
+  if(!h.available||!h.runs.length){
+    root.append(html('div','note','<strong>No runs recorded yet.</strong> '+esc(h.reason||'Run a command from the palette (Ctrl+K) and it will appear here.')));
+    return;
+  }
+  const runs=h.runs.slice().reverse();
+  const fails=runs.filter(r=>r.code!==0).length;
+  const g=el('div','grid c4');
+  g.append(metric('Runs',runs.length,'recorded by this console'),
+    metric('Failed',fails,'non-zero exit',fails?'zero':'good'),
+    metric('Median',ms(runs.map(r=>r.ms).sort((a,b)=>a-b)[Math.floor(runs.length/2)]),''),
+    metric('Slowest',ms(Math.max(...runs.map(r=>r.ms))),''));
+  root.append(sec('Run history',''),g);
+
+  const c=el('div','card');c.style.marginTop='14px';
+  c.append(html('div','card-h','<h3>Duration trend</h3><span class="hint">tools/operator/run-history.jsonl</span>'));
+  const cb=el('div','card-b');
+  cb.append(sparkArea(h.runs.map(r=>({at:r.at,ms:r.ms})),{color:'var(--violet)',key:'ms'}));
+  cb.append(html('p','tiny fnt','Every command run from this console, in order. The series begins when the console first ran something — it is not backfilled.'));
+  c.append(cb);root.append(c);
+
+  const byKey={};runs.forEach(r=>{(byKey[r.key]=byKey[r.key]||[]).push(r)});
+  root.append(sec('By command',''));
+  root.append(barsH(Object.entries(byKey).map(([k,v])=>({k,v:v.length,note:`median ${ms(v.map(x=>x.ms).sort((a,b)=>a-b)[Math.floor(v.length/2)])}`})),
+    ()=>'var(--info)'));
+
+  root.append(sec('All runs',`${runs.length}`));
+  const tw=el('div','tw'),t=el('table');
+  t.innerHTML='<thead><tr><th>when</th><th>command</th><th>exit</th><th>duration</th></tr></thead>';
+  const tb=el('tbody');
+  runs.forEach(r=>tb.append(html('tr','',
+    `<td class="tiny fnt">${esc(ago(r.at))} · ${esc((r.at||'').replace('T',' ').slice(0,19))}</td>
+     <td class="mono">${esc(r.key)}</td>
+     <td class="n" style="color:${r.code===0?'var(--ok)':'var(--bad)'}">${r.code}</td>
+     <td class="n">${ms(r.ms)}</td>`)));
+  t.append(tb);tw.append(t);root.append(tw);
+};
+
+/* ---------- files ---------- */
+let FILE_STATE={root:'reports',filter:''};
+R.files=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const roots=await api('/api/roots');root.textContent='';
+  const bar=el('div','bar-row');
+  roots.roots.forEach(r=>{
+    const b=el('button','btn sm',r.label);
+    if(r.key===FILE_STATE.root)b.classList.add('pri');
+    b.onclick=()=>{FILE_STATE.root=r.key;R.files(root)};
+    bar.append(b);
+  });
+  const filter=el('input','search');filter.type='search';filter.placeholder='Filter filenames…';
+  filter.value=FILE_STATE.filter;bar.append(filter);
+  root.append(bar);
+
+  const split=el('div','split'),left=el('div','card'),view=el('div');
+  view.id='file-view';
+  left.append(html('div','card-h',`<h3>${esc(FILE_STATE.root)}</h3>`));
+  const lb=el('div','card-b');lb.style.maxHeight='68vh';lb.style.overflow='auto';
+  const t=await api('/api/tree?root='+encodeURIComponent(FILE_STATE.root));
+  if(!t.available)lb.append(html('div','note warn',esc(t.reason)));
+  else lb.append(renderTree(t.children,view,FILE_STATE.filter));
+  left.append(lb);split.append(left,view);root.append(split);
+  filter.oninput=()=>{FILE_STATE.filter=filter.value;
+    lb.textContent='';lb.append(renderTree(t.children,view,FILE_STATE.filter))};
+  const first=t.available&&firstFile(t.children);
+  if(first)filesOpenInto(first.path,view);
+};
+function firstFile(nodes){for(const n of nodes){if(n.type==='file')return n;const f=n.children&&firstFile(n.children);if(f)return f}return null}
+function renderTree(nodes,view,filter){
+  const wrap=el('div','tree');
+  const build=(list,depth)=>{
+    const box=el('div',depth?'kids':'');
+    list.forEach(n=>{
+      if(n.type==='dir'){
+        const kids=build(n.children,depth+1);
+        if(filter&&!kids.querySelector('.row'))return;
+        const d=el('div','dir');
+        const row=el('div','row');row.innerHTML=svgIcon(ICON.folder)+`<span>${esc(n.name)}</span>`;
+        d.append(row,kids);box.append(d);
+      }else{
+        if(filter&&!n.name.toLowerCase().includes(filter.toLowerCase()))return;
+        const row=el('div','row');row.dataset.path=n.path;
+        row.innerHTML=svgIcon(ICON.file)+`<span>${esc(n.name)}</span><span class="sz">${(n.bytes/1024).toFixed(1)}K</span>`;
+        row.onclick=()=>{$$('.tree .row').forEach(x=>x.removeAttribute('aria-current'));
+          row.setAttribute('aria-current','true');filesOpenInto(n.path,view)};
+        box.append(row);
+      }
+    });
+    return box;
+  };
+  wrap.append(build(nodes,0));
+  return wrap;
+}
+async function filesOpenInto(path,view,q){
+  view.innerHTML='<div class="note">Loading…</div>';
+  const r=await api('/api/file?path='+encodeURIComponent(path));
+  view.textContent='';
+  const card=el('div','card');
+  card.append(html('div','card-h',`<h3>${esc(path)}</h3><span class="hint">${r.body?(r.body.length/1024).toFixed(1)+' KB':''}</span>`));
+  const cb=el('div','card-b');
+  if(r.error){cb.append(html('div','note bad',esc(r.error)));card.append(cb);view.append(card);return}
+  if(/\.md$/i.test(path)){const d=el('div','md');d.innerHTML=md(r.body);cb.append(d)}
+  else if(/\.jsonl$/i.test(path)){
+    const lines=r.body.split('\n').filter(x=>x.trim());
+    cb.append(html('p','tiny fnt',`${lines.length} JSON line(s) · showing the last 200`));
+    const pre=el('pre');pre.style.cssText='background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:12px;overflow:auto;max-height:60vh;font:11.5px/1.6 var(--mono)';
+    pre.innerHTML=lines.slice(-200).map(l=>{try{return hl(JSON.stringify(JSON.parse(l)),'json')}catch{return esc(l)}}).join('\n');
+    cb.append(pre);
+  } else if(/\.json$/i.test(path)){
+    const pre=el('pre');pre.style.cssText='background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:12px;overflow:auto;max-height:66vh;font:11.5px/1.6 var(--mono)';
+    try{pre.innerHTML=hl(JSON.stringify(JSON.parse(r.body),null,2),'json')}catch{pre.textContent=r.body}
+    cb.append(pre);
+  } else {
+    const pre=el('pre');pre.style.cssText='background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:12px;overflow:auto;max-height:66vh;font:11.5px/1.6 var(--mono)';
+    pre.innerHTML=hl(r.body,/\.(mjs|js|ts)$/i.test(path)?'js':'txt');
+    cb.append(pre);
+  }
+  card.append(cb);view.append(card);
+  if(q)highlightIn(cb,q);
+}
+function highlightIn(container,q){
+  const walker=document.createTreeWalker(container,NodeFilter.SHOW_TEXT);
+  const hits=[];let n;
+  while((n=walker.nextNode())){if(n.nodeValue.toLowerCase().includes(q.toLowerCase()))hits.push(n)}
+  hits.slice(0,80).forEach(node=>{
+    const i=node.nodeValue.toLowerCase().indexOf(q.toLowerCase());
+    const after=node.splitText(i),rest=after.splitText(q.length);
+    const m=document.createElement('mark');m.textContent=after.nodeValue;
+    after.replaceWith(m);void rest;
+  });
+  container.querySelector('mark')?.scrollIntoView({block:'center'});
+}
+async function filesOpen(path,q){
+  const rootKey=(path.split('/')[0]==='data')?'logs':path.split('/')[0];
+  FILE_STATE.root=({reports:'reports','ground-truth':'ground-truth',qa:'qa',docs:'docs',logs:'logs'})[rootKey]||'reports';
+  const rootEl=$('#pg-files');rootEl.dataset.loaded='';
+  await R.files(rootEl);rootEl.dataset.loaded='1';
+  filesOpenInto(path,$('#file-view'),q);
+}
+
+/* ---------- logs ---------- */
+let LOG_STATE={name:'history',auto:false,paused:false,timer:null,filter:''};
+R.logs=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const cmds=CMDS||await api('/api/commands');root.textContent='';
+  const FILES=[['history','history.jsonl','every command that ran'],['observations','observations.jsonl','checkpoint readings'],
+    ['reviews','reviews.jsonl','operator decisions at the approval prompt'],['regret','regret.jsonl','the two human questions'],
+    ['interactions','interactions.jsonl','immutable publish rows'],['trace','trace.jsonl','pipeline telemetry']];
+  const bar=el('div','bar-row');
+  const auto=el('button','btn sm','Auto-refresh: off');
+  const pause=el('button','btn sm','Pause');pause.disabled=true;
+  const jump=el('button','btn sm','Jump to end');
+  const filt=el('input','search');filt.type='search';filt.placeholder='Filter lines…';filt.value=LOG_STATE.filter;
+  bar.append(auto,pause,jump,filt);root.append(bar);
+
+  const split=el('div','split'),idx=el('div','idx'),view=el('div');view.id='log-view';
+  idx.append(html('div','tiny fnt','<div style="padding:4px 10px 6px;text-transform:uppercase;letter-spacing:.09em">CLI readouts</div>'));
+  cmds.commands.filter(c=>c.group==='logs').forEach(c=>{
+    const b=el('button');b.innerHTML=`<span class="t">${esc(c.label)}</span><span class="s">${esc(c.cli)}</span>`;
+    b.onclick=()=>{$$('button',idx).forEach(x=>x.removeAttribute('aria-current'));b.setAttribute('aria-current','true');
+      exec(c.key,c.cli);view.textContent='';view.append(html('div','note','Output is streaming to the terminal drawer below.'))};
+    idx.append(b);
+  });
+  idx.append(html('div','tiny fnt','<div style="padding:14px 10px 6px;text-transform:uppercase;letter-spacing:.09em">Append-only files</div>'));
+  FILES.forEach(([k,name,blurb])=>{
+    const b=el('button');b.dataset.log=k;
+    b.innerHTML=`<span class="t">${esc(name)}</span><span class="s">${esc(blurb)}</span>`;
+    b.onclick=()=>{$$('button',idx).forEach(x=>x.removeAttribute('aria-current'));b.setAttribute('aria-current','true');
+      LOG_STATE.name=k;paintLog(k,name,view)};
+    idx.append(b);
+  });
+  split.append(idx,view);root.append(split);
+
+  auto.onclick=()=>{
+    LOG_STATE.auto=!LOG_STATE.auto;
+    auto.textContent='Auto-refresh: '+(LOG_STATE.auto?'5s':'off');
+    auto.classList.toggle('pri',LOG_STATE.auto);pause.disabled=!LOG_STATE.auto;
+    clearInterval(LOG_STATE.timer);
+    if(LOG_STATE.auto)LOG_STATE.timer=setInterval(()=>{
+      if(!LOG_STATE.paused&&CUR==='logs')paintLog(LOG_STATE.name,LOG_STATE.name+'.jsonl',view,true)},5000);
+  };
+  pause.onclick=()=>{LOG_STATE.paused=!LOG_STATE.paused;pause.textContent=LOG_STATE.paused?'Resume':'Pause';pause.classList.toggle('pri',LOG_STATE.paused)};
+  jump.onclick=()=>{const p=view.querySelector('pre');if(p)p.scrollTop=p.scrollHeight};
+  filt.oninput=()=>{LOG_STATE.filter=filt.value;paintLog(LOG_STATE.name,LOG_STATE.name+'.jsonl',view,true)};
+
+  const target=idx.querySelector(`[data-log="${LOG_STATE.name}"]`)||idx.querySelector('[data-log]');
+  target?.click();
+};
+async function paintLog(k,name,view,quiet){
+  if(!quiet)view.innerHTML='<div class="note">Loading…</div>';
+  const r=await api('/api/log?name='+k);
+  const prevTop=view.querySelector('pre')?.scrollTop;
+  view.textContent='';
+  const card=el('div','card');
+  card.append(html('div','card-h',`<h3>${esc(name)}</h3><span class="hint">${r.available?`${r.total} lines`:'absent'}</span>`));
+  const cb=el('div','card-b');
+  if(!r.available)cb.append(html('div','note warn',esc(r.reason)));
+  else{
+    let lines=r.lines;
+    if(LOG_STATE.filter)lines=lines.filter(l=>l.toLowerCase().includes(LOG_STATE.filter.toLowerCase()));
+    cb.append(html('p','tiny fnt',`${lines.length} of ${r.total} line(s)${LOG_STATE.filter?` matching “${esc(LOG_STATE.filter)}”`:''}${LOG_STATE.auto?` · auto-refresh ${LOG_STATE.paused?'paused':'on'}`:''}`));
+    const pre=el('pre');pre.style.cssText='background:#07080A;color:#CDD3DB;border:1px solid var(--line);border-radius:6px;padding:12px;overflow:auto;max-height:58vh;font:11.5px/1.6 var(--mono);white-space:pre-wrap;word-break:break-word';
+    pre.innerHTML=lines.map(l=>{try{return hl(JSON.stringify(JSON.parse(l)),'json')}catch{return esc(l)}}).join('\n');
+    cb.append(pre);
+    requestAnimationFrame(()=>{pre.scrollTop=quiet&&prevTop!=null?prevTop:pre.scrollHeight});
+  }
+  card.append(cb);view.append(card);
+}
+function logOpenPath(path,q){
+  const k=path.split('/').pop().replace('.jsonl','');
+  LOG_STATE.name=k;const rootEl=$('#pg-logs');rootEl.dataset.loaded='';
+  R.logs(rootEl).then(()=>{rootEl.dataset.loaded='1';if(q){LOG_STATE.filter=q;paintLog(k,k+'.jsonl',$('#log-view'),true)}});
+}
+
+/* ---------- certifications (reused from v2) ---------- */
+R.certifications=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const c=await api('/api/certifications');root.textContent='';
+  if(!c.available){root.append(html('div','note warn',esc(c.reason)));return}
+  const tw=el('div','tw'),t=el('table');
+  t.innerHTML='<thead><tr><th>#</th><th>verdict</th><th>draft</th><th>claims</th><th>contra</th><th>fatal</th><th>epist</th><th>invalid</th><th>certified</th></tr></thead>';
+  const tb=el('tbody');
+  c.records.forEach(r=>{
+    const tr=el('tr','clk');
+    tr.innerHTML=`<td class="n fnt">${r.index}</td><td></td><td class="mono">${esc(r.draftId)}</td>
+      <td class="n">${r.claims}</td><td class="n">${r.contradictions}</td>
+      <td class="n" style="color:${r.fatal?'var(--bad)':'inherit'};font-weight:${r.fatal?600:400}">${r.fatal}</td>
+      <td class="n">${r.epistemic}</td><td class="n">${r.invalidated}</td>
+      <td class="tiny fnt">${esc(ago(r.certifiedAt))}</td>`;
+    tr.children[1].append(html('span','vb '+r.verdict,esc(r.verdict)));
+    tr.onclick=()=>selectCert(r.index);tb.append(tr);
+  });
+  t.append(tb);tw.append(t);
+  root.append(sec('All records',`${c.records.length} on disk`),tw);
+  const h=el('div');h.id='cert-detail';root.append(h);
+  if(c.records.length)selectCert(c.records.at(-1).index);
+};
+async function selectCert(i){
+  if(CUR!=='certifications')go('certifications');
+  let holder=$('#cert-detail');
+  if(!holder){await R.certifications($('#pg-certifications'));holder=$('#cert-detail')}
+  if(!holder)return;
+  holder.innerHTML='<div class="note">Loading record…</div>';
+  const c=await api('/api/certification?index='+i);
+  holder.textContent='';
+  if(c.error){holder.append(html('div','note bad',esc(c.error)));return}
+  const contras=c.contradictions??[],claims=c.claims??[],reasons=c.reasons??[];
+  const fatalN=contras.filter(x=>x.fatal).length;
+  const inval=new Map((c.invalidated??[]).map(x=>[x.claimId,x.becauseOf]));
+  const epiBy={};(c.epistemic??[]).forEach(x=>epiBy[x.claimId]=x);
+  const contraBy={};contras.forEach(x=>{(contraBy[x.claimId]=contraBy[x.claimId]||[]).push(x)});
+  const hd=el('div','card');hd.style.marginTop='16px';
+  const hb=el('div','card-b'),top=el('div');
+  top.style.cssText='display:flex;align-items:center;gap:11px;flex-wrap:wrap';
+  top.append(html('span','vb '+c.verdict,esc(c.verdict)),html('span','cli',esc(c.draftId)),
+    html('span','tiny fnt',`thread ${esc(c.threadId??'—')} · ${esc(c.model??'model unrecorded')} · ${esc((c.certifiedAt||'').replace('T',' ').slice(0,19))}`));
+  hb.append(top);
+  const sg=el('div','grid');sg.style.cssText='grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:10px;margin-top:15px';
+  [['Claims',claims.length,''],['Contradictions',contras.length,''],['Fatal',fatalN,'bad'],['Epistemic',(c.epistemic??[]).length,'warn'],
+   ['Invalidated',(c.invalidated??[]).length,'warn'],['Rules fired',reasons.length,''],['Resolved',c.resolution?.resolved?'yes':'no',c.resolution?.resolved?'ok':'']]
+   .forEach(([k,v,t])=>sg.append(html('div','',`<div style="font:10px/1 var(--mono);color:var(--faint);text-transform:uppercase;letter-spacing:.09em">${k}</div>
+     <div class="num" style="font:600 20px/1.2 var(--sans);margin-top:6px;color:${t==='bad'?'var(--bad)':t==='warn'?'var(--warn)':t==='ok'?'var(--ok)':'var(--fg)'}">${v}</div>`)));
+  hb.append(sg);hd.append(hb);holder.append(hd);
+
+  const sb=el('div');sb.style.cssText='display:flex;gap:10px;align-items:center;margin:15px 0 4px;flex-wrap:wrap';
+  const search=el('input','search');search.type='search';search.placeholder='Filter claims and contradictions…';
+  const hits=el('span','tiny fnt');
+  const ex=el('button','btn sm','Expand all'),co=el('button','btn sm','Collapse all');
+  sb.append(search,hits,ex,co);holder.append(sb);
+  const mk=(title,count,open)=>{
+    const d=el('details','col');if(open)d.open=true;
+    const s=el('summary');s.innerHTML=svgIcon(ICON.caret,'caret')+`<span>${esc(title)}</span><span class="cnt">${esc(count)}</span>`;
+    d.append(s);const b=el('div','in');d.append(b);holder.append(d);return b};
+  ex.onclick=()=>$$('details.col',holder).forEach(d=>d.open=true);
+  co.onclick=()=>$$('details.col',holder).forEach(d=>d.open=false);
+
+  const rb=mk('Rule firing order',`${reasons.length} fired`,true);
+  if(reasons.length)reasons.forEach((r,ix)=>rb.append(html('div','',
+    `<div style="display:flex;gap:11px;padding:9px 0;border-bottom:1px solid var(--line)">
+      <span class="num tiny fnt" style="min-width:20px">${ix+1}</span>
+      <span class="chip bad" style="align-self:flex-start">${esc(r.rule)}</span>
+      <span style="flex:1"><strong class="mono">${esc(r.claimId??'—')}</strong><div class="tiny mut" style="margin-top:4px">${esc(r.detail)}</div></span></div>`)));
+  else rb.append(html('div','note','No rules fired.'));
+
+  mk('Dependency graph',`${claims.length} claims`,true).append(dag(c));
+
+  const cb=mk('Claims · provenance · evidence',`${claims.length}`,true);
+  const ctw=el('div','tw'),ct=el('table');
+  ct.innerHTML='<thead><tr><th>id</th><th>claim &amp; evidence</th><th>type</th><th>provenance</th><th>conf</th><th>rests on</th><th>state</th></tr></thead>';
+  const ctb=el('tbody');
+  claims.forEach(cl=>{
+    const fat=(contraBy[cl.id]??[]).some(x=>x.fatal),iv=inval.get(cl.id),ep=epiBy[cl.id];
+    const tr=el('tr');tr.dataset.q=(cl.id+' '+cl.text+' '+(cl.evidenceClass||'')+' '+(cl.evidenceDetail||'')).toLowerCase();
+    tr.innerHTML=`<td class="mono"><strong>${esc(cl.id)}</strong></td>
+      <td style="min-width:300px">${esc(cl.text)}
+        ${cl.sourceQuote?`<div class="tiny fnt" style="margin-top:6px">“${esc(cl.sourceQuote)}”</div>`:''}
+        ${cl.evidenceDetail?`<div class="tiny mut" style="margin-top:6px">${esc(cl.evidenceDetail)}</div>`:''}</td>
+      <td class="tiny">${esc(cl.type)}</td><td class="tiny">${esc(cl.evidenceClass)}</td><td class="tiny">${esc(cl.confidence)}</td>
+      <td class="mono tiny">${(cl.dependsOn??[]).join(', ')||'—'}</td>
+      <td class="tiny">${fat?'<span style="color:var(--bad);font-weight:600">fatal</span>':''}
+        ${iv?`<div class="mut">invalidated by ${esc(iv)}</div>`:''}
+        ${ep?`<div class="mut">${esc(ep.languageCertainty)} vs ${esc(ep.supportedCertainty)}</div>`:''}
+        ${!fat&&!iv&&!ep?'<span class="fnt">clean</span>':''}</td>`;
+    ctb.append(tr);
+  });
+  ct.append(ctb);ctw.append(ct);cb.append(ctw);
+
+  const xb=mk('Contradictions',`${contras.length} · ${fatalN} fatal`,false);
+  const xtw=el('div','tw'),xt=el('table');
+  xt.innerHTML='<thead><tr><th>claim</th><th>kind</th><th>fatal</th><th>statement</th><th>cited evidence</th></tr></thead>';
+  const xtb=el('tbody');
+  contras.forEach(x=>{
+    const tr=el('tr');tr.dataset.q=(x.claimId+' '+x.kind+' '+x.statement+' '+(x.evidenceClass||'')).toLowerCase();
+    tr.innerHTML=`<td class="mono"><strong>${esc(x.claimId)}</strong></td><td class="tiny">${esc(x.kind)}</td>
+      <td class="tiny">${x.fatal?'<span style="color:var(--bad);font-weight:600">FATAL</span>':'<span class="fnt">no</span>'}</td>
+      <td style="min-width:320px">${esc(x.statement)}</td>
+      <td class="tiny mut" style="min-width:230px"><span class="chip">${esc(x.evidenceClass)}</span><div style="margin-top:6px">${esc(x.evidenceDetail)}</div></td>`;
+    xtb.append(tr);
+  });
+  xt.append(xtb);xtw.append(xt);xb.append(xtw);
+  if(fatalN)xb.append(html('div','note','<strong>A cited contradiction is a model observation, not a verified fact.</strong> Citation fidelity is measured separately and by hand.'));
+
+  if((c.epistemic??[]).length){
+    const eb=mk('Epistemic issues',`${c.epistemic.length}`,false);
+    const etw=el('div','tw'),et=el('table');
+    et.innerHTML='<thead><tr><th>claim</th><th>language</th><th>supported</th><th>quote</th><th>detail</th></tr></thead>';
+    const etb=el('tbody');
+    c.epistemic.forEach(x=>{const tr=el('tr');tr.dataset.q=(x.claimId+' '+x.quote+' '+x.detail).toLowerCase();
+      tr.innerHTML=`<td class="mono"><strong>${esc(x.claimId)}</strong></td><td class="tiny">${esc(x.languageCertainty)}</td>
+        <td class="tiny">${esc(x.supportedCertainty)}</td><td class="tiny fnt">“${esc(x.quote)}”</td><td class="tiny mut">${esc(x.detail)}</td>`;
+      etb.append(tr)});
+    et.append(etb);etw.append(et);eb.append(etw);
+  }
+  const rsb=mk('Thread resolution',c.resolution?.resolved?'resolved':'unresolved',false);
+  rsb.append(html('div','',`<div class="kv"><span class="k">resolved</span><span class="v">${c.resolution?.resolved?'<span class="vb yes">yes</span>':'<span class="vb none">no</span>'}</span></div>
+    <div class="kv"><span class="k">signals</span><span class="v">${((c.resolution?.signals)??[]).map(s=>`<span class="chip">${esc(s)}</span>`).join('')||'<span class="fnt">none</span>'}</span></div>
+    <div class="kv"><span class="k">detail</span><span class="v mut">${esc(c.resolution?.detail??'—')}</span></div>`));
+  const rawb=mk('Raw JSON',`${JSON.stringify(c).length} bytes`,false);
+  const pre=el('pre');pre.style.cssText='background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:12px;overflow:auto;max-height:52vh;font:11.5px/1.6 var(--mono)';
+  pre.innerHTML=hl(JSON.stringify(c,null,2),'json');rawb.append(pre);
+
+  search.oninput=()=>{
+    const q=search.value.trim().toLowerCase();let shown=0,total=0;
+    $$('tr[data-q]',holder).forEach(tr=>{total++;const m=!q||tr.dataset.q.includes(q);tr.style.display=m?'':'none';if(m)shown++});
+    hits.textContent=q?`${shown} of ${total} rows match`:'';
+    if(q)$$('details.col',holder).forEach(d=>d.open=true);
+  };
+  hd.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function dag(c){
+  const claims=c.claims??[];
+  if(!claims.length)return html('div','note','No claims to graph.');
+  const byId=new Map(claims.map(x=>[x.id,x]));
+  const inval=new Map((c.invalidated??[]).map(x=>[x.claimId,x.becauseOf]));
+  const fatal=new Set((c.contradictions??[]).filter(x=>x.fatal).map(x=>x.claimId));
+  const depth=new Map(),guard=new Set();
+  const d=id=>{if(depth.has(id))return depth.get(id);if(guard.has(id))return 0;guard.add(id);
+    const ds=(byId.get(id)?.dependsOn??[]).filter(x=>byId.has(x));
+    const v=ds.length?Math.max(...ds.map(d))+1:0;depth.set(id,v);return v};
+  claims.forEach(x=>d(x.id));
+  const layers=[];claims.forEach(x=>{const k=depth.get(x.id)??0;(layers[k]=layers[k]||[]).push(x)});
+  const CW=148,CH=46,GX=52,GY=28,PAD=16;
+  const cols=layers.length,rows=Math.max(...layers.map(l=>l.length));
+  const W=PAD*2+cols*CW+(cols-1)*GX,H=PAD*2+rows*CH+(rows-1)*GY;
+  const pos=new Map();
+  layers.forEach((l,li)=>l.forEach((n,ni)=>pos.set(n.id,{x:PAD+li*(CW+GX),y:PAD+ni*(CH+GY)})));
+  const p=[`<svg class="dag" viewBox="0 0 ${W} ${H}" style="width:100%;min-width:${W}px;height:auto">`,
+    '<defs><marker id="ah3" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker></defs>'];
+  claims.forEach(n=>(n.dependsOn??[]).filter(x=>pos.has(x)).forEach(par=>{
+    const a=pos.get(par),b=pos.get(n.id);
+    const x1=a.x+CW,y1=a.y+CH/2,x2=b.x,y2=b.y+CH/2,mx=(x1+x2)/2;
+    const dead=inval.has(n.id),col=dead?'var(--bad)':'var(--line-2)';
+    p.push(`<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${col}" stroke-width="1.4" ${dead?'stroke-dasharray="4 3"':''} marker-end="url(#ah3)" color="${col}"/>`)}));
+  claims.forEach(n=>{
+    const q=pos.get(n.id),isF=fatal.has(n.id),isI=inval.has(n.id);
+    const st=isF?'var(--bad)':isI?'var(--warn)':'var(--line-2)';
+    const fl=isF?'var(--bad-wash)':isI?'var(--warn-wash)':'var(--panel)';
+    const tx=n.text||'',lab=tx.slice(0,30)+(tx.length>30?'…':'');
+    p.push(`<g><rect x="${q.x}" y="${q.y}" width="${CW}" height="${CH}" rx="7" fill="${fl}" stroke="${st}" stroke-width="1.4"/>
+      <text x="${q.x+11}" y="${q.y+18}" font-family="var(--mono)" font-size="11.5" font-weight="600" fill="var(--fg)">${esc(n.id)}</text>
+      <text x="${q.x+38}" y="${q.y+18}" font-family="var(--mono)" font-size="8.5" fill="${isF?'var(--bad)':'var(--warn)'}">${isF?'FATAL':isI?'invalidated':''}</text>
+      <text x="${q.x+11}" y="${q.y+34}" font-family="var(--sans)" font-size="10" fill="var(--dim)">${esc(lab)}</text>
+      <title>${esc(n.id)} — ${esc(tx)}</title></g>`)});
+  p.push('</svg>');
+  const wrap=el('div'),sc=el('div','dagwrap');sc.innerHTML=p.join('');wrap.append(sc);
+  wrap.append(html('div','legend',`<span><i style="background:var(--bad-wash);border:1px solid var(--bad)"></i>fatal contradiction</span>
+    <span><i style="background:var(--warn-wash);border:1px solid var(--warn)"></i>invalidated by a dependency</span>
+    <span><i style="background:var(--panel);border:1px solid var(--line-2)"></i>clean</span>
+    <span>dashed edge = the dependency that killed it</span>`));
+  return wrap;
+}
+
+/* ---------- ground truth ---------- */
+R.groundtruth=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const g=await api('/api/ground-truth');root.textContent='';
+  if(!g.available){root.append(html('div','note warn',esc(g.reason)));return}
+  root.append(html('div','note','<strong>Ground truth never originates from a language model.</strong> Every label here was written by a person. There is no control in this workstation that writes one — a form that set <code>truth: false</code> would let a click become an answer key.'));
+  const split=el('div','split');split.style.marginTop='15px';
+  const idx=el('div','idx'),pane=el('div');
+  g.cases.forEach(c=>{
+    const m=c.meta,b=el('button');
+    b.innerHTML=`<span class="t">${esc(c.id)}</span><span class="s">${m?`${esc(m.humanVerdict??'unlabelled')} · ${m.reviewed}/${m.claims}`:'no case.json'}</span>`;
+    b.onclick=()=>{$$('button',idx).forEach(x=>x.removeAttribute('aria-current'));b.setAttribute('aria-current','true');showCase(c,pane)};
+    idx.append(b);
+  });
+  split.append(idx,pane);root.append(split);
+  if(g.cases.length){idx.children[0].setAttribute('aria-current','true');showCase(g.cases[0],pane)}
+};
+function showCase(c,pane){
+  pane.textContent='';
+  const m=c.meta;
+  if(!m){pane.append(html('div','note warn','No case.json in this directory.'));return}
+  const pct=m.claims?Math.round(m.reviewed/m.claims*100):0;
+  const head=el('div','card'),hb=el('div','card-b'),top=el('div');
+  top.style.cssText='display:flex;align-items:center;gap:11px;flex-wrap:wrap';
+  top.append(html('span','cli',esc(c.id)),html('span','vb '+esc(m.humanVerdict),esc(m.humanVerdict)));
+  hb.append(top);
+  const row=el('div');row.style.cssText='display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin-top:15px';
+  row.append(ring(pct,{size:112,color:pct===100?'var(--ok)':pct?'var(--warn)':'var(--bad)',sub:'reviewed'}));
+  const st=el('div');st.style.flex='1';
+  [['Claims',m.claims,''],['Reviewed',m.reviewed,m.reviewed?'ok':'bad'],['Pending adjudication',m.pending,m.pending?'warn':'ok'],['Sources attached',m.sources,m.sources?'ok':'bad']]
+    .forEach(([k,v,t])=>st.append(html('div','',`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)">
+      <span class="tiny fnt">${k}</span><span class="num" style="font-weight:600;color:${t==='ok'?'var(--ok)':t==='warn'?'var(--warn)':t==='bad'?'var(--bad)':'var(--fg)'}">${v}</span></div>`)));
+  row.append(st);hb.append(row);head.append(hb);pane.append(head);
+
+  const badges=el('div');badges.style.cssText='display:flex;gap:9px;flex-wrap:wrap;margin:13px 0';
+  badges.append(html('span','chip '+(m.groundTruthStatus==='approved'?'ok':'warn'),`<i class="dot"></i>ground truth: ${esc(m.groundTruthStatus)}`),
+    html('span','chip '+(m.calibrationStatus==='approved'?'ok':'bad'),`<i class="dot"></i>calibration: ${esc(m.calibrationStatus)}`),
+    html('span','chip info',`<i class="dot"></i>benchmark: ${esc(m.benchmarkStatus)}`),
+    html('span','chip '+(m.argusVerdict==='REJECT'?'bad':'info'),`<i class="dot"></i>argus: ${esc(m.argusVerdict??'—')}`));
+  pane.append(badges);
+
+  const info=el('div','card'),ib=el('div','card-b');
+  ib.append(html('div','kv',`<span class="k">human verdict</span><span class="v"><span class="vb ${esc(m.humanVerdict)}">${esc(m.humanVerdict)}</span> ${m.reviewer?`<span class="mut">by ${esc(m.reviewer)} on ${esc(m.reviewedAt)}</span>`:'<span class="fnt">no reviewer</span>'}</span>`),
+    html('div','kv',`<span class="k">blocked by</span><span class="v">${m.blockedBy.length?m.blockedBy.map(x=>`<span class="chip warn">${esc(x)}</span>`).join(' '):'<span class="fnt">nothing</span>'}</span>`));
+  if(m.notes)ib.append(html('div','kv',`<span class="k">reviewer notes</span><span class="v mut">${esc(m.notes)}</span>`));
+  info.append(ib);pane.append(info);
+
+  if(m.labels.length){
+    pane.append(sec('Human claim labels',`${m.labels.length} adjudicated`));
+    const tw=el('div','tw'),t=el('table');
+    t.innerHTML='<thead><tr><th>claim</th><th>truth</th><th>expected provenance</th><th>expected epistemic</th><th>rests on</th><th>note</th></tr></thead>';
+    const tb=el('tbody');
+    m.labels.forEach(l=>{const tr=el('tr');
+      tr.innerHTML=`<td class="mono"><strong>${esc(l.claim_id)}</strong></td><td></td>
+        <td class="tiny">${esc(l.expected_provenance??'—')}</td><td class="tiny">${esc(l.expected_epistemic??'—')}</td>
+        <td class="mono tiny">${(l.rests_on??[]).join(', ')||'—'}</td><td class="tiny mut">${esc(l.note??'')}</td>`;
+      tr.children[1].append(html('span','vb '+esc(l.truth),esc(l.truth)));tb.append(tr)});
+    t.append(tb);tw.append(t);pane.append(tw);
+  } else pane.append(html('div','note warn',`<strong>No claims adjudicated.</strong> ${m.claims} claim(s) await a human ruling. Until then this case cannot be promoted to calibration.`));
+
+  pane.append(sec('Case files',''));
+  const slot=el('div'),fw=el('div');fw.style.cssText='display:flex;gap:9px;flex-wrap:wrap';
+  c.files.forEach(f=>{
+    const b=el('button','btn sm');
+    b.innerHTML=`${svgIcon(ICON.report,'ic')}<span class="mono">${esc(f.name)}</span>`;
+    b.onclick=()=>{$$('button',fw).forEach(x=>x.classList.remove('pri'));b.classList.add('pri');filesOpenInto(f.path,slot)};
+    fw.append(b)});
+  pane.append(fw,slot);
+}
+
+/* ---------- reports ---------- */
+R.reports=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const r=await api('/api/reports');root.textContent='';
+  if(!r.available){root.append(html('div','note warn',esc(r.reason)));return}
+  const bar=el('div','bar-row');
+  const b=el('button','btn','Regenerate all reports');
+  b.onclick=()=>exec('report','redbot report');
+  bar.append(b,html('span','cli','redbot report'),html('span','tiny fnt',`${r.files.length} files · output streams to the terminal`));
+  root.append(bar);
+  const split=el('div','split'),idx=el('div','idx'),view=el('div');view.id='report-view';
+  r.files.forEach(f=>{
+    const btn=el('button');btn.dataset.path=f.path;
+    btn.innerHTML=`<span class="t">${esc(f.name)}</span><span class="s">${(f.bytes/1024).toFixed(1)} KB · ${esc(f.modified.slice(0,10))}</span>`;
+    btn.onclick=()=>{$$('button',idx).forEach(x=>x.removeAttribute('aria-current'));btn.setAttribute('aria-current','true');loadReport(f.path,view)};
+    idx.append(btn)});
+  split.append(idx,view);root.append(split);
+  if(r.files.length){idx.children[0].setAttribute('aria-current','true');loadReport(r.files[0].path,view)}
+};
+async function loadReport(path,view){
+  view.innerHTML='<div class="note">Loading…</div>';
+  const r=await api('/api/file?path='+encodeURIComponent(path));
+  view.textContent='';
+  if(r.error){view.append(html('div','note bad',esc(r.error)));return}
+  const grid=el('div');grid.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) 202px;gap:20px;align-items:start';
+  const card=el('div','card');
+  card.append(html('div','card-h',`<h3>${esc(path.split('/').pop())}</h3><span class="hint">${(r.body.length/1024).toFixed(1)} KB</span>`));
+  const cb=el('div','card-b'),doc=el('div','md');doc.innerHTML=md(r.body);cb.append(doc);card.append(cb);
+  const toc=el('nav','toc'),hs=$$('h2,h3',doc);
+  if(hs.length){
+    toc.append(html('div','tiny fnt','<div style="padding:0 10px 8px;text-transform:uppercase;letter-spacing:.09em">On this page</div>'));
+    hs.forEach(h=>{const a=el('a',h.tagName==='H3'?'h3':'',h.textContent);a.href='#'+h.id;
+      a.onclick=e=>{e.preventDefault();h.scrollIntoView({behavior:'smooth',block:'start'})};toc.append(a)});
+  }
+  grid.append(card,toc);view.append(grid);
+  if(window.innerWidth<1180){grid.style.gridTemplateColumns='minmax(0,1fr)';toc.style.display='none'}
+}
+
+/* ---------- benchmark / replay / validation ---------- */
+R.benchmark=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const d=DASH??await api('/api/dashboard');DASH=d;root.textContent='';
+  root.append(html('p','mut','The certification regression suite. It replays recorded cases through the frozen engine and checks the verdict <em>and the reasons behind it</em> — a case that reaches the right verdict for the wrong reasons still fails.'));
+  const box=el('div');root.append(box);drawBench(box,d.benchmark,null);
+  const bar=el('div','bar-row');bar.style.marginTop='16px';
+  const b=el('button','btn pri','Run benchmark');
+  b.onclick=()=>exec('benchmark','node qa/benchmark/run.mjs');
+  bar.append(b,html('span','cli','node qa/benchmark/run.mjs'),html('span','tiny fnt','output streams to the terminal'));
+  root.append(bar);
+  document.addEventListener('cmd:done',async e=>{
+    if(e.detail.key!=='benchmark'||CUR!=='benchmark')return;
+    const nd=await api('/api/dashboard');DASH=nd;drawBench(box,nd.benchmark,null);
+  });
+};
+function drawBench(box,after,run){
+  box.textContent='';
+  if(!after){box.append(html('div','note warn','No <code>qa/benchmark/last-run.json</code> on disk yet.'));return}
+  const vp=after.paths??after.verdict_paths;
+  const vpv=vp&&typeof vp==='object'&&vp.covered!=null?`${vp.covered}/${vp.of}`:Array.isArray(vp)?vp.length:(vp??'—');
+  const g=el('div','grid c4');
+  [['Cases',after.cases,'',''],['Passed',after.passed,after.passed===after.cases?'good':'',''],
+   ['Failed',after.failed,after.failed?'zero':'good',''],['Drafts',after.drafts??after.distinct_drafts??'—','',''],
+   ['Verdict paths',vpv,vp&&vp.covered<vp.of?'warnv':'','covered of reachable']]
+   .forEach(([k,v,cls,dd])=>g.append(metric(k,v,dd,cls)));
+  box.append(sec('Last run on disk',''),g);
+  if(vp&&vp.byPath){
+    const c=el('div','card');c.style.marginTop='13px';
+    c.append(html('div','card-h','<h3>Verdict-path coverage</h3>'));
+    const cb=el('div','card-b');
+    Object.entries(vp.byPath).forEach(([k,v])=>cb.append(html('div','kv',`<span class="k">${esc(k)}</span><span class="v">${(Array.isArray(v)?v:[v]).map(x=>`<span class="chip">${esc(x)}</span>`).join(' ')}</span>`)));
+    cb.append(html('div','note warn',`<strong>${vp.of-vp.covered} of ${vp.of} verdict paths have no case exercising them.</strong> Coverage of paths is not coverage of behaviour.`));
+    c.append(cb);box.append(c);
+  }
+  const dump=(t,o)=>{if(o==null)return;
+    const c=el('div','card');c.style.marginTop='13px';
+    c.append(html('div','card-h',`<h3>${esc(t)}</h3>`));
+    const cb=el('div','card-b');
+    (typeof o==='object'&&!Array.isArray(o)?Object.entries(o):[[t,o]]).forEach(([k,v])=>
+      cb.append(html('div','kv',`<span class="k">${esc(k)}</span><span class="v num">${esc(typeof v==='object'?JSON.stringify(v):v)}</span>`)));
+    c.append(cb);box.append(c)};
+  dump('Calibration',after.calibration);dump('Stages',after.stages);
+}
+R.replay=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const d=DASH??await api('/api/dashboard');DASH=d;root.textContent='';
+  root.append(html('p','mut','Replays a stored certification through the deterministic verdict layer and compares the result to what was recorded. One question: given the same observations, does the engine still decide the same way?'));
+  if(!d.replay.available){
+    root.append(html('div','note warn','<strong>Replay is unavailable, and this is not an error.</strong><br><br>'+esc(d.replay.reason)));
+    root.append(html('div','note','Replay needs operational data that only a real certification produces. Certification spends model calls and writes evidence, so it is deliberately absent from this interface.'));
+    return;
+  }
+  root.append(html('div','note','<strong>Replay is available.</strong> '+esc(d.replay.reason)));
+  const bar=el('div','bar-row');bar.style.marginTop='15px';
+  const b=el('button','btn pri','Run replay');
+  b.onclick=()=>exec('replay','node qa/ARE-001-argus-replay.mjs');
+  bar.append(b,html('span','cli','node qa/ARE-001-argus-replay.mjs'));root.append(bar);
+};
+const GATES=[['doctor','Doctor','redbot doctor'],['tests','Tests','npm test'],['benchmark','Benchmark','node qa/benchmark/run.mjs'],
+  ['corpus','Corpus','node ground-truth/validate.mjs'],['replay','Replay','node qa/ARE-001-argus-replay.mjs'],
+  ['extraction','Extraction','node tools/verify-extraction.mjs']];
+R.validation=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const cmds=CMDS||await api('/api/commands');root.textContent='';
+  root.append(html('p','mut','Every gate, running the real command. Output streams to the terminal drawer; the exit code shown is the command’s own.'));
+  const bar=el('div','bar-row');
+  const all=el('button','btn pri','Run all six gates');
+  const meta=el('span','tiny fnt');
+  bar.append(all,meta);root.append(bar);
+  const g=el('div','grid c4');const cells={};
+  GATES.forEach(([k,label,cli])=>{
+    const m=el('div','met');m.append(el('div','k',label));
+    const v=el('div','v','—');v.style.fontSize='18px';m.append(v);
+    const d=el('div','d','not run');m.append(d);
+    const b=el('button','btn sm','Run');b.style.marginTop='10px';
+    b.onclick=()=>exec(k,cli);m.append(b);
+    cells[k]={v,d};g.append(m);
+  });
+  root.append(g);
+  document.addEventListener('cmd:done',e=>{
+    const c=cells[e.detail.key];if(!c)return;
+    c.v.textContent=e.detail.cancelled?'cancelled':`exit ${e.detail.code}`;
+    c.v.style.color=e.detail.cancelled?'var(--warn)':e.detail.code===0?'var(--ok)':'var(--bad)';
+    c.d.textContent=ms(e.detail.ms);
+  });
+  all.onclick=async()=>{
+    all.disabled=true;all.textContent='running…';
+    const t0=Date.now();let pass=0,fail=0;
+    for(const [k,label,cli] of GATES){
+      await new Promise(res=>{
+        const h=e=>{if(e.detail.key!==k)return;document.removeEventListener('cmd:done',h);
+          if(e.detail.code===0)pass++;else fail++;res()};
+        document.addEventListener('cmd:done',h);
+        exec(k,cli);
+        setTimeout(()=>{document.removeEventListener('cmd:done',h);res()},240000);
+      });
+    }
+    all.disabled=false;all.textContent='Run all six gates';
+    meta.innerHTML=`<span class="chip ${fail?'bad':'ok'}"><i class="dot"></i>${pass} passed · ${fail} failed · ${((Date.now()-t0)/1000).toFixed(1)}s</span>`;
+  };
+  const c=el('div','card');c.style.marginTop='18px';
+  c.append(html('div','card-h','<h3>What this workstation refuses to run</h3>'));
+  const cb=el('div','card-b'),tw=el('div','tw'),t=el('table');
+  t.innerHTML='<thead><tr><th>command</th><th>why it is not here</th></tr></thead>';
+  const tb=el('tbody');
+  cmds.excluded.forEach(x=>tb.append(html('tr','',`<td class="mono">${esc(x.cmd)}</td><td class="mut">${esc(x.why)}</td>`)));
+  t.append(tb);tw.append(t);cb.append(tw);
+  cb.append(html('div','note','<strong>This is an allowlist, not a denylist.</strong> A denylist admits every future command by default, and one of them publishes.'));
+  c.append(cb);root.append(c);
+};
+
+/* ---------- settings ---------- */
+R.settings=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const s=await api('/api/settings');root.textContent='';
+  root.append(html('div','note','<strong>Preferences below are stored in this browser only</strong> (<code>localStorage</code>). They never reach the server and never change how a command runs. Everything under <em>Environment</em> is read-only.'));
+
+  const pc=el('div','card');pc.style.marginTop='15px';
+  pc.append(html('div','card-h','<h3>Preferences</h3><span class="hint">local only</span>'));
+  const pb=el('div','card-b');
+
+  const rowTheme=el('div','kv');rowTheme.append(html('span','k','Theme'));
+  const tv=el('span','v');
+  const tsel=el('select');tsel.className='txt';
+  ['dark','light'].forEach(o=>{const op=el('option',null,o);op.value=o;if(CFG.theme===o)op.selected=true;tsel.append(op)});
+  tsel.onchange=()=>{CFG.theme=tsel.value;saveCfg();
+    document.documentElement.setAttribute('data-theme',CFG.theme==='light'?'light':'dark')};
+  tv.append(tsel);rowTheme.append(tv);pb.append(rowTheme);
+
+  const rowInt=el('div','kv');rowInt.append(html('span','k','Auto-refresh'));
+  const iv=el('span','v');const isel=el('select');isel.className='txt';
+  [['0','off'],['15000','15 s'],['30000','30 s'],['60000','60 s']].forEach(([v,l])=>{
+    const op=el('option',null,l);op.value=v;if(String(CFG.refreshMs)===v)op.selected=true;isel.append(op)});
+  isel.onchange=()=>{CFG.refreshMs=+isel.value;saveCfg();applyRefresh()};
+  iv.append(isel,html('span','tiny fnt','&nbsp; re-renders the current page on a timer'));
+  rowInt.append(iv);pb.append(rowInt);
+
+  const rowOp=el('div','kv');rowOp.append(html('span','k','Operator label'));
+  const ov=el('span','v');const oin=el('input','txt');oin.value=CFG.operatorLabel||'';oin.placeholder='display name only';
+  oin.oninput=()=>{CFG.operatorLabel=oin.value;saveCfg()};
+  ov.append(oin,html('div','tiny fnt',`Cosmetic. The real operator is <code>REDBOT_OPERATOR</code> in the launching shell — currently <strong>${esc(s.operator??'unset')}</strong> — and this field cannot change it.`));
+  rowOp.append(ov);pb.append(rowOp);
+
+  const rowDev=el('div','kv');rowDev.append(html('span','k','Engineering surfaces'));
+  const dv=el('span','v');const dsel=el('select');dsel.className='txt';
+  [['hidden','hidden'],['shown','shown']].forEach(([v,l])=>{
+    const op=el('option',null,l);op.value=v;if((CFG.devMode?'shown':'hidden')===v)op.selected=true;dsel.append(op)});
+  const devNames=PAGES.filter(p=>p.dev).map(p=>p.label).join(' · ');
+  dsel.onchange=()=>{
+    CFG.devMode=dsel.value==='shown';saveCfg();
+    buildNav();buildPalette();
+    // If the page you are standing on just became hidden, you cannot stay on it.
+    if(!visiblePages().some(p=>p.id===CUR))go('dashboard');
+    $$('#nav button').forEach(b=>b.setAttribute('aria-current',String(b.dataset.id===CUR)));
+  };
+  dv.append(dsel,html('div','tiny fnt',
+    `Hidden by default: <strong>${esc(devNames)}</strong>. These answer questions about the engine, not about the draft in front of you. Nothing is deleted — the pages and their keyboard shortcuts come back the moment this is set to <em>shown</em>, and the server's allow-list is unchanged either way.`));
+  rowDev.append(dv);pb.append(rowDev);
+
+  const rowPort=el('div','kv');rowPort.append(html('span','k','Port'));
+  rowPort.append(html('span','v',`<span class="mono">${esc(s.consolePort)}</span> <span class="tiny fnt">— set with <code>--port</code> at launch; bound to 127.0.0.1 only</span>`));
+  pb.append(rowPort);
+  pc.append(pb);root.append(pc);
+
+  const c=el('div','card');c.style.marginTop='15px';
+  c.append(html('div','card-h','<h3>Environment</h3><span class="hint">read-only</span>'));
+  const cb=el('div','card-b');
+  [['Node',esc(s.node)],['TypeScript',esc(s.typescript??'—')],['Platform',esc(s.platform)],
+   ['Operator',s.operator?`<strong>${esc(s.operator)}</strong>`:'<span class="chip warn"><i class="dot"></i>REDBOT_OPERATOR unset</span>'],
+   ['Branch',`<span class="mono">${esc(s.git.branch)}</span>`],['Commit',`<span class="mono">${esc(s.git.commit)}</span>`],
+   ['Working tree',s.git.dirtyFiles?`<span class="chip warn"><i class="dot"></i>${s.git.dirtyFiles} modified</span>`:'<span class="chip ok"><i class="dot"></i>clean</span>'],
+   ['Freeze',s.freeze.frozen?`<span class="chip info"><i class="dot"></i>frozen ${esc(s.freeze.version??'')}</span>`:'<span class="chip warn"><i class="dot"></i>not frozen</span>'],
+   ['Repository',`<span class="mono">${esc(s.repoPath)}</span>`],
+   ['Publication repo',s.publicationRepo?`<span class="mono">${esc(s.publicationRepo)}</span>`:'<span class="fnt">none found</span>'],
+   ['Mode','<span class="chip bad"><i class="dot"></i>read-only · cannot publish</span>']]
+   .forEach(([k,v])=>cb.append(html('div','kv',`<span class="k">${esc(k)}</span><span class="v">${v}</span>`)));
+  c.append(cb);root.append(c);
+
+  const k=el('div','card');k.style.marginTop='15px';
+  k.append(html('div','card-h','<h3>Keyboard</h3>'));
+  const kb=el('div','card-b');
+  // `g v` reaches an engineering surface, so it is listed only when those are shown —
+  // a shortcut printed here that silently does nothing is worse than one not printed.
+  [['Ctrl K','command palette'],['/','search everything'],['g d','dashboard'],['g c','certifications'],
+   ...(CFG.devMode?[['g v','validation']]:[]),['g r','reports'],['Esc','close dialogs'],['`','toggle terminal']]
+   .forEach(([key,d])=>kb.append(html('div','kv',`<span class="k">${esc(key)}</span><span class="v mut">${esc(d)}</span>`)));
+  k.append(kb);root.append(k);
+};
+
+R.about=root=>{
+  root.textContent='';
+  const c=el('div','card');
+  c.append(html('div','card-h','<h3>What this is</h3>'));
+  const cb=el('div','card-b');
+  cb.append(html('div','md',md(
+`redbot is a human-in-the-loop assistant for technical contributions. **Argus** is its internal
+certification engine: it decides whether a draft reply is adequately supported by evidence, at the
+level of individual claims.
+
+## The rule this workstation obeys
+
+**It contains no business logic, and never may.** Every action spawns the real CLI command and streams
+its output verbatim. Nothing is re-scored, re-derived or summarised on the way to the screen.
+
+A UI that recomputes a verdict is a UI that can disagree with the engine. Once two things can disagree
+about whether a draft is certified, neither is authoritative.
+
+## What it cannot do
+
+\`reply\` · \`regret\` · \`observe\` · \`read\` · \`search\` · \`session\` · \`login\` · \`draft\` ·
+\`opportunity\` · \`certify\` are absent from the allowlist. Publishing requires a person at a real
+terminal — routing the approval prompt through a web page would destroy the property that makes every
+published word attributable to a human.
+
+There is also no control that writes a ground-truth label. Ground truth never originates from a
+language model, and a form that set a label would let a click become an answer key.
+
+## The honest state
+
+Every verdict produced on real input so far is **REJECT**. No case has completed calibration. The
+engineering is sound; the science is unvalidated, and this workstation is built to show that rather
+than to hide it.`)));
+  c.append(cb);root.append(c);
+  const s=el('div','card');s.style.marginTop='15px';
+  s.append(html('div','card-h','<h3>Stack</h3>'));
+  const sb=el('div','card-b');
+  [['Server','node:http + node:child_process — zero dependencies'],
+   ['Streaming','Server-Sent Events — one long-lived HTTP response, no websocket'],
+   ['Client','one HTML file, vanilla JS, no framework, no build step'],
+   ['Charts','hand-written SVG — no charting library'],
+   ['Storage','none server-side; preferences in localStorage'],
+   ['Network','binds 127.0.0.1 only']]
+   .forEach(([k,v])=>sb.append(html('div','kv',`<span class="k">${esc(k)}</span><span class="v mut">${esc(v)}</span>`)));
+  s.append(sb);root.append(s);
+};
+
+/* ================================================================== *
+ * SHELL
+ * ================================================================== */
+function paintTop(d){
+  const op=$('#c-op');op.className='chip '+(d.operator?'ok':'warn');
+  op.innerHTML=`<i class="dot"></i>${esc(CFG.operatorLabel||d.operator||'operator unset')}`;
+  const fr=$('#c-freeze');fr.className='chip '+(d.freeze.frozen?'info':'warn');
+  fr.innerHTML=`<i class="dot"></i>${d.freeze.frozen?'engine frozen':'NOT frozen'}`;
+  $('#brand-sub').textContent=(d.git.branch??'')+' @ '+(d.git.commit??'');
+}
+function buildNav(){
+  const nav=$('#nav');nav.textContent='';let grp=null;
+  visiblePages().forEach(p=>{
+    if(p.grp!==grp){grp=p.grp;nav.append(el('div','grp',grp))}
+    const b=el('button');b.dataset.id=p.id;
+    b.innerHTML=svgIcon(ICON[p.icon])+`<span>${esc(p.label)}</span>`+(p.kbd?`<span class="kbd">${esc(p.kbd)}</span>`:'');
+    b.onclick=()=>{go(p.id);$('#side').classList.remove('open');$('#scrim').classList.remove('on')};
+    nav.append(b);
+  });
+}
+function ensurePage(id){
+  let s=$('#pg-'+id);
+  if(!s){s=el('section','page');s.id='pg-'+id;$('#wrap').append(s)}
+  return s;
+}
+function go(id){
+  // A hidden page is unroutable, not merely unlisted — otherwise `g v` would land the
+  // operator on a surface the sidebar says does not exist, with no way back to it.
+  if(!visiblePages().some(p=>p.id===id))return;
+  CUR=id;
+  const p=PAGES.find(x=>x.id===id);
+  $$('#nav button').forEach(b=>b.setAttribute('aria-current',String(b.dataset.id===id)));
+  PAGES.forEach(x=>ensurePage(x.id).classList.toggle('on',x.id===id));
+  $('#pt').textContent=p.label;$('#ps').textContent=p.sub;
+  const root=ensurePage(id);
+  if(!root.dataset.loaded){root.dataset.loaded='1';R[id](root)}
+  $('#main').scrollTo({top:0});
+}
+function reloadAll(){
+  DASH=null;
+  PAGES.forEach(p=>{const r=ensurePage(p.id);r.dataset.loaded='';r.textContent=''});
+  go(CUR);
+}
+function applyRefresh(){
+  clearInterval(REFRESH_TIMER);REFRESH_TIMER=null;
+  if(CFG.refreshMs>0)REFRESH_TIMER=setInterval(()=>{
+    if(T.running)return;
+    const r=ensurePage(CUR);r.dataset.loaded='';r.textContent='';R[CUR](r);r.dataset.loaded='1';
+  },CFG.refreshMs);
+}
+function toggleTheme(){
+  CFG.theme=document.documentElement.getAttribute('data-theme')==='light'?'dark':'light';
+  document.documentElement.setAttribute('data-theme',CFG.theme);saveCfg();
+}
+async function cancelRun(){
+  const r=await api('/api/cancel');
+  termSys(r.cancelled?`cancelling "${r.key}"…`:r.reason);
+}
+function closeOverlays(){$$('.ov').forEach(o=>o.classList.remove('on'))}
+function openPalette(){
+  buildPalette();closeOverlays();
+  $('#palette').classList.add('on');
+  const i=$('#palInput');i.value='';palRender('');i.focus();
+}
+function openSearchOv(){
+  closeOverlays();$('#search').classList.add('on');
+  const i=$('#srchInput');i.select();i.focus();
+  if(i.value.trim().length>=2)doSearch(i.value);
+}
+
+/* wiring */
+T.body=$('#termBody');T.status=$('#termStatus');T.drawer=$('#drawer');
+$('#termHead').onclick=e=>{if(e.target.closest('button')&&e.target.id!=='termMin')return;
+  T.drawer.classList.toggle('min');$('#termMin').textContent=T.drawer.classList.contains('min')?'▲':'▼'};
+$('#termCancel').onclick=e=>{e.stopPropagation();cancelRun()};
+$('#termClear').onclick=e=>{e.stopPropagation();T.body.innerHTML='';T.raw=''};
+$('#termCopy').onclick=async e=>{e.stopPropagation();
+  try{await navigator.clipboard.writeText(T.raw||T.body.textContent);termSys('output copied')}
+  catch{termSys('clipboard unavailable — select the text instead')}};
+$('#termToggle').onclick=()=>{T.drawer.classList.toggle('min');$('#termMin').textContent=T.drawer.classList.contains('min')?'▲':'▼'};
+$('#theme').onclick=toggleTheme;
+$('#refresh').onclick=reloadAll;
+$('#menu').onclick=()=>{$('#side').classList.toggle('open');$('#scrim').classList.toggle('on')};
+$('#scrim').onclick=()=>{$('#side').classList.remove('open');$('#scrim').classList.remove('on')};
+$('#openPalette').onclick=openPalette;
+$('#openSearch').onclick=openSearchOv;
+$$('.ov').forEach(o=>o.onclick=e=>{if(e.target===o)closeOverlays()});
+
+$('#palInput').addEventListener('input',e=>palRender(e.target.value));
+$('#palInput').addEventListener('keydown',e=>{
+  if(e.key==='ArrowDown'){e.preventDefault();palMove(1)}
+  else if(e.key==='ArrowUp'){e.preventDefault();palMove(-1)}
+  else if(e.key==='Enter'){e.preventDefault();const it=PAL.filtered[PAL.sel];if(it){closeOverlays();it.run()}}
+});
+$('#srchInput').addEventListener('input',e=>{
+  clearTimeout(SR.timer);const v=e.target.value;
+  SR.timer=setTimeout(()=>doSearch(v),190);
+});
+$('#srchInput').addEventListener('keydown',e=>{
+  if(e.key==='ArrowDown'){e.preventDefault();srchMove(1)}
+  else if(e.key==='ArrowUp'){e.preventDefault();srchMove(-1)}
+  else if(e.key==='Enter'){e.preventDefault();$$('#srchList .hit')[SR.sel]?.click()}
+});
+
+let gPending=false,gTimer=null;
+document.addEventListener('keydown',e=>{
+  const typing=/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+  if(e.key==='Escape'){closeOverlays();return}
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openPalette();return}
+  if(typing)return;
+  if(e.key==='/'){e.preventDefault();openSearchOv();return}
+  if(e.key==='`'){e.preventDefault();$('#termToggle').click();return}
+  if(e.key==='g'){gPending=true;clearTimeout(gTimer);gTimer=setTimeout(()=>gPending=false,900);return}
+  if(gPending){
+    gPending=false;clearTimeout(gTimer);
+    const map={d:'dashboard',c:'certifications',v:'validation',r:'reports',t:'timeline',q:'queue',
+      l:'logs',f:'files',s:'settings',h:'runhistory',b:'benchmark'};
+    const t=map[e.key.toLowerCase()];
+    if(t){e.preventDefault();go(t)}
+  }
+});
+
+(async()=>{
+  buildNav();
+  PAGES.forEach(p=>ensurePage(p.id));
+  CMDS=await api('/api/commands');
+  buildPalette();
+  go('dashboard');
+  applyRefresh();
+  const st=await api('/api/status');
+  if(st.running)T.status.innerHTML=`<span class="a-yel">● ${esc(st.key)} running elsewhere</span>`;
+})();
+</script>
+</body>
+</html>

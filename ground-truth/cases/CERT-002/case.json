@@ -1,0 +1,566 @@
+{
+  "id": "CERT-002",
+  "schema_version": "1.0",
+  "draft_id": "d_c9bd9366f6b9_mrwiupf2",
+  "notes": "First certification on an unresolved thread, and the first production run in which Phase 6 dependency propagation fired. AWAITING HUMAN REVIEW — every ground-truth field is deliberately empty. Regression-only until a person rules on it.",
+  "thread": {
+    "thread_id": "c9bd9366f6b9",
+    "subreddit": "Wordpress",
+    "permalink": "https://www.reddit.com/r/Wordpress/comments/1v3ixnq/google_not_indexing_website/",
+    "title": "Google not indexing website",
+    "body": "Hi,\nI bought a domain (registered and live a few years back) with high search volume and very low SEO difficulty.\nI have had it live for nearly 6 months, and the homepage is still not indexed (some inner pages are indexed, but only 5 out of about 25).\nA few backlinks, but nothing toxic and no manual actions.\nUsing SEO Yoast, SEO is green, and readability is green. A lot of content, unique. Used Google Search Console to fetch, plus others.\nAll keywords that I am tracking say pending/unstable.\n\nThis website has huge potential but just will not index. Any ideas why?",
+    "comment_count": 17,
+    "resolved": false
+  },
+  "draft": {
+    "body": "Worth checking the domain's history on the Wayback Machine (web.archive.org/web/*/yourdomain.com) before spending more time on-page. You mentioned around 200k scraped pages existed under the previous owner — pull snapshots from before you bought it and see what the site actually was (scraper farm, expired-domain PBN, hacked site, etc.) and roughly how long that ran. That tells you whether you're dealing with residual algorithmic distrust or something that needs active cleanup.\n\nA few things worth checking independent of the history angle too:\n\n- GSC > Security & Manual Actions specifically, not just the coverage report. A manual action won't necessarily show up as anything other than \"not indexed\" in coverage.\n- Whether the blanket redirect of all those legacy URLs to your homepage is still live. Collapsing 200k pages into one 301 target can itself read as manipulative link consolidation to Google, separate from whatever reputation the domain already carries.\n- Whether robots.txt, a leftover noindex, or an edge/CDN rule from the old site is still in play somewhere in the stack. Live Test can show a URL as available on one crawl and still get blocked on a subsequent one if there's a stale rule sitting at the server or CDN level rather than in the page source Yoast checks.\n\nIf the Wayback history shows heavy scraping and there's no manual action in GSC, a reconsideration request won't apply, but disavowing the toxic inherited backlink profile and removing the mass redirect are things you can actually do instead of just waiting.",
+    "created_at": "2026-07-22T20:15:16.526Z",
+    "model": "claude-sonnet-5",
+    "contribution": {
+      "whyThread": "Domain has a documented spam/scrape history but nobody has told the asker how to actually investigate or act on it",
+      "whatNew": "Concrete steps: pull Wayback Machine snapshots to characterize the prior site, evaluate whether the blanket 200k-to-homepage redirect itself looks manipulative, check GSC Security & Manual Actions specifically, and check robots.txt/noindex/edge-level blocks that Live Test can miss",
+      "whyNotSilent": "Asker is stuck after 6 months and the thread has diagnosed contamination as likely cause but stopped short of any next action"
+    }
+  },
+  "human_review": {
+    "verdict": "unlabelled",
+    "reviewer": null,
+    "reviewed_at": null,
+    "notes": "No human has reviewed this draft. Argus returned REJECT with 8 fatal contradictions citing primary-documentation and official-implementation, but those citations are model output and are unverified. Whether the verdict is CORRECT is unknown, and recording a guess here would make the pipeline its own examiner."
+  },
+  "ground_truth": {
+    "sources": [],
+    "claims_reviewed": 0,
+    "claim_labels": [],
+    "expected_claims": null
+  },
+  "expected": {
+    "verdict": [
+      "REJECT"
+    ],
+    "appropriate": null,
+    "rules_required": [
+      "fatal-contradiction",
+      "no-provenance",
+      "overconfident-language",
+      "invalidated-dependency",
+      "falsifiable-claim-weak-evidence",
+      "low-confidence-as-fact"
+    ],
+    "rules_forbidden": [
+      "all-claims-supported",
+      "thread-resolved",
+      "unrefuted-falsifiable-claim"
+    ]
+  },
+  "argus_observed": {
+    "certified_at": "2026-07-23T01:16:32.655Z",
+    "model": "claude-haiku-4-5-20251001",
+    "verdict": "REJECT",
+    "claims": [
+      {
+        "id": "c1",
+        "text": "Use the Wayback Machine to review what the domain previously hosted",
+        "type": "recommendation",
+        "evidenceClass": "widely-accepted-practice",
+        "evidenceDetail": "The Wayback Machine (web.archive.org) is standard practice in SEO audits for domains with problematic histories.",
+        "confidence": "high",
+        "dependsOn": [],
+        "sourceQuote": "Worth checking the domain's history on the Wayback Machine (web.archive.org/web/*/yourdomain.com)"
+      },
+      {
+        "id": "c2",
+        "text": "The previous site owner hosted approximately 200,000 pages that appear to be scraped content",
+        "type": "observation",
+        "evidenceClass": "observed-runtime-behaviour",
+        "evidenceDetail": "The user reported this volume of scraped pages.",
+        "confidence": "high",
+        "dependsOn": [],
+        "sourceQuote": "You mentioned around 200k scraped pages existed under the previous owner"
+      },
+      {
+        "id": "c3",
+        "text": "Wayback Machine snapshots from before purchase reveal the site's prior purpose and structure",
+        "type": "recommendation",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "Historical snapshots will show what content the site hosted.",
+        "confidence": "high",
+        "dependsOn": [
+          "c1"
+        ],
+        "sourceQuote": "pull snapshots from before you bought it and see what the site actually was"
+      },
+      {
+        "id": "c4",
+        "text": "Problematic prior site types include scraper farms, expired-domain PBNs, and hacked sites",
+        "type": "observation",
+        "evidenceClass": "community-knowledge",
+        "evidenceDetail": "These are well-known problematic site classifications in SEO.",
+        "confidence": "medium",
+        "dependsOn": [],
+        "sourceQuote": "see what the site actually was (scraper farm, expired-domain PBN, hacked site, etc.)"
+      },
+      {
+        "id": "c5",
+        "text": "The duration of prior problematic activity indicates whether the issue is residual algorithmic distrust or requires active cleanup",
+        "type": "inference",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "The author infers longer-running problems indicate stronger penalties requiring more intensive remediation.",
+        "confidence": "medium",
+        "dependsOn": [
+          "c4"
+        ],
+        "sourceQuote": "roughly how long that ran. That tells you whether you're dealing with residual algorithmic distrust or something that needs active cleanup"
+      },
+      {
+        "id": "c6",
+        "text": "Manual actions in GSC may only appear as 'not indexed' in the coverage report without clear labeling",
+        "type": "implementation-detail",
+        "evidenceClass": "widely-accepted-practice",
+        "evidenceDetail": "This is a known characteristic of GSC's interface behavior.",
+        "confidence": "high",
+        "dependsOn": [],
+        "sourceQuote": "A manual action won't necessarily show up as anything other than 'not indexed' in coverage"
+      },
+      {
+        "id": "c7",
+        "text": "Check GSC's 'Security & Manual Actions' section specifically rather than relying on the coverage report",
+        "type": "recommendation",
+        "evidenceClass": "framework-documentation",
+        "evidenceDetail": "Google Search Console provides a dedicated section for manual actions.",
+        "confidence": "high",
+        "dependsOn": [
+          "c6"
+        ],
+        "sourceQuote": "GSC > Security & Manual Actions specifically, not just the coverage report"
+      },
+      {
+        "id": "c8",
+        "text": "Determine whether the site still has a 301 redirect consolidating 200k legacy URLs to the homepage",
+        "type": "recommendation",
+        "evidenceClass": "unknown",
+        "evidenceDetail": "The user should audit their own site configuration.",
+        "confidence": "unknown",
+        "dependsOn": [],
+        "sourceQuote": "Whether the blanket redirect of all those legacy URLs to your homepage is still live"
+      },
+      {
+        "id": "c9",
+        "text": "A 301 redirect consolidating 200,000 pages to a single homepage target can appear to Google as manipulative link consolidation",
+        "type": "inference",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "The author infers this pattern may trigger algorithmic suspicion; this is reasoning about algorithm behavior, not documented guidance.",
+        "confidence": "medium",
+        "dependsOn": [],
+        "sourceQuote": "Collapsing 200k pages into one 301 target can itself read as manipulative link consolidation to Google"
+      },
+      {
+        "id": "c10",
+        "text": "The reputation damage from a mass redirect is separate and additional to the site's inherited domain reputation",
+        "type": "inference",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "The author distinguishes this as a separate penalty surface.",
+        "confidence": "medium",
+        "dependsOn": [
+          "c9"
+        ],
+        "sourceQuote": "separate from whatever reputation the domain already carries"
+      },
+      {
+        "id": "c11",
+        "text": "Check whether robots.txt, noindex tags, or CDN/edge rules from the old site are still in place",
+        "type": "recommendation",
+        "evidenceClass": "widely-accepted-practice",
+        "evidenceDetail": "Leftover blocking rules from prior configurations are a known misconfiguration issue in SEO.",
+        "confidence": "medium",
+        "dependsOn": [],
+        "sourceQuote": "Whether robots.txt, a leftover noindex, or an edge/CDN rule from the old site is still in play somewhere in the stack"
+      },
+      {
+        "id": "c12",
+        "text": "Rules at the server or CDN layer can block crawling and indexing even if page source is clean",
+        "type": "implementation-detail",
+        "evidenceClass": "unknown",
+        "evidenceDetail": "HTTP infrastructure operates independently of page-level directives.",
+        "confidence": "high",
+        "dependsOn": [],
+        "sourceQuote": "if there's a stale rule sitting at the server or CDN level rather than in the page source"
+      },
+      {
+        "id": "c13",
+        "text": "Google's Live Test can show a URL as available in one crawl but blocked in a subsequent crawl if stale infrastructure rules exist",
+        "type": "platform-behaviour",
+        "evidenceClass": "observed-runtime-behaviour",
+        "evidenceDetail": "This is documented behavior of GSC's Live Test when blocking rules are inconsistent.",
+        "confidence": "high",
+        "dependsOn": [
+          "c12"
+        ],
+        "sourceQuote": "Live Test can show a URL as available on one crawl and still get blocked on a subsequent one if there's a stale rule sitting at the server or CDN level"
+      },
+      {
+        "id": "c14",
+        "text": "SEO tools like Yoast check page source for blocking rules but cannot detect server or CDN layer rules",
+        "type": "implementation-detail",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "These tools analyze HTML/meta tags but not infrastructure configuration.",
+        "confidence": "high",
+        "dependsOn": [
+          "c12"
+        ],
+        "sourceQuote": "rather than in the page source Yoast checks"
+      },
+      {
+        "id": "c15",
+        "text": "Heavy scraping history in Wayback indicates a toxic inherited reputation",
+        "type": "inference",
+        "evidenceClass": "widely-accepted-practice",
+        "evidenceDetail": "A history of scraped content is recognized in SEO as an indicator of penalties.",
+        "confidence": "high",
+        "dependsOn": [
+          "c1",
+          "c4"
+        ],
+        "sourceQuote": "If the Wayback history shows heavy scraping"
+      },
+      {
+        "id": "c16",
+        "text": "If no manual action is shown in GSC, a reconsideration request will not be applicable",
+        "type": "inference",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "Reconsideration requests apply only to manual actions; without one, there is nothing to reconsider.",
+        "confidence": "high",
+        "dependsOn": [
+          "c7"
+        ],
+        "sourceQuote": "there's no manual action in GSC, a reconsideration request won't apply"
+      },
+      {
+        "id": "c17",
+        "text": "Disavow the inherited toxic backlink profile",
+        "type": "recommendation",
+        "evidenceClass": "unknown",
+        "evidenceDetail": "Using Google's disavow tool to reject low-quality inherited backlinks is standard SEO remediation.",
+        "confidence": "high",
+        "dependsOn": [
+          "c15"
+        ],
+        "sourceQuote": "disavowing the toxic inherited backlink profile"
+      },
+      {
+        "id": "c18",
+        "text": "Remove the mass redirect",
+        "type": "recommendation",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "Removing a potentially suspicious redirect pattern is logical remediation if c9's concern is valid.",
+        "confidence": "high",
+        "dependsOn": [
+          "c9"
+        ],
+        "sourceQuote": "removing the mass redirect are things you can actually do"
+      },
+      {
+        "id": "c19",
+        "text": "Taking active remedial actions is preferable to passive waiting",
+        "type": "opinion",
+        "evidenceClass": "operator-experience",
+        "evidenceDetail": "The author expresses a preference based on practitioner experience.",
+        "confidence": "medium",
+        "dependsOn": [
+          "c16",
+          "c17",
+          "c18"
+        ],
+        "sourceQuote": "things you can actually do instead of just waiting"
+      }
+    ],
+    "contradictions": [
+      {
+        "claimId": "c5",
+        "kind": "alternative-explanation",
+        "statement": "Whether cleanup must be active depends on violation TYPE (manual action vs algorithmic) and whether toxic backlinks/spam exist — not on how long the prior activity ran. A scraper farm active for 2 weeks can trigger manual action (needs reconsideration request = active cleanup); a decade of low-quality-but-non-spammy content can resolve algorithmically once removed. Duration is not the discriminating variable — the reply's own next bullet (check GSC Security & Manual Actions) is the actual test, undermining duration as the indicator.",
+        "evidenceClass": "widely-accepted-practice",
+        "evidenceDetail": "Google Search Central manual actions documentation: manual actions are issued per violation instance/type, not scaled by duration; a brief but egregious spam period (e.g. hacked injection) still triggers a manual action requiring explicit reconsideration.",
+        "fatal": true
+      },
+      {
+        "claimId": "c5",
+        "kind": "known-exception",
+        "statement": "Algorithmic distrust from toxic backlinks (the 'residual' case) frequently still requires active cleanup — submitting a disavow file — rather than passive waiting. So even the 'residual algorithmic distrust' branch of the claimed dichotomy often needs the same active remediation as the 'manual action' branch, collapsing the distinction the claim relies on.",
+        "evidenceClass": "widely-accepted-practice",
+        "evidenceDetail": "Google's disavow links tool guidance: recommended for algorithmic (non-manual-action) link-spam distrust, explicitly framed as active cleanup, not wait-it-out.",
+        "fatal": true
+      },
+      {
+        "claimId": "c5",
+        "kind": "counterexample",
+        "statement": "A long-running but low-severity issue (e.g. years of thin auto-generated content with no spammy backlinks) can carry algorithmic distrust that clears passively once content quality improves — while a short-lived but severe issue (e.g. brief cloaking or hacked-spam period) can trigger a manual action that never clears without reconsideration, regardless of how short it was. This shows duration and required-action-type vary independently, not monotonically as the claim implies.",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "Contrast between Google's manual spam actions (triggered by violation severity/type, e.g. pure spam, cloaking, hacked content) versus algorithmic quality signals (triggered by aggregate content signals correlating more with volume/severity than elapsed time).",
+        "fatal": false
+      },
+      {
+        "claimId": "c6",
+        "kind": "counterexample",
+        "statement": "Many manual-action types don't touch indexing at all — they suppress rankings or devalue links while the page stays fully indexed. 'Unnatural links to your site' / 'Unnatural links from your site' penalties are the classic case: Google's own docs frame these as link-equity/ranking suppression, not removal. Affected pages keep showing 'Submitted and indexed' in Coverage — no 'not indexed' signal ever appears.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "Google Search Central 'Manual actions report' doc — action types split into deindexing (pure spam, site-wide hacked content) vs. ranking/link suppression (unnatural links to/from site) with no required Coverage change for the latter.",
+        "fatal": true
+      },
+      {
+        "claimId": "c6",
+        "kind": "contradictory-documentation",
+        "statement": "\"Without clear labeling\" is wrong — GSC's Security & Manual Actions report names the exact violation type (pure spam, unnatural links, thin content, etc.), scope (site-wide/partial), and triggers an email + Message-center alert the moment it's applied. That's unambiguous labeling; it's just not surfaced in the Coverage report, which is a separate tool.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "Google Search Console Help — Manual Actions report + automatic email/message notification on action application.",
+        "fatal": true
+      },
+      {
+        "claimId": "c9",
+        "kind": "alternative-explanation",
+        "statement": "Google's own guidance names a different, specific mechanism for exactly this pattern (bulk-redirecting removed/unrelated URLs to a homepage): soft-404 misclassification. Google's Search Central documentation on HTTP/network errors and on site moves warns that redirecting pages to a destination whose content doesn't match the original request — homepage catch-alls being the canonical example — gets flagged as a soft 404, meaning Google treats the URL as effectively non-existent and does not pass ranking signals through it at all. That is a crawl/indexing quality classification, not a link-spam/manipulation classification, and its outcome is the opposite of 'consolidation' — no equity is merged into the homepage, the URL is just dropped.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "Google Search Central Help: 'Soft 404 errors' (crawling-indexing/http-network-errors) and 'Site moves with URL changes' guidance — both identify blanket redirect-to-homepage as a soft-404 risk specifically, not as manipulative link consolidation.",
+        "fatal": true
+      },
+      {
+        "claimId": "c9",
+        "kind": "contradictory-documentation",
+        "statement": "Google's Spam Policies define 'link spam' / manipulative link schemes around artificially acquired third-party links — buying/selling links, excessive link exchanges, automated link-building services, PBNs. Redirecting URLs a site owner already controls to that same owner's homepage involves no third-party link acquisition and doesn't fall under that taxonomy at all. The only redirect-specific spam category Google names is 'sneaky redirects,' which requires showing crawlers and users different destinations (cloaking-style mismatch) — not present in a plain, consistent 301.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "Google Search Essentials — Spam Policies for Google Web Search, 'Link spam' and 'Sneaky redirects' sections.",
+        "fatal": false
+      },
+      {
+        "claimId": "c9",
+        "kind": "counterexample",
+        "statement": "Many-to-one redirect consolidation at large scale is standard, Google-endorsed practice during legitimate site migrations, domain merges, and forum/CMS shutdowns — often affecting hundreds of thousands of URLs redirected to a small set of targets, homepage included when no closer match exists. This is routine and not treated as manipulative by itself; the documented risk is specifically the 'irrelevant destination' case (soft 404), not the many-to-one cardinality.",
+        "evidenceClass": "widely-accepted-practice",
+        "evidenceDetail": "Google's own site-move migration guidance recommends 301s to the closest relevant equivalent, falling back to homepage only when no match exists — presented as normal migration technique, not as a manipulation risk.",
+        "fatal": false
+      },
+      {
+        "claimId": "c10",
+        "kind": "configuration-dependency",
+        "statement": "Mass redirecting many legacy URLs to one target is not inherently penalized — Google's own site-migration guidance recommends 301-ing deprecated/removed URLs to the closest relevant replacement, and whether a many-to-one pattern reads as manipulative depends on topical relevance and redirect ratio, not on the act itself. So the 'additional damage' is conditional on the redirect looking deceptive (unrelated URLs consolidated to boost one target), not a guaranteed independent penalty source that applies on top of any inherited domain reputation.",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "Google Search Central site-move/redirect guidance + John Mueller's repeated Webmaster Hangout statements that redirect consolidation is only treated as manipulative when relevance/intent signals point that way",
+        "fatal": false
+      },
+      {
+        "claimId": "c10",
+        "kind": "alternative-explanation",
+        "statement": "The same symptom (redirected pages/domain not recovering rankings) is equally explained by Google simply not passing ranking value through the redirect at all — treating it as a weak/irrelevant signal and discounting it — rather than by an active, additive 'reputation damage' layered on top of inherited distrust. Non-transfer of signal and imposition of an extra penalty are mechanically different outcomes that produce identical observable symptoms, so the claim's causal attribution isn't uniquely supported by what's described.",
+        "evidenceClass": "community-knowledge",
+        "evidenceDetail": "Documented Google guidance/statements that redirects can be algorithmically discounted or ignored when the pattern doesn't look like a genuine 1:1 content move, as opposed to actively penalized",
+        "fatal": false
+      },
+      {
+        "claimId": "c10",
+        "kind": "edge-case",
+        "statement": "Framing the two effects as literally 'separate and additional' implies a modular, additive scoring architecture (domain-history penalty + redirect-manipulation penalty stacked). Google's spam/quality systems (e.g. SpamBrain, core ranking systems) are not publicly documented as linear point-additive; they're holistic classifiers. Asserting additivity as fact goes beyond what's actually known about the mechanism, even though the practical advice (check both independently) is reasonable.",
+        "evidenceClass": "unsupported",
+        "evidenceDetail": "No published Google documentation describes discrete, additive penalty buckets for inherited domain reputation vs. redirect-consolidation patterns",
+        "fatal": false
+      },
+      {
+        "claimId": "c12",
+        "kind": "known-exception",
+        "statement": "A robots.txt disallow at the server/CDN layer blocks crawling but does not by itself block indexing — Google can still index a URL it is disallowed from crawling (via external links/anchor text), showing it in results with 'No information is available for this page.' So 'block crawling and indexing' as a single joint outcome from one rule overstates robots.txt's effect; noindex (meta or X-Robots-Tag) is the mechanism that actually blocks indexing.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "Google Search Central docs on robots.txt: disallowed-but-linked URLs can still appear indexed without a snippet; distinct from the noindex directive which is the actual indexing blocker",
+        "fatal": false
+      },
+      {
+        "claimId": "c12",
+        "kind": "configuration-dependency",
+        "statement": "Major CDNs/WAFs (Cloudflare, Akamai, Fastly) ship default verified-bot allowlists that pass through Googlebot/Bingbot by IP+UA validation, so enabling CDN security/bot-management does not automatically block search engine crawling — it requires a specific misconfiguration (e.g., strict ASN/rate rules, 'Under Attack' JS challenge applied indiscriminately, or an old bot-fight rule not updated) for Googlebot to actually get blocked.",
+        "evidenceClass": "widely-accepted-practice",
+        "evidenceDetail": "Cloudflare/Akamai bot-management docs: verified bot categories exempted from challenge/block rules by default",
+        "fatal": false
+      },
+      {
+        "claimId": "c14",
+        "kind": "counterexample",
+        "statement": "GSC's URL Inspection 'Live Test' — referenced two lines earlier in the same reply — fetches the URL live through Google's own fetcher, reading the actual HTTP response and the live robots.txt as served (including whatever an edge/CDN rule injects), and reports if the fetched URL is blocked. That is direct server/CDN-layer detection by an SEO tool, not page-source scanning.",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "Google Search Console URL Inspection Tool / Live Test behavior",
+        "fatal": true
+      },
+      {
+        "claimId": "c14",
+        "kind": "counterexample",
+        "statement": "Screaming Frog SEO Spider, a mainstream tool in the same class as Yoast, explicitly parses the X-Robots-Tag HTTP response header and fetches live robots.txt directives during a crawl — both are server-layer signals, not meta tags scraped from page source.",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "Screaming Frog directives/response-header reporting (X-Robots-Tag column, robots.txt tab)",
+        "fatal": true
+      },
+      {
+        "claimId": "c14",
+        "kind": "configuration-dependency",
+        "statement": "Even granting the narrower point about Yoast specifically: crawler-based tools (Screaming Frog, Sitebulb, Ahrefs Site Audit) still crawl from their own IP/user-agent, not Googlebot's — so CDN/WAF rules that block or cloak specifically for Googlebot's UA/IP range won't surface even in those header-aware tools. This limits, but doesn't eliminate, the counterexamples above.",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "Bot-specific CDN/WAF rules (e.g., Cloudflare bot-fight rules keyed on Googlebot verification) evade non-Googlebot crawlers regardless of whether the crawler reads headers",
+        "fatal": false
+      },
+      {
+        "claimId": "c15",
+        "kind": "alternative-explanation",
+        "statement": "Wayback Machine captures come from Internet Archive's own crawler (Heritrix / 'ia_archiver', plus user-submitted 'Save Page Now' captures) — a system entirely separate from Googlebot and Google's ranking/trust pipeline. Google does not ingest archive.org snapshot data as a trust or ranking signal. The actual determinants of 'toxic reputation' are GSC manual actions and algorithmic systems (SpamBrain link-spam detection, Panda/helpful-content-style content evaluation) acting on current content and backlink profile — not on how many times IA happened to crawl the domain. So Wayback history can tell you what the site used to be (forensics), but it cannot itself 'indicate' Google's algorithmic distrust — that requires the GSC manual-actions check the reply separately (and correctly) recommends.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "Internet Archive's documented independent crawling infrastructure vs. Google Search Central's Manual Actions / Search Essentials documentation as the actual source of spam-reputation signals",
+        "fatal": true
+      },
+      {
+        "claimId": "c15",
+        "kind": "counterexample",
+        "statement": "Snapshot density/frequency in Wayback correlates mainly with site size, popularity, update cadence, and historical crawl-priority feeds (e.g. former Alexa Toolbar data), not with content toxicity. Massive, entirely reputable sites (major news outlets, large e-commerce catalogs, Wikipedia mirrors) show some of the heaviest capture histories on record with zero toxic reputation — so 'heavy' capture volume alone doesn't discriminate a scraper farm from a large legitimate site.",
+        "evidenceClass": "observed-runtime-behaviour",
+        "evidenceDetail": "Comparative Wayback capture-count behavior for high-volume legitimate domains vs. spam domains",
+        "fatal": false
+      },
+      {
+        "claimId": "c15",
+        "kind": "configuration-dependency",
+        "statement": "Whether a prior owner's bad reputation actually inherits to a new owner depends on whether Google's demotion was manual-action-based (attached to the property, persists across ownership transfer until a reconsideration request is filed and granted) vs. purely algorithmic/content-tied (which typically fades once content is fully replaced and recrawled). Wayback snapshot history cannot distinguish which of these applies — only the GSC Manual Actions report can, which is a separate check the reply itself lists.",
+        "evidenceClass": "framework-documentation",
+        "evidenceDetail": "Google Search Central guidance distinguishing manual actions (persist until reconsideration) from algorithmic demotions (content/recrawl-dependent)",
+        "fatal": false
+      },
+      {
+        "claimId": "c16",
+        "kind": "configuration-dependency",
+        "statement": "Manual actions are scoped to the specific verified property being viewed. If the site is checked via a URL-prefix property (e.g. https://example.com/) rather than a Domain property, a manual action applied to a different host/protocol variant (www vs non-www, http vs https, a subdomain) can exist and simply not display for the property being checked — meaning 'not shown' can be a false negative rather than proof no manual action exists.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "Google Search Console Help — Manual Actions report documentation states the report reflects actions against the currently selected property; Google recommends the Domain property specifically to see the full picture across all site variants.",
+        "fatal": false
+      },
+      {
+        "claimId": "c16",
+        "kind": "configuration-dependency",
+        "statement": "A GSC user with 'Restricted' permission level cannot view the Security & Manual Actions report at all. In that case 'no manual action is shown' reflects a permissions gap, not an absence of manual action — full/owner access is required to see it.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "Google Search Console Help — user permission levels documentation: Restricted users are excluded from Security & Manual Actions data.",
+        "fatal": false
+      }
+    ],
+    "epistemic": [
+      {
+        "claimId": "c3",
+        "languageCertainty": "asserted",
+        "supportedCertainty": "medium",
+        "quote": "pull snapshots from before you bought it and see what the site actually was",
+        "detail": "asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence"
+      },
+      {
+        "claimId": "c6",
+        "languageCertainty": "asserted",
+        "supportedCertainty": "medium",
+        "quote": "A manual action won't necessarily show up as anything other than 'not indexed' in coverage",
+        "detail": "asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence"
+      },
+      {
+        "claimId": "c8",
+        "languageCertainty": "asserted",
+        "supportedCertainty": "unknown",
+        "quote": "Whether the blanket redirect of all those legacy URLs to your homepage is still live",
+        "detail": "stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim"
+      },
+      {
+        "claimId": "c12",
+        "languageCertainty": "asserted",
+        "supportedCertainty": "unknown",
+        "quote": "if there's a stale rule sitting at the server or CDN level rather than in the page source",
+        "detail": "stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim"
+      },
+      {
+        "claimId": "c14",
+        "languageCertainty": "asserted",
+        "supportedCertainty": "medium",
+        "quote": "rather than in the page source Yoast checks",
+        "detail": "asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence"
+      },
+      {
+        "claimId": "c15",
+        "languageCertainty": "asserted",
+        "supportedCertainty": "medium",
+        "quote": "If the Wayback history shows heavy scraping",
+        "detail": "asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence"
+      },
+      {
+        "claimId": "c16",
+        "languageCertainty": "asserted",
+        "supportedCertainty": "medium",
+        "quote": "there's no manual action in GSC, a reconsideration request won't apply",
+        "detail": "asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence"
+      },
+      {
+        "claimId": "c17",
+        "languageCertainty": "asserted",
+        "supportedCertainty": "unknown",
+        "quote": "disavowing the toxic inherited backlink profile",
+        "detail": "stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim"
+      },
+      {
+        "claimId": "c18",
+        "languageCertainty": "asserted",
+        "supportedCertainty": "medium",
+        "quote": "removing the mass redirect are things you can actually do",
+        "detail": "asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence"
+      }
+    ],
+    "resolution": {
+      "resolved": false,
+      "signals": [],
+      "detail": "no resolution signal found"
+    },
+    "invalidated": [
+      {
+        "claimId": "c7",
+        "becauseOf": "c6"
+      },
+      {
+        "claimId": "c10",
+        "becauseOf": "c9"
+      },
+      {
+        "claimId": "c13",
+        "becauseOf": "c12"
+      },
+      {
+        "claimId": "c16",
+        "becauseOf": "c6"
+      },
+      {
+        "claimId": "c18",
+        "becauseOf": "c9"
+      },
+      {
+        "claimId": "c19",
+        "becauseOf": "c6"
+      }
+    ],
+    "refutation_ran": [
+      "c5",
+      "c6",
+      "c9",
+      "c10",
+      "c12",
+      "c13",
+      "c14",
+      "c15",
+      "c16"
+    ]
+  },
+  "status": {
+    "ground_truth": "pending",
+    "calibration": "pending",
+    "benchmark": "regression-only",
+    "blocked_by": [
+      "no human verdict",
+      "no ground-truth sources attached",
+      "ground truth not approved",
+      "0 of 19 claims reviewed"
+    ]
+  }
+}

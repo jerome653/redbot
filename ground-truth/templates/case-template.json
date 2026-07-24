@@ -1,0 +1,81 @@
+{
+  "id": "CASE-ID",
+  "schema_version": "1.0",
+  "draft_id": "d_<threadhash>_<suffix>",
+  "notes": "One paragraph: why this case exists and what failure class it represents.",
+  "thread": {
+    "thread_id": "<generated>",
+    "subreddit": "<generated>",
+    "permalink": "<generated>",
+    "title": "<generated>",
+    "body": "<generated>",
+    "comment_count": 0,
+    "resolved": false
+  },
+  "draft": {
+    "body": "<generated — the reply verbatim>",
+    "created_at": "<generated>",
+    "model": "<generated>",
+    "contribution": null
+  },
+  "human_review": {
+    "verdict": "correct | incorrect | partially-correct | unlabelled",
+    "reviewer": "name, or null if unreviewed",
+    "reviewed_at": "YYYY-MM-DD, or null",
+    "notes": "What the reviewer concluded and on what grounds."
+  },
+  "ground_truth": {
+    "sources": [
+      {
+        "assertion": "What is true.",
+        "source": "Where it is documented.",
+        "source_type": "official-documentation | specification | rfc | vendor-documentation | source-code | reproducible-runtime-behaviour | primary-observation | qualified-human-review",
+        "url": null,
+        "verification": "How and when checked. Say so if inherited rather than re-checked."
+      }
+    ],
+    "claims_reviewed": 0,
+    "claim_labels": [
+      {
+        "claim_id": "c1",
+        "truth": "true | false | unverifiable | depends",
+        "expected_provenance": "the evidence class the claim actually warrants",
+        "expected_epistemic": "asserted | hedged | explicitly-uncertain",
+        "rests_on": [],
+        "note": "Why."
+      }
+    ],
+    "expected_claims": null
+  },
+  "expected": {
+    "verdict": [
+      "REJECT"
+    ],
+    "appropriate": "REJECT | ESCALATE | CERTIFIED | null",
+    "rules_required": [],
+    "rules_forbidden": [
+      "all-claims-supported"
+    ]
+  },
+  "argus_observed": {
+    "certified_at": "<generated>",
+    "model": "<generated>",
+    "verdict": "<generated>",
+    "claims": [],
+    "contradictions": [],
+    "epistemic": [],
+    "resolution": {},
+    "invalidated": [],
+    "refutation_ran": [
+      "claim ids whose refutation COMPLETED — from the run output, not inferable from the record"
+    ]
+  },
+  "status": {
+    "ground_truth": "pending",
+    "calibration": "pending",
+    "benchmark": "regression-only",
+    "blocked_by": [
+      "computed by validate.mjs"
+    ]
+  }
+}

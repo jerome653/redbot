@@ -1,0 +1,164 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://sgen.local/agtc/case.schema.json",
+  "title": "Argus Ground Truth Corpus — case",
+  "description": "One independently labelled technical draft. The permanent unit of evaluation for Argus. Machine-supplied fields record what the pipeline DID; human-supplied fields record what is TRUE. The two must never be merged, and ground truth must never originate from a language model.",
+  "type": "object",
+  "required": [
+    "id", "schema_version", "draft_id", "thread", "draft",
+    "human_review", "ground_truth", "expected", "argus_observed", "status"
+  ],
+  "additionalProperties": false,
+
+  "properties": {
+    "id":             { "type": "string", "pattern": "^[A-Z0-9-]{3,32}$" },
+    "schema_version": { "type": "string", "const": "1.0" },
+    "draft_id":       { "type": "string" },
+    "notes":          { "type": "string" },
+
+    "thread": {
+      "type": "object",
+      "required": ["thread_id", "subreddit", "permalink", "title", "body", "comment_count", "resolved"],
+      "additionalProperties": false,
+      "properties": {
+        "thread_id":     { "type": "string" },
+        "subreddit":     { "type": "string" },
+        "permalink":     { "type": "string" },
+        "title":         { "type": "string" },
+        "body":          { "type": ["string", "null"] },
+        "comment_count": { "type": "integer", "minimum": 0 },
+        "resolved":      { "type": "boolean", "description": "Deterministic resolution detection, not a judgement." }
+      }
+    },
+
+    "draft": {
+      "type": "object",
+      "required": ["body", "created_at", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "body":       { "type": "string", "description": "The reply verbatim, as generated. Never edited in place." },
+        "created_at": { "type": "string" },
+        "model":      { "type": "string" },
+        "contribution": { "type": ["object", "null"], "description": "The draft's own stated case for itself. A claim, not evidence." }
+      }
+    },
+
+    "human_review": {
+      "type": "object",
+      "required": ["verdict", "reviewer", "reviewed_at", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["correct", "incorrect", "partially-correct", "unlabelled"],
+          "description": "unlabelled means no human has reviewed this draft. It is not a verdict; it is the absence of one."
+        },
+        "reviewer":    { "type": ["string", "null"] },
+        "reviewed_at": { "type": ["string", "null"] },
+        "notes":       { "type": "string" }
+      }
+    },
+
+    "ground_truth": {
+      "type": "object",
+      "required": ["sources", "claims_reviewed", "claim_labels"],
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "type": "array",
+          "description": "Where the truth comes from. NEVER another model.",
+          "items": {
+            "type": "object",
+            "required": ["assertion", "source", "source_type", "verification"],
+            "additionalProperties": false,
+            "properties": {
+              "assertion":   { "type": "string" },
+              "source":      { "type": "string" },
+              "source_type": {
+                "type": "string",
+                "enum": [
+                  "official-documentation", "specification", "rfc", "vendor-documentation",
+                  "source-code", "reproducible-runtime-behaviour", "primary-observation",
+                  "qualified-human-review"
+                ]
+              },
+              "url":          { "type": ["string", "null"] },
+              "verification": { "type": "string", "description": "How and when it was checked, including if it was inherited from an earlier investigation rather than re-checked." }
+            }
+          }
+        },
+        "claims_reviewed": {
+          "type": "integer", "minimum": 0,
+          "description": "How many of the extracted claims a human has actually adjudicated."
+        },
+        "claim_labels": {
+          "type": "array",
+          "description": "Per-claim human adjudication. One entry per REVIEWED claim; absence means unreviewed, never 'fine'.",
+          "items": {
+            "type": "object",
+            "required": ["claim_id", "truth", "expected_provenance", "expected_epistemic"],
+            "additionalProperties": false,
+            "properties": {
+              "claim_id":            { "type": "string" },
+              "truth":               { "type": "string", "enum": ["true", "false", "unverifiable", "depends"] },
+              "expected_provenance": { "type": "string", "description": "The evidence class the claim actually warrants." },
+              "expected_epistemic":  { "type": "string", "enum": ["asserted", "hedged", "explicitly-uncertain"] },
+              "rests_on":            { "type": "array", "items": { "type": "string" } },
+              "note":                { "type": "string" }
+            }
+          }
+        },
+        "expected_claims": {
+          "type": ["array", "null"],
+          "description": "Human-authored decomposition of what SHOULD have been extracted. null means not authored — required before extraction precision/recall can be scored. Never inferred from what the model produced.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "expected": {
+      "type": "object",
+      "required": ["verdict", "rules_required", "rules_forbidden"],
+      "additionalProperties": false,
+      "properties": {
+        "verdict":         { "type": "array", "items": { "type": "string", "enum": ["CERTIFIED", "ESCALATE", "REJECT"] } },
+        "appropriate":     { "type": ["string", "null"], "enum": ["CERTIFIED", "ESCALATE", "REJECT", null], "description": "The verdict the human review implies. null when unlabelled." },
+        "rules_required":  { "type": "array", "items": { "type": "string" } },
+        "rules_forbidden": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "argus_observed": {
+      "type": "object",
+      "description": "MACHINE-SUPPLIED. Copied verbatim from data/certifications.jsonl. Never hand-edited.",
+      "required": ["certified_at", "model", "verdict", "claims", "contradictions", "epistemic", "resolution", "refutation_ran"],
+      "additionalProperties": false,
+      "properties": {
+        "certified_at":   { "type": "string" },
+        "model":          { "type": "string" },
+        "verdict":        { "type": "string" },
+        "claims":         { "type": "array" },
+        "contradictions": { "type": "array" },
+        "epistemic":      { "type": "array" },
+        "resolution":     { "type": "object" },
+        "invalidated":    { "type": "array" },
+        "refutation_ran": {
+          "type": "array", "items": { "type": "string" },
+          "description": "Claim ids whose refutation call COMPLETED. Not recoverable from certifications.jsonl (EB-40) — recorded here from the run output so the case replays faithfully."
+        }
+      }
+    },
+
+    "status": {
+      "type": "object",
+      "required": ["ground_truth", "calibration", "benchmark"],
+      "additionalProperties": false,
+      "properties": {
+        "ground_truth": { "type": "string", "enum": ["pending", "approved"] },
+        "calibration":  { "type": "string", "enum": ["pending", "approved"] },
+        "benchmark":    { "type": "string", "enum": ["regression-only", "scoring"] },
+        "blocked_by":   { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

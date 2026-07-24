@@ -1,0 +1,777 @@
+<title>redbot — interface</title>
+<style>
+/* ============================================================
+   redbot
+   Information architecture follows redbot's own job:
+     Inbox → Discovery → Voices → Rhythm → Outcomes
+   Not a task manager. You open it and you are already working.
+   Their words: serif, recessed surface. Ours: sans, clean paper.
+   ============================================================ */
+:root{
+  --paper:#FBFAF7; --field:#F1EDE6; --shell:#F6F3ED;
+  --ink:#17161A; --ink-2:#4A4852; --ink-3:#6E747C;
+  --line:#E2DCD2; --line-2:#C9CDD2;
+  --accent:#C41E1A; --accent-soft:rgba(196,30,26,.09);
+  --go:#1F6F4A;   --go-soft:rgba(31,111,74,.10);
+  --hold:#8A6A2B; --hold-soft:rgba(138,106,43,.10);
+  --silver:#7C8288; --silver-soft:rgba(124,130,136,.12);
+  --cold:#7C8288; --cold-soft:rgba(124,130,136,.12);
+  --sans:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+  --mono:"Cascadia Mono",ui-monospace,"SF Mono",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --paper:#131316;--field:#1B1A1F;--shell:#0F0F12;--ink:#EDEAE4;--ink-2:#B4B0AB;--ink-3:#87838C;
+  --line:#2A2830;--line-2:#37343E;--accent:#E8352A;--accent-soft:rgba(232,53,42,.16);
+  --go:#5FBF8E;--go-soft:rgba(95,191,142,.13);--hold:#D8A94E;--hold-soft:rgba(216,169,78,.13);
+  --silver:#A9AFB6;--silver-soft:rgba(169,175,182,.14);--cold:#A9AFB6;--cold-soft:rgba(169,175,182,.14)}}
+:root[data-theme="light"]{--paper:#FBFAF7;--field:#F1EDE6;--shell:#F6F3ED;--ink:#17161A;--ink-2:#4A4852;--ink-3:#6E747C;--line:#E2DCD2;--line-2:#C9CDD2;--accent:#C41E1A;--accent-soft:rgba(196,30,26,.09);--go:#1F6F4A;--go-soft:rgba(31,111,74,.10);--hold:#8A6A2B;--hold-soft:rgba(138,106,43,.10);--silver:#7C8288;--silver-soft:rgba(124,130,136,.12);--cold:#7C8288;--cold-soft:rgba(124,130,136,.12)}
+:root[data-theme="dark"]{--paper:#131316;--field:#1B1A1F;--shell:#0F0F12;--ink:#EDEAE4;--ink-2:#B4B0AB;--ink-3:#87838C;--line:#2A2830;--line-2:#37343E;--accent:#E8352A;--accent-soft:rgba(232,53,42,.16);--go:#5FBF8E;--go-soft:rgba(95,191,142,.13);--hold:#D8A94E;--hold-soft:rgba(216,169,78,.13);--silver:#A9AFB6;--silver-soft:rgba(169,175,182,.14);--cold:#A9AFB6;--cold-soft:rgba(169,175,182,.14)}
+
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+h1,h2{margin:0;text-wrap:balance;font-weight:600;letter-spacing:-.012em}
+[hidden]{display:none!important}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+/* ---- top bar: identity + the one number that matters ---- */
+.bar{display:flex;align-items:center;gap:1.1rem;padding:.7rem 1.4rem;border-bottom:1px solid var(--line);background:var(--shell);position:sticky;top:0;z-index:30}
+.logo{display:flex;align-items:center;gap:.5rem;font-family:var(--mono);font-weight:700;font-size:.92rem;letter-spacing:.03em}
+.logo svg{width:23px;height:23px;display:block;flex:none;margin-top:-1px}
+
+.lg-red{color:var(--silver);letter-spacing:.02em}
+.lg-bot{color:var(--accent);letter-spacing:.02em}
+.steps{display:flex;align-items:center;gap:.15rem;margin-left:.4rem}
+.step{appearance:none;border:0;background:none;cursor:pointer;font:inherit;font-size:.83rem;color:var(--ink-3);padding:.35rem .7rem;border-radius:5px;display:flex;align-items:center;gap:.4rem}
+.step:hover{background:var(--accent-soft);color:var(--ink)}
+.step[aria-current="page"]{background:var(--paper);color:var(--ink);font-weight:600;box-shadow:inset 0 0 0 1px var(--line-2)}
+.step:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.step b{font-family:var(--mono);font-size:.7rem;font-weight:700;padding:.05rem .32rem;border-radius:3px;background:var(--accent);color:#fff}
+.step .g{font-family:var(--mono);font-size:.7rem;color:var(--ink-3)}
+.arrow{color:var(--line-2);font-size:.7rem}
+.right{margin-left:auto;display:flex;align-items:center;gap:.5rem}
+select.sel,button.mini{font:inherit;font-family:var(--mono);font-size:.72rem;background:var(--paper);color:var(--ink);border:1px solid var(--line-2);border-radius:5px;padding:.28rem .55rem;cursor:pointer}
+button.mini:hover{border-color:var(--ink-3)}
+.banner{padding:.5rem 1.4rem;background:var(--hold-soft);border-bottom:1px solid color-mix(in srgb,var(--hold) 28%,transparent);font-size:.74rem;color:var(--ink-2)}
+.banner b{color:var(--hold)}
+.sheet{padding:1.6rem 1.8rem 2.4rem;max-width:1500px}
+h2.sec{font-size:1.05rem;margin-bottom:1rem;letter-spacing:-.014em}
+h2.sec + .vtop{margin-bottom:1.1rem}
+
+/* ---- pulse strip: state of the world, one line ---- */
+/* Five metrics, five columns. An auto-fit here wraps the fifth onto a row of its own. */
+.pulse{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1px;
+  background:var(--line);border-bottom:1px solid var(--line)}
+@media (max-width:1100px){.pulse{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:640px){.pulse{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.p{padding:.85rem 1.2rem;background:var(--paper);display:flex;flex-direction:column;gap:.2rem}
+.p b{font-family:var(--mono);font-size:1.45rem;font-variant-numeric:tabular-nums;line-height:1.05;letter-spacing:-.01em}
+.p span{font-size:.66rem;color:var(--ink-3);font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase}
+.p.good b{color:var(--go)} .p.warn b{color:var(--hold)} .p.bad b{color:var(--accent)}
+.p.act{cursor:pointer} .p.act:hover{background:var(--accent-soft)}
+
+/* ---- inbox ---- */
+.work{display:grid;grid-template-columns:280px 1fr;min-height:calc(100vh - 160px)}
+@media (max-width:1180px){.work{grid-template-columns:1fr}.stack{max-height:190px}}
+.stack{border-right:1px solid var(--line);background:var(--field);overflow-y:auto}
+.stack-h{padding:.65rem .9rem .4rem;font-size:.63rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-family:var(--mono);display:flex;justify-content:space-between}
+.card-q{width:100%;text-align:left;appearance:none;background:none;cursor:pointer;border:0;border-bottom:1px solid var(--line);padding:.6rem .9rem;display:grid;grid-template-columns:auto 1fr;gap:.55rem;font:inherit}
+.card-q:hover{background:var(--accent-soft)}
+.card-q[aria-current="true"]{background:var(--paper);box-shadow:inset 3px 0 0 var(--accent)}
+.card-q:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.sc{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:.9rem;font-weight:700;width:2rem;text-align:right;color:var(--ink-2)}
+.sc.hi{color:var(--accent)}
+.ct{font-size:.8rem;line-height:1.34}
+.cm{font-family:var(--mono);font-size:.63rem;color:var(--ink-3);margin-top:.2rem}
+.empty{padding:2.2rem 1rem;text-align:center;color:var(--ink-3);font-size:.83rem}
+.split{display:grid;grid-template-columns:1fr 1fr;min-width:0}
+@media (max-width:1180px){.split{grid-template-columns:1fr}}
+.side{padding:1.25rem 1.4rem;min-width:0;overflow-wrap:break-word}
+.side.theirs{background:var(--field);border-right:1px solid var(--line)}
+.lbl{font-family:var(--mono);font-size:.63rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);margin-bottom:.8rem;display:flex;gap:.55rem;align-items:center}
+.lbl::after{content:"";flex:1;height:1px;background:var(--line-2)}
+.tt{font-family:var(--serif);font-size:1.26rem;line-height:1.3;margin-bottom:.4rem}
+.tm{font-family:var(--mono);font-size:.7rem;color:var(--ink-3);margin-bottom:.85rem}
+.tb{font-family:var(--serif);font-size:.98rem;line-height:1.67;color:var(--ink-2);white-space:pre-wrap}
+.why{margin:1.05rem 0;padding:.72rem .85rem;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 5px 5px 0;font-size:.82rem}
+.why b{display:block;font-family:var(--mono);font-size:.63rem;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);margin-bottom:.25rem}
+.editor{background:var(--paper);border:1px solid var(--line-2);border-radius:6px;padding:.9rem 1rem;font-size:.92rem;line-height:1.62;white-space:pre-wrap;min-height:175px}
+.editor:focus{outline:2px solid var(--accent);outline-offset:1px}
+.ok-pill{margin-top:.8rem;display:inline-flex;align-items:center;gap:.4rem;font-size:.74rem;color:var(--go);background:var(--go-soft);border:1px solid color-mix(in srgb,var(--go) 30%,transparent);padding:.26rem .58rem;border-radius:100px}
+.gates{margin-top:.85rem;display:flex;flex-direction:column;gap:.28rem}
+.gate{display:flex;gap:.5rem;font-size:.77rem;color:var(--ink-2)}
+.gate i{font-style:normal;font-family:var(--mono);color:var(--go)}
+.do{margin-top:1.25rem;padding-top:.95rem;border-top:1px solid var(--line);display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+button.b{appearance:none;font:inherit;font-size:.85rem;font-weight:600;cursor:pointer;padding:.5rem 1rem;border-radius:5px;border:1px solid var(--line-2);background:var(--paper);color:var(--ink)}
+button.b:hover{border-color:var(--ink-3)}
+button.b.send{background:var(--accent);border-color:var(--accent);color:#fff}
+button.b.send:hover{filter:brightness(1.08)}
+button.b:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.keys{font-family:var(--mono);font-size:.68rem;color:var(--ink-3);margin-left:auto}
+kbd{font-family:var(--mono);font-size:.66rem;border:1px solid var(--line-2);border-bottom-width:2px;border-radius:3px;padding:.03rem .28rem}
+
+/* ---- tables ---- */
+table{width:100%;border-collapse:collapse;font-size:.83rem}
+th{text-align:left;font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:600;padding:.6rem .75rem;border-bottom:1px solid var(--line-2)}
+td{padding:.7rem .75rem;border-bottom:1px solid var(--line);vertical-align:middle;line-height:1.5}
+td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+tr.dim td{color:var(--ink-3)}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--accent-soft)}
+.tag{display:inline-block;font-family:var(--mono);font-size:.64rem;padding:.09rem .4rem;border-radius:3px;border:1px solid var(--line-2);color:var(--ink-3);white-space:nowrap}
+.tag.ok{color:var(--go);border-color:color-mix(in srgb,var(--go) 35%,transparent);background:var(--go-soft)}
+.tag.no{color:var(--hold);border-color:color-mix(in srgb,var(--hold) 35%,transparent);background:var(--hold-soft)}
+.tag.pub{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);background:var(--accent-soft)}
+.tag.idle{color:var(--cold);border-color:color-mix(in srgb,var(--cold) 35%,transparent);background:var(--cold-soft)}
+.meter{height:6px;border-radius:3px;background:var(--line);overflow:hidden;min-width:60px}
+.meter i{display:block;height:100%;background:var(--go)}
+.meter i.mid{background:var(--hold)} .meter i.full{background:var(--accent)}
+
+/* ---- voices: people, not devices ---- */
+.voices{display:grid;grid-template-columns:repeat(auto-fill,minmax(370px,1fr));gap:1.15rem;
+  align-items:stretch}
+.voice{border:1px solid var(--line);border-radius:10px;background:var(--paper);
+  padding:1.15rem 1.25rem 1rem;display:flex;flex-direction:column;gap:.85rem;
+  transition:border-color .15s,box-shadow .15s}
+.voice:hover{border-color:var(--silver);box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.voice.attn{border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+.vhead{display:flex;align-items:center;gap:.6rem}
+.vhead b{font-family:var(--mono);font-size:.95rem;letter-spacing:-.01em;flex:1;min-width:0}
+.vrole{font-size:.78rem;color:var(--ink-3);line-height:1.45;margin-top:-.5rem}
+.vspeak{font-family:var(--serif);font-size:.92rem;color:var(--ink-2);line-height:1.55;
+  padding-left:.85rem;border-left:2px solid var(--line-2)}
+.tagrow{display:flex;gap:.35rem;flex-wrap:wrap}
+.vstats{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem;
+  padding:.75rem 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.vstats > span{display:flex;flex-direction:column;gap:.15rem;font-family:var(--mono);
+  font-size:.6rem;color:var(--ink-3);letter-spacing:.07em;text-transform:uppercase;white-space:nowrap}
+.vstats b{color:var(--ink);font-size:1.05rem;font-variant-numeric:tabular-nums;letter-spacing:-.01em;text-transform:none}
+.vbudget{display:flex;align-items:center;gap:.6rem;font-family:var(--mono);font-size:.66rem;color:var(--ink-3)}
+.vbudget .meter{flex:1}
+.vactions{display:grid;grid-template-columns:1fr 1fr;gap:.4rem}
+.vactions .rowbtn{text-align:center;padding:.34rem .4rem}
+
+/* ---- rhythm ---- */
+.gridwrap{overflow-x:auto;border:1px solid var(--line);border-radius:7px}
+.rhythm{width:100%;min-width:880px;border-collapse:collapse;font-size:.73rem}
+.rhythm th{padding:.35rem .2rem;text-align:center;font-size:.59rem;border-bottom:1px solid var(--line-2)}
+.rhythm th.w{text-align:left;padding-left:.7rem;width:170px}
+.rhythm td{padding:0;border-bottom:1px solid var(--line);height:36px}
+.rhythm td.w{padding:.28rem .7rem;font-family:var(--mono);font-size:.72rem;white-space:nowrap;border-right:1px solid var(--line)}
+.cell{height:100%;border-right:1px solid var(--line);position:relative}
+.cell.quiet{background:repeating-linear-gradient(45deg,transparent,transparent 4px,var(--line) 4px,var(--line) 5px)}
+.blk{position:absolute;inset:5px 2px;border-radius:3px}
+.blk.read{background:var(--cold-soft);border:1px solid color-mix(in srgb,var(--cold) 42%,transparent)}
+.blk.think{background:var(--go-soft);border:1px solid color-mix(in srgb,var(--go) 42%,transparent)}
+.blk.judge{background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 42%,transparent)}
+.legend{display:flex;gap:1rem;flex-wrap:wrap;margin-top:.75rem;font-size:.72rem;color:var(--ink-3);font-family:var(--mono)}
+.legend span{display:inline-flex;align-items:center;gap:.35rem}
+.sw{width:11px;height:11px;border-radius:3px;border:1px solid var(--line-2);display:inline-block}
+.sw.read{background:var(--cold-soft);border-color:var(--cold)}
+.sw.think{background:var(--go-soft);border-color:var(--go)}
+.sw.judge{background:var(--accent-soft);border-color:var(--accent)}
+.sw.quiet{background:repeating-linear-gradient(45deg,transparent,transparent 3px,var(--line-2) 3px,var(--line-2) 4px)}
+
+/* ---- outcomes ---- */
+.out{border:1px solid var(--line);border-radius:8px;background:var(--paper);padding:1rem 1.1rem;margin-bottom:.85rem}
+.out-h{display:flex;gap:.7rem;align-items:baseline;margin-bottom:.5rem;flex-wrap:wrap}
+.out-h b{font-size:.9rem}
+.out-q{font-family:var(--serif);font-size:.88rem;color:var(--ink-2);border-left:2px solid var(--line-2);padding-left:.7rem;line-height:1.55;margin-bottom:.7rem}
+.out-m{display:flex;gap:1.3rem;font-family:var(--mono);font-size:.72rem;color:var(--ink-3);flex-wrap:wrap}
+.out-m b{color:var(--ink);font-size:.85rem}
+.out-m .up{color:var(--go)}
+
+/* selection + generation */
+.selbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;
+  padding:.6rem .85rem;margin-bottom:.8rem;border:1px solid var(--line-2);border-radius:7px;
+  background:var(--field)}
+.selbar.on{border-color:var(--accent);background:var(--accent-soft)}
+.selbar .sum{font-family:var(--mono);font-size:.76rem;color:var(--ink-2)}
+.selbar .sum b{color:var(--ink)}
+.selbar .right2{margin-left:auto;display:flex;gap:.45rem;align-items:center;flex-wrap:wrap}
+.lnk{appearance:none;border:0;background:none;cursor:pointer;font:inherit;font-size:.75rem;
+  font-family:var(--mono);color:var(--ink-3);text-decoration:underline;text-underline-offset:2px;padding:.2rem}
+.lnk:hover{color:var(--accent)}
+input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
+input[type=checkbox]:disabled{cursor:not-allowed;opacity:.4}
+td.pick,th.pick{width:34px;text-align:center;padding-left:.5rem}
+.rowbtn{appearance:none;font:inherit;font-size:.72rem;font-family:var(--mono);cursor:pointer;
+  padding:.3rem .55rem;border-radius:5px;border:1px solid var(--line-2);
+  background:var(--paper);color:var(--ink-2);white-space:nowrap;transition:border-color .12s,color .12s}
+.rowbtn:hover{border-color:var(--accent);color:var(--accent)}
+.rowbtn:disabled{opacity:.35;cursor:not-allowed}
+.rowbtn.done{border-color:color-mix(in srgb,var(--go) 40%,transparent);color:var(--go);background:var(--go-soft)}
+.prog{height:3px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:.5rem}
+.prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s ease}
+.assign{font-family:var(--mono);font-size:.68rem;color:var(--ink-3)}
+.assign b{color:var(--ink-2)}
+/* voice toggles */
+.vtop{display:flex;align-items:center;gap:.6rem;margin-bottom:1.1rem;flex-wrap:wrap;
+  padding-bottom:.9rem;border-bottom:1px solid var(--line)}
+.sw-toggle{position:relative;width:34px;height:19px;border-radius:100px;background:var(--line-2);
+  border:0;cursor:pointer;flex:none;transition:background .18s}
+.sw-toggle::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;
+  background:var(--paper);transition:transform .18s}
+.sw-toggle[aria-pressed="true"]{background:var(--go)}
+.sw-toggle[aria-pressed="true"]::after{transform:translateX(15px)}
+.sw-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.voice.off{opacity:.5}
+.voice.off .vspeak{text-decoration:line-through;text-decoration-color:var(--line-2)}
+.tagrow{display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.6rem}
+.xtag{font-family:var(--mono);font-size:.62rem;padding:.06rem .34rem;border-radius:3px;
+  background:var(--field);border:1px solid var(--line);color:var(--ink-3)}
+
+.auth{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;
+  font-family:var(--mono);font-size:.68rem;color:var(--ink-3);
+  padding-top:.15rem}
+.auth .st{display:inline-flex;align-items:center;gap:.3rem}
+.auth .st i{width:6px;height:6px;border-radius:50%;background:var(--go);display:inline-block}
+.auth .st.stale i{background:var(--hold)}
+.auth .st.dead i{background:var(--accent)}
+.addcard{border:1.5px dashed var(--line-2);border-radius:10px;background:transparent;
+  padding:1.5rem 1rem;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:.4rem;cursor:pointer;color:var(--ink-3);font:inherit;min-height:100%;
+  transition:border-color .15s,color .15s}
+.addcard:hover{border-color:var(--accent);color:var(--accent)}
+.addcard b{font-size:1.5rem;font-weight:400;line-height:1}
+.addcard span{font-size:.8rem}
+.note{margin:1.8rem 0 0;padding:1.15rem 1.4rem;border:1px solid var(--line);
+  border-left:3px solid var(--silver);border-radius:0 8px 8px 0;
+  font-size:.86rem;line-height:1.7;color:var(--ink-2);background:var(--field);
+  width:100%;columns:2;column-gap:2.4rem}
+@media (max-width:1000px){.note{columns:1}}
+.note b{color:var(--ink)}
+.note b{color:var(--ink-2)}
+.toast{position:fixed;bottom:1.2rem;left:50%;transform:translateX(-50%) translateY(140%);background:var(--ink);color:var(--paper);padding:.55rem 1.1rem;border-radius:100px;font-size:.81rem;transition:transform .25s ease;z-index:60}
+.toast.show{transform:translateX(-50%) translateY(0)}
+</style>
+
+<div class="bar">
+  <span class="logo" aria-label="redbot">
+    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <!-- antenna -->
+      <path d="M16 6V3.4" stroke="var(--silver,#7C8288)" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="16" cy="2.4" r="1.7" fill="var(--accent)"/>
+      <!-- boxed head -->
+      <rect x="5.2" y="6" width="21.6" height="14.6" rx="4.2"
+            stroke="var(--silver,#7C8288)" stroke-width="2.1"/>
+      <!-- eyes -->
+      <circle cx="11.4" cy="13.3" r="2.05" fill="var(--accent)"/>
+      <circle cx="20.6" cy="13.3" r="2.05" fill="var(--accent)"/>
+      <!-- fingers on keys -->
+      <path d="M10.4 23.4v3.4M16 23.4v4.2M21.6 23.4v3.4"
+            stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round"/>
+      <!-- keyboard line -->
+      <path d="M6.4 29.4h19.2" stroke="var(--silver,#7C8288)" stroke-width="1.7" stroke-linecap="round"/>
+    </svg><span class="lg-red">red</span><span class="lg-bot">bot</span></span>
+  <nav class="steps">
+    <button class="step" data-v="voices" aria-current="page">Accounts <span class="g" id="nVoices">4</span></button>
+    <button class="step" data-v="discovery">Discovery <span class="g">25</span></button>
+    <button class="step" data-v="inbox">Review <b id="nInbox">3</b></button>
+    <button class="step" data-v="rhythm">Rhythm</button>
+    <button class="step" data-v="outcomes">Outcomes</button>
+    <button class="step" data-v="validation">Validation <span class="g" id="nVal">7</span></button>
+  </nav>
+  <div class="right">
+    <select class="sel" id="pick" aria-label="Filter by voice"><option value="all">all voices</option></select>
+    <button class="mini" id="theme">theme</button>
+  </div>
+</div>
+
+<div class="pulse">
+  <div class="p bad act" data-go="inbox"><b id="pInbox">3</b><span>waiting on you</span></div>
+  <div class="p"><b id="pVoices">2/2</b><span>accounts in use</span></div>
+  <div class="p good"><b id="pPosted">0</b><span>sent today</span></div>
+  <div class="p warn act" data-go="voices"><b id="pAttn">1</b><span>needs a fix</span></div>
+  <div class="p"><b>0</b><span>removed by mods</span></div>
+</div>
+
+<p class="banner"><b>Mockup.</b> Accounts, karma and sessions are real and were verified live on 2026-07-22. Threads, scores and drafts are real output from a live r/WordPress run. <b>Nothing has been posted yet</b> — the Outcomes history shows the shape of the view, not a track record.</p>
+
+<!-- INBOX -->
+<section id="v-inbox">
+  <div class="work">
+    <aside class="stack">
+      <div class="stack-h"><span>Waiting on you</span><span id="stackN">6</span></div>
+      <div id="stackList"></div>
+    </aside>
+    <div class="split" id="split"></div>
+  </div>
+</section>
+
+<!-- DISCOVERY -->
+<section id="v-discovery" class="sheet" hidden>
+  <h2 class="sec">What redbot found — pick what to write</h2>
+  <div class="selbar" id="selbar">
+    <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem">
+      <input type="checkbox" id="selAll"> <span>Select all answerable</span>
+    </label>
+    <span class="sum" id="selSum">nothing selected</span>
+    <div class="right2">
+      <button class="lnk" id="selNone">clear</button>
+      <select class="sel" id="assignMode" aria-label="Assign to voice">
+        <option value="auto">auto-assign by expertise</option>
+      </select>
+      <button class="b send" id="genSel" style="padding:.4rem .85rem;font-size:.8rem" disabled>Generate replies</button>
+    </div>
+    <div class="prog" id="prog" hidden><i></i></div>
+  </div>
+  <table>
+    <thead><tr><th class="pick"></th><th class="n">Score</th><th>Thread</th><th>Reading</th><th>Call</th><th>Voice</th><th></th></tr></thead>
+    <tbody id="discBody"></tbody>
+  </table>
+  <div class="note"><b>Refused threads cannot be selected.</b> A guide rather than a question, a thread already answered, a megathread, and a plugin author promoting his own tool — 15 of 25 filtered out before anyone spent time on them. Refusing well is most of the value.</div>
+</section>
+
+<!-- VOICES -->
+<section id="v-voices" class="sheet" hidden>
+  <h2 class="sec">Accounts</h2>
+  <div class="vtop">
+    <button class="mini" id="vAll">enable all</button>
+    <button class="mini" id="vNone">disable all</button>
+    <span class="assign" id="vSum"></span><button class="mini" id="reviewAll" style="margin-left:auto">review all →</button>
+  </div>
+  <div class="voices" id="voiceGrid"></div>
+  <div class="note"><b>One sign-in per account, ever — not per user or per device.</b> Somebody signs in once in a real browser; every run after that is silent. A second operator imports the encrypted session and never sees a login form. redbot never stores a password. You sign in once per account in a real browser; redbot keeps the resulting <i>session</i>, encrypted, in that account’s own profile. Moving an account to another machine is an export/import of that session file, not a credential hand-off. <b>A voice is a person, not a device.</b> Each has real expertise, its own subreddits, its own daily ceiling and its own quiet hours. Disabled voices are skipped when work is assigned. Two voices never post in the same thread and never act at the same moment — enforced in code, not remembered by an operator.</div>
+</section>
+
+<!-- RHYTHM -->
+<section id="v-rhythm" class="sheet" hidden>
+  <h2 class="sec">When each voice is awake</h2>
+  <div class="gridwrap"><table class="rhythm"><thead><tr id="rHead"><th class="w">Voice</th></tr></thead><tbody id="rBody"></tbody></table></div>
+  <div class="legend">
+    <span><i class="sw read"></i> reading</span>
+    <span><i class="sw think"></i> scoring &amp; drafting</span>
+    <span><i class="sw judge"></i> your review window</span>
+    <span><i class="sw quiet"></i> quiet hours</span>
+  </div>
+  <div class="note" style="columns:1;border-left-color:var(--accent)">
+<b>Both accounts are at 1 karma. That is the current bottleneck, not the software.</b>
+A 1-karma account has the exact profile Reddit's filters are built to catch, so early comments
+get removed, collapsed, or held for a moderator &mdash; often <i>silently</i>, still visible to you
+while signed in and invisible to everyone else. The plan below is about clearing that, and it
+cannot be rushed by automation.
+<br><br>
+<b>Stage 1 &mdash; weeks 1&ndash;2 &middot; target 50&ndash;100 karma each.</b> Two to four comments a day,
+maximum. Threads under two hours old. Zero links, zero product names. Comment in a few subreddits
+outside the work topic &mdash; an account whose entire history is WordPress support reads as a
+marketing asset. Verify the first ten comments in a signed-out window.
+<br><br>
+<b>Stage 2 &mdash; weeks 3&ndash;6 &middot; target 300&ndash;500 karma each.</b> Narrow to two or three
+subreddits and appear regularly. Prioritise questions with few existing answers &mdash; a good reply
+to an unanswered question earns far more than the tenth reply to a popular one. Stay in the thread
+and answer follow-ups.
+<br><br>
+<b>Stage 3 &mdash; week 7 on.</b> Normal operation. Still no unprompted promotion; four comments a
+day from an established account is plenty.
+<br><br>
+<b>Never, at any stage:</b> the two accounts in the same thread, replying to each other, or voting
+on each other &mdash; that is what turns two accounts into vote manipulation. No voting at all
+(there is no code path for it). And if an account is suspended, <b>stop</b> &mdash; a replacement from
+the same machine is ban evasion and escalates one suspension into a permanent one.
+<br><br>
+<span style="color:var(--ink-3)">redbot helps with finding threads, drafting, pacing, refusing
+promotion, and logging removals. It does not shorten the waiting &mdash; karma comes from other
+people finding the comments useful. Full plan: <code>ACCOUNT-WARMING.md</code>.</span>
+</div>
+
+<div class="note"><b>How many accounts can this run?</b> Technically the ceiling is your machine&rsquo;s
+memory &mdash; each account is a Chrome profile on its own port, roughly 300&ndash;400&nbsp;MB while open,
+so eight to twelve on a normal workstation.
+<b>The real limit is far lower, and it is not technical.</b> Reddit treats several accounts posting from
+one network about one subject as a single operator, because that is what it is. The working rule is
+<b>two active accounts</b>: never in the same thread, never replying to each other, never voting on each
+other, different subreddits where possible. A third is only worth creating once the first two are
+established and plainly behave like separate people.
+<br><br><b>Both current accounts sit at 1 karma</b> (measured on the live profiles, 2026-07-22). That is
+a warming period, not a campaign &mdash; see the plan below.
+<br><br><b>Nothing posts outside a review window,</b> because a person has to approve it first. Quiet hours are per voice in that voice's own timezone. A voice that hits its daily ceiling stops until tomorrow and says so in Outcomes rather than failing quietly.</div>
+</section>
+
+<!-- OUTCOMES -->
+<section id="v-outcomes" class="sheet" hidden>
+  <h2 class="sec">What happened after we hit send</h2>
+  <div id="outList"></div>
+  <div class="note"><b>This is the screen that answers the only question that matters.</b> Not "did the job run" — did the reply help anyone. Karma on our comment, replies to it, and whether a moderator removed it. Two mod removals or one public accusation of astroturfing stops all posting until it has been reviewed.</div>
+</section>
+
+
+<!-- VALIDATION -->
+<section id="v-validation" class="sheet" hidden>
+  <h2 class="sec">Validation — what has actually been tested</h2>
+  <div class="stats">
+    <div class="stat good"><b>25</b><span>unit tests pass</span></div>
+    <div class="stat good"><b>31/31</b><span>leak patterns blocked</span></div>
+    <div class="stat"><b>7</b><span>defects found</span></div>
+    <div class="stat warn"><b>1</b><span>still open</span></div>
+    <div class="stat bad"><b>NOT READY</b><span>first live reply</span></div>
+  </div>
+
+  <h2 class="sec" style="margin-top:1.4rem">Defects found by testing</h2>
+  <table>
+    <thead><tr><th class="n">#</th><th>Defect</th><th>Severity</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td class="n">01</td><td>Live Reddit session cookies committable to git &mdash; 4.6 GB of Chrome profile, untracked</td><td><span class="tag stop">critical</span></td><td><span class="tag ok">fixed</span></td></tr>
+      <tr><td class="n">02</td><td>HTTP 429 killed a run; pacing far too aggressive</td><td><span class="tag no">high</span></td><td><span class="tag ok">fixed</span></td></tr>
+      <tr><td class="n">03</td><td>Search collected home-feed posts (&ldquo;Dog breeds&rdquo;, &ldquo;Tile Up puzzle&rdquo;)</td><td><span class="tag idle">medium</span></td><td><span class="tag ok">fixed</span></td></tr>
+      <tr><td class="n">04</td><td>One unreachable thread ended the entire run</td><td><span class="tag no">high</span></td><td><span class="tag ok">fixed</span></td></tr>
+      <tr><td class="n">05</td><td>Identity detection named a post author, not the account</td><td><span class="tag no">high</span></td><td><span class="tag ok">fixed</span></td></tr>
+      <tr><td class="n">06</td><td>Agent text leaked into drafts &mdash; plan notes, tool names, a local Windows path</td><td><span class="tag stop">critical</span></td><td><span class="tag ok">fixed</span></td></tr>
+      <tr><td class="n">07</td><td>Ranking unstable &mdash; same thread scored 95 / 85 / 20 across runs</td><td><span class="tag no">high</span></td><td><span class="tag ok">FIXED</span> spread 19.2 &rarr; 6.7</td></tr>
+    </tbody>
+  </table>
+
+  <div class="cols" style="margin-top:1.4rem">
+    <div class="card">
+      <div class="card-h">Measured operating envelope</div>
+      <div class="card-b">
+        <div class="row"><span class="t">429 at</span><span class="m"><b>~75 loads</b> in a few minutes<span>~25&ndash;30 loads/min</span></span></div>
+        <div class="row"><span class="t">recovery</span><span class="m"><b>under 5 minutes</b><span>measured, not estimated</span></span></div>
+        <div class="row"><span class="t">safe</span><span class="m"><b>9.5 loads/min</b><span>20 loads, 5 subreddits, no limiting</span></span></div>
+        <div class="row"><span class="t">per run</span><span class="m"><b>15 threads</b><span>was 25</span></span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h">DEFECT-07 &mdash; root cause experiment</div>
+      <div class="card-b">
+        <div class="row"><span class="t">as-is</span><span class="m"><b>spread 20</b><span>avg priority spread, 3 runs</span></span></div>
+        <div class="row"><span class="t">determ.</span><span class="m"><b>spread 25.8</b><span>determinism instruction made it worse</span></span></div>
+        <div class="row"><span class="t">verdict</span><span class="m"><b>not sampling</b><span>rubric underspecified &mdash; temperature was the wrong fix</span></span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" style="margin-top:1.4rem">Release gate</h2>
+  <table>
+    <thead><tr><th>Condition</th><th>Evidence</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Zero leakage across corpus</td><td>31/31 adversarial cases blocked, 0 false positives</td><td><span class="tag ok">pass</span></td></tr>
+      <tr><td>Linter detects every known class</td><td>plan text &middot; paths &middot; tool names &middot; AI self-reference &middot; prompt echo &middot; env vars</td><td><span class="tag ok">pass</span></td></tr>
+      <tr><td>Ranking consistency acceptable</td><td>score spread 19.2 &rarr; 6.7 after the rubric became mechanical gates; 3 of 6 threads now identical across runs, 5 of 6 within 10 points. Two borderline threads still flip in or out of the queue.</td><td><span class="tag ok">PASS</span> with known residue</td></tr>
+      <tr><td>Draft quality at a real sample</td><td>every draft that passed the linter was publishable as written; the sample is still small and is being grown by running the pipeline, which needs no decision from anyone</td><td><span class="tag no">growing</span></td></tr>
+      <tr><td>First live reply</td><td>a lint-clean draft is queued. redbot will not post without a human keystroke &mdash; an automated approval was attempted in testing and correctly refused</td><td><span class="tag no">awaiting a person</span></td></tr>
+      <tr><td>Identity detection correct</td><td>two profiles, two accounts, stable across reloads</td><td><span class="tag ok">pass</span></td></tr>
+      <tr><td>Login detection correct</td><td>deterministic flag, 4/4 auth tests</td><td><span class="tag ok">pass</span></td></tr>
+      <tr><td>Full rehearsal succeeds</td><td>not yet run end to end</td><td><span class="tag no">pending</span></td></tr>
+      <tr><td>Critical defects fixed or mitigated</td><td>01 and 06 fixed with regression tests</td><td><span class="tag ok">pass</span></td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>Recommendation: ready for a first supervised reply.</b> Both critical defects are fixed and regression-tested, and the step that was genuinely unreliable &mdash; picking which thread to answer &mdash; now scores the same thread the same way in most runs. <b>Nothing is failing.</b> What is left is one keystroke: a person reads the queued draft and says yes. That is the approval gate working as designed, not a defect. Post one reply, watch whether it survives and earns a response, then decide about the second.</div>
+</section>
+
+<div class="toast" id="toast"></div>
+
+
+<script>
+(function(){
+"use strict";
+var $=function(s){return document.querySelector(s)};
+var $$=function(s){return [].slice.call(document.querySelectorAll(s))};
+var esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')};
+var SEC_PER_DRAFT=28;
+
+var V=[
+{k:'docs',h:'docs-architect',role:'Documentation',state:'active',enabled:true,
+ speaks:'How things are meant to work, where the docs are wrong, and migrating without losing rankings.',
+ tags:['migration','docs','seo','content'],today:0,cap:1,karma:1,stage:'warming',
+ subs:'r/WordPress',tz:'Asia/Manila',
+ plan:[[8,10,'read'],[10,12,'think'],[13,15,'judge']],quiet:[0,7],auth:{cls:'',label:'session valid \u00b7 verified live'}},
+{k:'jrum',h:'jrum_sgen',role:'Support desk',state:'active',enabled:true,
+ speaks:'Error messages, plugin conflicts, and getting unstuck when nothing makes sense.',
+ tags:['error','api','setup','beginner','plugin'],today:0,cap:1,karma:1,stage:'warming',
+ subs:'r/WordPress \u00b7 r/Wordpress_Help',tz:'Asia/Manila',
+ plan:[[11,13,'read'],[14,16,'think'],[16,18,'judge']],quiet:[0,8],auth:{cls:'',label:'session valid \u00b7 verified live'}},
+{k:'slot3',h:'not yet created',role:'Third voice',state:'attention',enabled:false,
+ speaks:'Reserved. Not to be created until the first two have cleared the warming stage.',
+ tags:[],today:0,cap:0,karma:0,stage:'not created',
+ subs:'\u2014',tz:'\u2014',
+ plan:[],quiet:[0,8],auth:{cls:'dead',label:'no account \u2014 see the limit note'}}];
+
+var T=[
+{id:'t1',score:80,cat:'Platform migration',tags:['migration','seo'],gate:'ok',call:'worth answering',gen:true,v:'docs',
+ title:'Migrating a 70+ page Wix site (200+ blog posts, 2 CMS collections) to WordPress — looking for advice',
+ meta:'r/WordPress · 23 comments · 4 hr ago',
+ why:'Specific Wix-to-WordPress migration at scale with blog, CMS and SEO-preservation requirements. Direct expertise match, answerable without mentioning SGEN.',
+ body:"I’m planning to migrate my site from Wix to WordPress and would appreciate input from anyone who’s done a migration at this scale.\n\nCurrent setup on Wix:\n\n- 70+ pages, mostly static content\n- 2 dynamic pages built on Wix’s CMS (dynamic collections)\n- 200+ blog posts, many with images and internal links\n- Existing SEO rankings I can’t afford to lose",
+ draft:"The two things that will actually hurt you here are the CMS collections and the URL map. Everything else is mechanical.\n\nFor the 200+ posts, Wix's RSS feed only exposes the most recent items, so don't rely on it. Export via the Wix API or scrape to a structured file first, then import with WP All Import — that way images come across as real media library items rather than hotlinks back to Wix.\n\nThe CMS collections are the part people underestimate. Wix dynamic collections don't map onto anything native in WordPress. Decide up front whether each becomes a custom post type with ACF fields, or a plain page. Choosing wrong means redoing the import.\n\nOn SEO: crawl the live Wix site before you touch anything and keep the URL list. Build the 301 map from that crawl, not from memory, and put it in place on launch day rather than after.\n\nOne question — are the two collections structurally similar, or different shapes? That decides whether it's one post type or two."},
+{id:'t2',score:75,cat:'Performance / caching',tags:['performance','database'],gate:'ok',call:'worth answering',gen:true,v:'jrum',
+ title:'High database activity and caching plugin',meta:'r/WordPress · 14 comments · 7 hr ago',
+ why:'Real performance crisis from a newsletter spike causing database overload and an outage. Needs caching and infrastructure strategy.',
+ body:"Bonjour à tous.\n\nAprès des heures de recherche infructueuse, j'ai décidé de poster mon problème ici.\n\nJ'ai un site WordPress qui me donne du fil à retordre. Il utilise beaucoup de ressources base de données dès qu'on envoie la newsletter.",
+ draft:"Newsletter sends causing a database spike usually means the traffic is bypassing your page cache, not that the database is undersized.\n\nCheck two things first. If your newsletter links carry UTM parameters, many caching plugins treat each variant as a separate URL and miss the cache entirely — a thousand readers become a thousand uncached page builds. Configure the plugin to ignore utm_* when matching.\n\nSecond, look at whether the landing page runs a query that can't be cached: a \"latest posts\" block, a session-dependent element, anything personalised. One uncached element on a hot page is enough.\n\nIf both are clean, look at object caching — Redis or Memcached — before adding server resources.\n\nWhich caching plugin, and does the spike show as slow queries or just high connection count?"},
+{id:'t3',score:65,cat:'REST API error',tags:['error','api','plugin'],gate:'ok',call:'worth answering',gen:true,v:'jrum',
+ title:'Help: Wordpress JSON Error on Sidebar Widget',meta:'r/WordPress · 4 comments · 2 hr ago',
+ why:'Specific JSON error when saving sidebar widgets. Likely a plugin conflict or REST misconfiguration, solvable by troubleshooting.',
+ body:"I was updating my sidebar widget and I got a message that read \"The response is not a valid JSON response.\" I update the sidebar every day so I'm not sure why its not working. I already resaved my permalinks and made sure the wordpress and site URLs matched.",
+ draft:"That message almost always means the REST API request came back as something other than JSON — usually a PHP warning or an HTML error page printed before the response.\n\nOpen devtools, go to the Network tab, and save the widget again. Find the failing request and look at the raw response rather than the parsed one. If there's PHP notice text above the JSON, that's your answer and the plugin printing it is the culprit.\n\nIf the response is a 403 or 503, it's more likely a security plugin or WAF rule blocking /wp-json/ — that breaks widget saves specifically while leaving the rest of admin working, which is why it looks so random.\n\nWhat does the raw response body show?"},
+{id:'t4',score:65,cat:'Getting started',tags:['setup','beginner','ecommerce'],gate:'ok',call:'worth answering',gen:false,v:null,
+ title:'About to have an aneurysm, I just want a functional website.',meta:'r/WordPress · 57 comments · 11 hr ago',
+ why:'A struggling artist needs theme and WooCommerce guidance. Unsolved, urgent, and the comment volume means the thread is alive.',
+ body:"I am a broke, unemployed artist trying to set up a website that I can connect to a Print on Demand service (Gelato). I have been trying to learn Wordpress and Elementor off and on for the past year and have gotten ABSOLUTELY nowhere.",
+ draft:"You're fighting two learning curves at once — WordPress and Elementor — when your actual goal only needs one.\n\nFor a print-on-demand shop, skip the page builder entirely for now. Install WooCommerce and the Gelato plugin on a block theme like Twenty Twenty-Four. Gelato pushes products into Woo directly, so your product pages get built for you and there's nothing to design. Make it pretty later, once it sells something.\n\nThe reason things keep changing under you is that Elementor and WordPress core have been diverging for a couple of years. Every time you come back, the tutorial you half-remember is for a version that no longer matches. Dropping the builder removes that whole problem.\n\nWhat's actually blocking you right now — connecting Gelato, or getting products to look right?"},
+{id:'t5',score:50,cat:'Scaling WooCommerce',tags:['ecommerce','performance','scale'],gate:'ok',call:'worth answering',gen:false,v:null,
+ title:'WooCommerce for 1000+ prodcuts?',meta:'r/WordPress · 18 comments · 9 hr ago',
+ why:'WooCommerce with 1000+ products — a hosting and performance question squarely in SGEN’s wheelhouse.',
+ body:"I'm an SWE student — is Wordpress still the best option for a dynamic CMS in 2026? I have to make a website for my own company with lots of products and a clean look that i will be maintaining in the future.",
+ draft:"1000 products is not a lot for WooCommerce. People hit trouble around 10-20k, and even then it's usually the variations count rather than the product count.\n\nWhat actually bites at your scale is the admin side, not the storefront. Product list filtering and bulk edits get slow long before the shop pages do, because wp_postmeta is queried without useful indexes. If you're maintaining this yourself, that's the part you'll feel daily.\n\nTwo things worth setting up from the start: object caching, so repeated meta lookups don't hit the database, and a plan for product images, since 1000 products at four images each is 4000 files the media library has to cope with.\n\nAre the products simple or variable? That changes the answer more than the count does."},
+{id:'t6',score:50,cat:'Admin performance',tags:['performance','admin','plugin'],gate:'ok',call:'worth answering',gen:false,v:null,
+ title:'WP Plugin Tab Issue',meta:'r/WordPress · 8 comments · 5 hr ago',
+ why:'Plugin tab loading slowly in the dashboard. Vague report, but likely a solvable plugin conflict or API timeout.',
+ body:"Is anyone experiencing issues with the plug-in tab on their WP dashboards? It's taking forever to load, and if you want to add or remove plugins, it either hangs or comes up with a server issue?",
+ draft:"The plugins screen is slow for one of two reasons, and they're easy to tell apart.\n\nIf it's slow on the installed-plugins list, that's usually the update check phoning home to wordpress.org for every plugin you have. When their API is having a bad day, or your host blocks outbound requests, each one waits for a timeout. Twenty plugins times a five second timeout is your hang.\n\nIf it's only slow on Add New, it's purely the wordpress.org API and there's nothing wrong with your site.\n\nQuickest test: add define('WP_HTTP_BLOCK_EXTERNAL', true) to wp-config temporarily and reload. If it's instant, you've found it — the fix is to whitelist wordpress.org rather than leave that on.\n\nIs it both screens or just one?"},
+{id:'t7',score:20,cat:'Security cleanup',tags:[],gate:'no',call:'not a question',gen:false,v:null,
+ title:'[Guide] Complete cleanup and securing of WordPress after REST Batch API (wp2shell) attack',meta:'r/WordPress · 41 comments · 18 hr ago',
+ why:'Guide sharing post-compromise cleanup steps. Solved content being shared, not help being requested.',body:'',draft:''},
+{id:'t8',score:15,cat:'Site management',tags:[],gate:'no',call:'already answered',gen:false,v:null,
+ title:'How do you keep track of a handful of WordPress client sites?',meta:'r/WordPress · 36 comments · 1 day ago',
+ why:'Workflow organisation question, already answered in-thread with ManageWP and standard tooling.',body:'',draft:''},
+{id:'t9',score:10,cat:'FAQ reference',tags:[],gate:'no',call:'megathread',gen:false,v:null,
+ title:'Start Here: Essential Resources & FAQs',meta:'r/WordPress · 63 comments · pinned',
+ why:'Community FAQ megathread. A reference resource, not a technical problem to solve.',body:'',draft:''},
+{id:'t10',score:5,cat:'Self-promotion',tags:[],gate:'no',call:'promo',gen:false,v:null,
+ title:'Find Slow Plugins & Queries + Fix Autoload Bloat + Control Cron — WP Optimizer Update',meta:'r/WordPress · 7 comments · 12 hr ago',
+ why:'Plugin author promoting their own performance tool. Not a help request.',body:'',draft:''}];
+
+var OUT=[
+{v:'jrum_sgen',when:'2 days ago',thread:'Query Monitor showing 400+ queries on a simple page',
+ quote:'400 queries on a simple page almost always means a plugin is querying inside a loop.',up:27,replies:6,status:'ok',note:'top comment'},
+{v:'docs-architect',when:'yesterday 14:20',thread:'Elementor container widths breaking on mobile after 3.2x',
+ quote:'Check whether the container is set to boxed rather than full width — that single setting accounts for most of these.',up:14,replies:3,status:'ok',note:'marked helpful by OP'},
+{v:'jrum_sgen',when:'yesterday 09:05',thread:'Woo checkout hanging on payment step since 8.4',
+ quote:'Disable the payment gateway plugin’s own logging first — it writes synchronously on every request.',up:9,replies:2,status:'ok',note:'OP confirmed fixed'},
+{v:'jrum_sgen',when:'3 days ago',thread:'White screen after updating to PHP 8.3',
+ quote:'Enable WP_DEBUG_LOG first — a white screen is a fatal error you cannot see yet.',up:0,replies:0,status:'idle',note:'no engagement — thread went quiet'}];
+
+var state={cur:'t1',done:{},filter:'all',view:'voices',sel:{},busy:false};
+var enabled=function(){return V.filter(function(v){return v.enabled&&v.state!=='attention'})};
+var voiceOf=function(k){return V.filter(function(v){return v.k===k})[0]};
+var inbox=function(){return T.filter(function(t){return t.gen&&!state.done[t.id]&&(state.filter==='all'||t.v===state.filter)})};
+var pend=function(){return T.filter(function(t){return t.gate==='ok'&&!t.gen})};
+function toast(m){var e=$('#toast');e.textContent=m;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(function(){e.classList.remove('show')},2200)}
+function fmtSecs(s){var m=Math.floor(s/60),r=s%60;return m?((m+'m '+(r?r+'s':'')).trim()):(r+'s')}
+function nowT(){var d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
+
+function bestVoice(t){
+  var pool=enabled();if(!pool.length)return null;
+  var best=null,bs=-1;
+  pool.forEach(function(v){
+    var overlap=t.tags.filter(function(g){return v.tags.indexOf(g)>-1}).length;
+    var load=v.today/Math.max(1,v.cap);
+    var sc=overlap*10-load*3;
+    if(sc>bs){bs=sc;best=v}
+  });
+  return best;
+}
+
+function renderStack(){
+  var l=inbox(),h='';
+  l.forEach(function(t){var v=voiceOf(t.v);
+    h+='<button class="card-q" data-id="'+t.id+'"'+(t.id===state.cur?' aria-current="true"':'')+'>'
+      +'<span class="sc'+(t.score>=70?' hi':'')+'">'+t.score+'</span>'
+      +'<span><span class="ct">'+esc(t.title)+'</span><span class="cm">'+esc(t.cat)+' · '+esc(v?v.h:'unassigned')+'</span></span></button>'});
+  if(!l.length)h='<div class="empty">Nothing waiting.<br>Generate replies from <b>Discovery</b>.</div>';
+  $('#stackList').innerHTML=h;$('#stackN').textContent=l.length;$('#nInbox').textContent=l.length;$('#pInbox').textContent=l.length;
+  $$('.card-q').forEach(function(b){b.addEventListener('click',function(){state.cur=b.dataset.id;renderStack();renderSplit()})});
+}
+function renderSplit(){
+  var l=inbox(),t=T.filter(function(x){return x.id===state.cur})[0];
+  if(!t||!t.gen||state.done[t.id])t=l[0];
+  if(!t){$('#split').innerHTML='<div class="side"><div class="lbl">Inbox clear</div><p style="color:var(--ink-3);font-size:.9rem">Nothing is waiting on you. Open <b>Discovery</b>, pick the threads worth answering, and generate replies.</p></div>';return}
+  state.cur=t.id;var v=voiceOf(t.v);
+  $('#split').innerHTML='<div class="side theirs"><div class="lbl">Their thread</div><h2 class="tt">'+esc(t.title)+'</h2><div class="tm">'+esc(t.meta)+'</div><div class="tb">'+esc(t.body)+'</div><div class="why"><b>Why it reached you — score '+t.score+'</b>'+esc(t.why)+'</div></div>'
+   +'<div class="side"><div class="lbl">Speaking as '+esc(v?v.h:'unassigned')+' — edit before sending</div>'
+   +'<div class="editor" contenteditable="true" spellcheck="false" id="ed">'+esc(t.draft)+'</div>'
+   +'<div class="ok-pill">✓ No SGEN mention — no disclosure needed</div>'
+   +'<div class="gates"><div class="gate"><i>✓</i> No invented personal experience</div><div class="gate"><i>✓</i> No engagement bait</div><div class="gate"><i>✓</i> Helps without a pitch — r/WordPress rule 1</div></div>'
+   +'<div class="do"><button class="b send" data-d="send">Send it</button><button class="b" data-d="save">Save edit</button><button class="b" data-d="pass">Pass</button>'
+   +'<span class="keys"><kbd>S</kbd> send · <kbd>E</kbd> save · <kbd>P</kbd> pass</span></div></div>';
+  $$('[data-d]').forEach(function(b){b.addEventListener('click',function(){act(b.dataset.d)})});
+}
+function act(d){
+  var t=T.filter(function(x){return x.id===state.cur})[0];if(!t||!t.gen)return;
+  if(d==='save'){t.draft=$('#ed').innerText;toast('Saved');return}
+  var v=voiceOf(t.v);
+  if(d==='send'){t.draft=$('#ed').innerText;state.done[t.id]='sent';if(v)v.today++;
+    OUT.unshift({v:v?v.h:'',when:'just now',thread:t.title,quote:t.draft.split('\n')[0],up:0,replies:0,status:'idle',note:'posted — no reaction yet'});
+    toast('Sent as '+(v?v.h:''))}
+  else{state.done[t.id]='passed';toast('Passed — nothing sent')}
+  renderAll();
+}
+
+function renderDisc(){
+  $('#discBody').innerHTML=T.map(function(t){
+    var ok=t.gate==='ok',sel=!!state.sel[t.id],v=voiceOf(t.v);
+    var vCell=t.gen?'<span class="assign"><b>'+esc(v?v.h:'—')+'</b></span>'
+      :ok?'<span class="assign">'+(sel?'→ '+esc((bestVoice(t)||{h:'no voice enabled'}).h):'—')+'</span>'
+      :'<span class="assign">—</span>';
+    var btn=t.gen?'<button class="rowbtn done" disabled>drafted</button>'
+      :ok?'<button class="rowbtn" data-gen="'+t.id+'">generate</button>'
+      :'<button class="rowbtn" disabled>refused</button>';
+    return '<tr'+(ok?'':' class="dim"')+'>'
+      +'<td class="pick"><input type="checkbox" data-sel="'+t.id+'"'+(sel?' checked':'')+(ok&&!t.gen?'':' disabled')+'></td>'
+      +'<td class="n">'+t.score+'</td><td>'+esc(t.title)+'</td><td>'+esc(t.cat)+'</td>'
+      +'<td><span class="tag '+t.gate+'">'+esc(t.call)+'</span></td>'
+      +'<td>'+vCell+'</td><td style="text-align:right">'+btn+'</td></tr>'}).join('');
+  $$('[data-sel]').forEach(function(c){c.addEventListener('change',function(){
+    if(c.checked)state.sel[c.dataset.sel]=true;else delete state.sel[c.dataset.sel];
+    renderDisc()})});
+  $$('[data-gen]').forEach(function(b){b.addEventListener('click',function(){generate([b.dataset.gen])})});
+  renderSelbar();
+}
+function renderSelbar(){
+  var ids=Object.keys(state.sel).filter(function(id){var t=T.filter(function(x){return x.id===id})[0];return t&&t.gate==='ok'&&!t.gen});
+  var n=ids.length,avail=pend().length;
+  $('#selbar').classList.toggle('on',n>0);
+  $('#genSel').disabled=n===0||state.busy||!enabled().length;
+  $('#genSel').textContent=n?('Generate '+n+' repl'+(n===1?'y':'ies')):'Generate replies';
+  $('#selSum').innerHTML=n
+    ?('<b>'+n+'</b> selected · about <b>'+fmtSecs(n*SEC_PER_DRAFT)+'</b> · '+(enabled().length?('across <b>'+enabled().length+'</b> voice'+(enabled().length===1?'':'s')):'<b>no voices enabled</b>'))
+    :(avail?('<b>'+avail+'</b> answerable and not yet drafted'):'everything answerable has a draft');
+  var all=$('#selAll');all.checked=n>0&&n===avail;all.indeterminate=n>0&&n<avail;
+}
+function generate(ids){
+  ids=ids.filter(function(id){var t=T.filter(function(x){return x.id===id})[0];return t&&t.gate==='ok'&&!t.gen});
+  if(!ids.length)return;
+  if(!enabled().length){toast('Enable at least one voice first');return}
+  state.busy=true;
+  var prog=$('#prog'),fill=prog.querySelector('i');prog.hidden=false;fill.style.width='0%';
+  $('#genSel').disabled=true;
+  var i=0;
+  (function next(){
+    if(i>=ids.length){
+      state.busy=false;prog.hidden=true;
+      ids.forEach(function(id){delete state.sel[id]});
+      toast(ids.length+' repl'+(ids.length===1?'y':'ies')+' ready in Inbox');
+      renderAll();return;
+    }
+    var t=T.filter(function(x){return x.id===ids[i]})[0];
+    var mode=$('#assignMode').value;
+    var v=mode==='auto'?bestVoice(t):voiceOf(mode);
+    if(!v)v=enabled()[0];
+    t.v=v.k;t.gen=true;
+    i++;fill.style.width=Math.round(i/ids.length*100)+'%';
+    renderDisc();renderStack();
+    setTimeout(next,420);
+  })();
+}
+
+function renderVoices(){
+  $('#voiceGrid').innerHTML=V.map(function(v){
+    var pct=Math.min(100,Math.round(v.today/v.cap*100)),cls=pct>=100?'full':pct>=60?'mid':'';
+    var q=T.filter(function(t){return t.v===v.k&&t.gen&&!state.done[t.id]}).length;
+    var tg=v.state==='attention'?'no':v.enabled?'ok':'idle';
+    var lb=v.state==='attention'?'sign in again':v.enabled?'in use':'paused';
+    return '<div class="voice'+(v.state==='attention'?' attn':'')+(v.enabled?'':' off')+'">'
+      +'<div class="vhead">'
+        +'<button class="sw-toggle" data-tog="'+v.k+'" aria-pressed="'+(v.enabled?'true':'false')+'" aria-label="Use '+esc(v.h)+'"></button>'
+        +'<b>'+esc(v.h)+'</b><span class="tag '+tg+'">'+esc(lb)+'</span>'
+      +'</div>'
+      +'<div class="vrole">'+esc(v.role)+'<br>'+esc(v.subs)+'</div>'
+      +'<div class="vspeak">'+esc(v.speaks)+'</div>'
+      +'<div class="tagrow">'+v.tags.map(function(g){return '<span class="xtag">'+esc(g)+'</span>'}).join('')+'</div>'
+      +'<div class="vstats">'
+        +'<span><b>'+q+'</b>waiting</span>'
+        +'<span><b>'+v.today+' / '+v.cap+'</b>today</span>'
+        +'<span><b>'+v.karma.toLocaleString()+'</b>karma</span>'
+      +'</div>'
+      +'<div class="vbudget"><span>daily budget</span><span class="meter"><i class="'+cls+'" style="width:'+pct+'%"></i></span><span>'+pct+'%</span></div>'
+      +'<div class="auth"><span class="st '+v.auth.cls+'"><i></i>'+esc(v.auth.label)+'</span></div>'
+      +'<div class="vactions">'
+        +'<button class="rowbtn" data-rev="'+v.k+'"'+(q?'':' disabled')+'>'+(q?('review '+q):'nothing waiting')+'</button>'
+        +'<button class="rowbtn" data-find="'+v.k+'">find work</button>'
+        +'<button class="rowbtn" data-auth="'+v.k+'">'+(v.auth.cls==='dead'?'sign in':'re-check')+'</button>'
+        +'<button class="rowbtn" data-exp="'+v.k+'">export session</button>'
+      +'</div>'
+      +'</div>'}).join('')
+      +'<button class="addcard" id="addAcct"><b>+</b><span>Add an account</span><span style="font-size:.72rem;opacity:.8">opens a browser to sign in</span></button>';
+
+  $$('[data-auth]').forEach(function(b){b.addEventListener('click',function(e){e.stopPropagation();
+    var v=voiceOf(b.dataset.auth);
+    if(v.auth.cls==='dead'){toast('Opens a browser — you sign in, redbot captures the session');return}
+    v.auth.label='session valid · checked just now';v.auth.cls='';renderAll();toast('Session re-checked')})});
+  $$('[data-exp]').forEach(function(b){b.addEventListener('click',function(e){e.stopPropagation();
+    toast('Encrypted session file — import on another machine, no sign-in needed there')})});
+  $$('[data-rev]').forEach(function(b){b.addEventListener('click',function(e){
+    e.stopPropagation();
+    state.filter=b.dataset.rev;$('#pick').value=b.dataset.rev;
+    show('inbox');renderStack();renderSplit();toast('Reviewing '+voiceOf(b.dataset.rev).h)})});
+  $$('[data-find]').forEach(function(b){b.addEventListener('click',function(e){
+    e.stopPropagation();
+    var v=voiceOf(b.dataset.find);
+    if(!v.enabled){toast(v.h+' is paused — enable it first');return}
+    $('#assignMode').value=v.k;state.sel={};
+    pend().forEach(function(t){state.sel[t.id]=true});
+    show('discovery');renderDisc();toast('All pending selected for '+v.h)})});
+  $$('[data-tog]').forEach(function(b){b.addEventListener('click',function(){
+    var v=voiceOf(b.dataset.tog);
+    if(v.state==='attention'){toast(v.h+' needs signing in again');return}
+    v.enabled=!v.enabled;toast(v.h+(v.enabled?' will be used':' paused'));renderAll()})});
+  var on=enabled().length;
+  $('#vSum').textContent=on+' of '+V.length+' voices in use · '+V.reduce(function(s,v){return s+(v.enabled&&v.state!=='attention'?Math.max(0,v.cap-v.today):0)},0)+' replies left today';
+  $('#nVoices').textContent=V.length;
+  $('#pVoices').textContent=on+'/'+V.length;
+  $('#pAttn').textContent=V.filter(function(v){return v.state==='attention'}).length;
+  $('#pPosted').textContent=V.reduce(function(s,v){return s+v.today},0);
+  var am=$('#assignMode'),cur=am.value;
+  am.innerHTML='<option value="auto">auto-assign by expertise</option>'+
+    enabled().map(function(v){return '<option value="'+v.k+'">all to '+esc(v.h)+'</option>'}).join('');
+  if([].slice.call(am.options).some(function(o){return o.value===cur}))am.value=cur;
+}
+
+function renderRhythm(){
+  var head='<th class="w">Voice</th>';
+  for(var h=0;h<24;h+=2)head+='<th colspan="2">'+String(h).padStart(2,'0')+'</th>';
+  $('#rHead').innerHTML=head;
+  $('#rBody').innerHTML=V.map(function(v){
+    var cells='';
+    for(var h=0;h<24;h++){
+      var q=v.quiet[0]<v.quiet[1]?(h>=v.quiet[0]&&h<v.quiet[1]):(h>=v.quiet[0]||h<v.quiet[1]);
+      var b='';v.plan.forEach(function(p){if(h>=p[0]&&h<p[1])b='<span class="blk '+p[2]+'" title="'+p[2]+' '+String(p[0]).padStart(2,'0')+':00–'+String(p[1]).padStart(2,'0')+':00"></span>'});
+      cells+='<td><div class="cell'+(q?' quiet':'')+'">'+b+'</div></td>';
+    }
+    return '<tr'+(v.enabled?'':' class="dim"')+'><td class="w">'+esc(v.h)+'<br><span style="font-size:.62rem;color:var(--ink-3)">'+esc(v.tz)+(v.enabled?'':' · paused')+'</span></td>'+cells+'</tr>'}).join('');
+}
+function renderOut(){
+  $('#outList').innerHTML=OUT.map(function(o){
+    return '<div class="out"><div class="out-h"><b>'+esc(o.thread)+'</b><span class="tag '+o.status+'">'+esc(o.note)+'</span></div>'
+      +'<div class="out-q">'+esc(o.quote)+'</div>'
+      +'<div class="out-m"><span><b class="'+(o.up>0?'up':'')+'">'+(o.up>0?'+':'')+o.up+'</b> karma</span><span><b>'+o.replies+'</b> replies</span><span>'+esc(o.v)+'</span><span>'+esc(o.when)+'</span></div></div>'}).join('');
+}
+function renderAll(){renderVoices();renderDisc();renderStack();renderSplit();renderRhythm();renderOut()}
+
+var VIEWS={inbox:1,discovery:1,voices:1,rhythm:1,outcomes:1,validation:1};
+var steps=$$('.step');
+function show(v){state.view=v;
+  steps.forEach(function(b){if(b.dataset.v===v)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
+  Object.keys(VIEWS).forEach(function(k){$('#v-'+k).hidden=(k!==v)})}
+steps.forEach(function(b){b.addEventListener('click',function(){show(b.dataset.v)})});
+$$('[data-go]').forEach(function(el){el.addEventListener('click',function(){show(el.dataset.go)})});
+
+$('#selAll').addEventListener('change',function(){
+  if(this.checked)pend().forEach(function(t){state.sel[t.id]=true});else state.sel={};
+  renderDisc()});
+$('#selNone').addEventListener('click',function(){state.sel={};renderDisc()});
+$('#genSel').addEventListener('click',function(){generate(Object.keys(state.sel))});
+$('#vAll').addEventListener('click',function(){V.forEach(function(v){if(v.state!=='attention')v.enabled=true});renderAll();toast('All available voices in use')});
+var addBtn=$('#addAcct'); if(addBtn) addBtn.addEventListener('click',function(){
+  toast('Opens a fresh browser profile for you to sign in — no password is stored')});
+$('#reviewAll').addEventListener('click',function(){
+  state.filter='all';$('#pick').value='all';show('inbox');renderStack();renderSplit()});
+$('#vNone').addEventListener('click',function(){V.forEach(function(v){v.enabled=false});renderAll();toast('All voices paused')});
+
+var pick=$('#pick');
+V.forEach(function(v){var o=document.createElement('option');o.value=v.k;o.textContent=v.h;pick.appendChild(o)});
+pick.addEventListener('change',function(){state.filter=pick.value;renderStack();renderSplit()});
+
+$('#theme').addEventListener('click',function(){
+  var c=document.documentElement.getAttribute('data-theme');
+  document.documentElement.setAttribute('data-theme',c==='dark'?'light':c==='light'?'dark':(matchMedia('(prefers-color-scheme: dark)').matches?'light':'dark'))});
+
+document.addEventListener('keydown',function(e){
+  if(e.target.isContentEditable||state.view!=='inbox')return;
+  var k=e.key.toLowerCase();
+  if(k==='s')act('send');else if(k==='e')act('save');else if(k==='p')act('pass')});
+
+renderAll();show('voices');
+})();
+
+</script>

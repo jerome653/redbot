@@ -1,0 +1,515 @@
+{
+  "id": "HRC-001-A",
+  "title": "False technical claim, isolated by overriding the resolution block",
+  "failure_class": "false-technical-claim",
+  "provenance": "recorded-run",
+  "notes": "Resolution suppressed so the claim layer is what is under test. This is the case that proves refutation catches the max_allowed_packet falsehood.",
+  "input": {
+    "human_override": true,
+    "refutation_ran": "infer"
+  },
+  "expected": {
+    "verdict_in": [
+      "REJECT"
+    ],
+    "rules_required": [
+      "fatal-contradiction"
+    ],
+    "rules_forbidden": [
+      "all-claims-supported"
+    ]
+  },
+  "thread_id": "f11d8de68709",
+  "draft_id": "d_f11d8de68709_mrwj1koh",
+  "question": "Custom CSS missing after an UpdraftPlus restore — r/Wordpress",
+  "ground_truth": {
+    "human_verdict": "incorrect",
+    "verdict_author": "jerome",
+    "verdict_date": "2026-07-23",
+    "verdict_record": "reports/HRC-001-custom-css-updraft.md",
+    "sources": [
+      {
+        "claim": "Exceeding max_allowed_packet raises ERROR 1153 (08S01) and aborts the import; it does not silently insert an empty or truncated row",
+        "source": "MySQL server error reference — ER_NET_PACKET_TOO_LARGE",
+        "source_type": "primary-documentation",
+        "verification": "established 2026-07-23 via independent web sources during HRC-001 certification; recorded as E-21. NOT re-read from the vendor manual today."
+      },
+      {
+        "claim": "wp_options.option_value is LONGTEXT, so column-width truncation cannot explain a blanked Custom CSS value",
+        "source": "WordPress database schema",
+        "source_type": "vendor-documentation",
+        "verification": "established 2026-07-23, recorded as E-21."
+      },
+      {
+        "claim": "The thread was already resolved — the post body carries \"UPDATE: ... it found all the CSS\" and the original poster confirmed a fix beneath two comments",
+        "source": "the thread itself, captured in data/threads.json",
+        "source_type": "primary-observation",
+        "verification": "deterministic string match, reproducible offline; recorded as E-22/E-23."
+      }
+    ],
+    "false_claims": [
+      "c5",
+      "c6",
+      "c6b",
+      "c7",
+      "c8"
+    ],
+    "dependent_on_false": [
+      "c9",
+      "c10",
+      "c11"
+    ],
+    "unrefuted_claims": [
+      "c1",
+      "c2",
+      "c3",
+      "c4"
+    ],
+    "expected_provenance": {
+      "c5": "reasoned-inference",
+      "c6": "reasoned-inference",
+      "c7": "reasoned-inference"
+    },
+    "expected_epistemic": [
+      "c9"
+    ]
+  },
+  "argus": {
+    "source_record": "data/certifications.jsonl",
+    "certified_at": "2026-07-22T21:19:56.588Z",
+    "model": "claude-haiku-4-5-20251001",
+    "claims": [
+      {
+        "id": "c1",
+        "text": "Custom CSS and Additional CSS are stored using different methods in WordPress",
+        "type": "observation",
+        "evidenceClass": "framework-documentation",
+        "evidenceDetail": "WordPress documentation and code show separate storage locations: Customizer Additional CSS versus theme/plugin custom CSS settings",
+        "confidence": "high",
+        "dependsOn": [],
+        "sourceQuote": "Custom CSS and Additional CSS often aren't stored the same way"
+      },
+      {
+        "id": "c2",
+        "text": "Because they are stored in different locations, a restore can delete Custom CSS while preserving Additional CSS",
+        "type": "inference",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "If two settings exist in separate database locations, a restore targeting one location would not affect the other",
+        "confidence": "medium",
+        "dependsOn": [
+          "c1"
+        ],
+        "sourceQuote": "which is why a restore can wipe one and leave the other intact"
+      },
+      {
+        "id": "c3",
+        "text": "Additional CSS from Appearance > Customize is stored as a dedicated single database entry",
+        "type": "implementation-detail",
+        "evidenceClass": "framework-documentation",
+        "evidenceDetail": "WordPress Customizer stores Additional CSS as a distinct setting entry",
+        "confidence": "high",
+        "dependsOn": [],
+        "sourceQuote": "Additional CSS (Appearance > Customize) is its own dedicated entry"
+      },
+      {
+        "id": "c4",
+        "text": "Custom CSS from theme/plugin settings is typically stored as a single row in wp_options or postmeta containing a large serialized value",
+        "type": "implementation-detail",
+        "evidenceClass": "framework-documentation",
+        "evidenceDetail": "Standard WordPress and theme/plugin patterns store custom CSS as a single serialized option or post meta row",
+        "confidence": "high",
+        "dependsOn": [],
+        "sourceQuote": "A theme/plugin's 'Site Settings > Custom CSS' field is usually a single row in wp_options (or a single postmeta row) holding one large serialized value"
+      },
+      {
+        "id": "c5",
+        "text": "Large single-row database values are most prone to silent truncation during SQL import when a size limit is exceeded",
+        "type": "protocol-behaviour",
+        "evidenceClass": "observed-runtime-behaviour",
+        "evidenceDetail": "Widely observed in database operations: oversized single rows truncate without error during import",
+        "confidence": "high",
+        "dependsOn": [],
+        "sourceQuote": "Big single-row values like that are the ones most likely to get silently truncated during a SQL import if it hits a size limit"
+      },
+      {
+        "id": "c6",
+        "text": "MySQL's max_allowed_packet configuration is a server-side size limit that can trigger truncation during import",
+        "type": "platform-behaviour",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "MySQL documentation defines max_allowed_packet as the maximum allowed packet size for communication",
+        "confidence": "high",
+        "dependsOn": [],
+        "sourceQuote": "the DB server's max_allowed_packet"
+      },
+      {
+        "id": "c6b",
+        "text": "Restore tools may have internal chunking limits that cause truncation during import independently of max_allowed_packet",
+        "type": "inference",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "Backup/restore tools commonly implement chunking for memory efficiency; these can be independent of MySQL limits",
+        "confidence": "medium",
+        "dependsOn": [],
+        "sourceQuote": "or a chunking limit in whatever tool did the restore"
+      },
+      {
+        "id": "c7",
+        "text": "When truncation occurs, the row is inserted as empty or truncated without raising an error",
+        "type": "protocol-behaviour",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "MySQL's import behavior silently truncates oversized values rather than rejecting the row",
+        "confidence": "high",
+        "dependsOn": [],
+        "sourceQuote": "the row inserts empty or truncated instead of throwing an error"
+      },
+      {
+        "id": "c8",
+        "text": "Database values smaller than the size limit restore successfully during import",
+        "type": "observation",
+        "evidenceClass": "operator-experience",
+        "evidenceDetail": "Observed in practice: settings under the truncation threshold complete without data loss",
+        "confidence": "medium",
+        "dependsOn": [],
+        "sourceQuote": "smaller settings restore fine"
+      },
+      {
+        "id": "c9",
+        "text": "You can reveal truncation by comparing whether an option is empty in the live database but full in the backup",
+        "type": "recommendation",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "Diagnostic method: data present in source but absent/empty in target indicates data loss during import",
+        "confidence": "high",
+        "dependsOn": [
+          "c5",
+          "c7"
+        ],
+        "sourceQuote": "check whether that option is present-but-empty in the live DB versus present-and-full in the backup dump"
+      },
+      {
+        "id": "c10",
+        "text": "If an option is empty in the live database but full in the backup, this indicates silent truncation rather than deliberate deletion",
+        "type": "inference",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "Truncation during import (data loss in target) differs from deliberate deletion (data absent from source)",
+        "confidence": "medium",
+        "dependsOn": [
+          "c5",
+          "c7",
+          "c9"
+        ],
+        "sourceQuote": "that's a truncation issue, not a deliberate wipe"
+      },
+      {
+        "id": "c11",
+        "text": "Checking and raising the host's max_allowed_packet setting before the next restore will prevent truncation",
+        "type": "recommendation",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "If max_allowed_packet is the limiting factor, increasing it allows larger values to import without truncation",
+        "confidence": "high",
+        "dependsOn": [
+          "c5",
+          "c6"
+        ],
+        "sourceQuote": "it's worth checking your host's max_allowed_packet setting before your next restore so it doesn't happen again"
+      }
+    ],
+    "contradictions": [
+      {
+        "claimId": "c4",
+        "kind": "configuration-dependency",
+        "statement": "WordPress only PHP-serializes option/meta values that are arrays or objects — core's maybe_serialize() (wp-includes/functions.php) checks is_array()/is_object() and passes scalars through untouched. A minimal 'Custom CSS' textarea field implemented as update_option('theme_custom_css', $css_string) or update_post_meta($id, '_custom_css', $css_string) — arguably the simplest and most common way to code a single-purpose CSS field, as seen in plugins like 'Simple Custom CSS' — stores plain unserialized text, not 'a large serialized value.' Whether serialization occurs depends entirely on whether the developer wrapped the CSS in an array (e.g. a Redux Framework/Divi-style options bundle) or stored it as a bare scalar.",
+        "evidenceClass": "source-code",
+        "evidenceDetail": "WordPress core wp-includes/functions.php, maybe_serialize()/maybe_unserialize() — serialization is conditional on is_array()/is_object(), not on value size or field purpose",
+        "fatal": false
+      },
+      {
+        "claimId": "c4",
+        "kind": "version-difference",
+        "statement": "Post-Gutenberg/REST-API-era plugins and page builders commonly store settings as JSON text via wp_json_encode() rather than native PHP serialize(). Elementor, for example, stores its per-page/per-element settings (including the Custom CSS field in Elementor Pro) in postmeta such as _elementor_data and _elementor_page_settings as JSON strings, and the cached compiled CSS in _elementor_css is likewise a JSON-encoded structure, not a PHP-serialized one.",
+        "evidenceClass": "community-knowledge",
+        "evidenceDetail": "Well-documented Elementor postmeta architecture (_elementor_data, _elementor_page_settings, _elementor_css all JSON-encoded, not serialize())",
+        "fatal": false
+      },
+      {
+        "claimId": "c4",
+        "kind": "edge-case",
+        "statement": "For visual builders and CSS-heavy plugins (Elementor, Beaver Builder, Divi, WP Rocket critical CSS), the bulk compiled CSS is typically written out to static .css files under wp-content/uploads/... on disk, with only a hash/timestamp left in the DB row. This is exactly why Elementor ships a 'Regenerate CSS' tool. For these tools the actual large CSS payload often isn't sitting in a single wp_options/postmeta row at all — a SQL-only dump/restore wouldn't even carry it.",
+        "evidenceClass": "observed-runtime-behaviour",
+        "evidenceDetail": "Elementor's file-based CSS cache (wp-content/uploads/elementor/css/post-{id}.css) and its 'Regenerate CSS & Data' maintenance tool",
+        "fatal": false
+      },
+      {
+        "claimId": "c4",
+        "kind": "known-exception",
+        "statement": "Some widely-installed plugins offering a dedicated 'Custom CSS' feature don't use wp_options or postmeta at all. The 'Custom CSS and JS' plugin (300k+ active installs) registers a custom post type (custom-css-js) and stores each CSS snippet as post_content of its own post in wp_posts, not as a single options/postmeta row.",
+        "evidenceClass": "community-knowledge",
+        "evidenceDetail": "Custom CSS and JS plugin (wordpress.org) — custom-css-js post type storing snippets as post_content",
+        "fatal": false
+      },
+      {
+        "claimId": "c5",
+        "kind": "counterexample",
+        "statement": "MySQL does not silently insert an empty/truncated row when max_allowed_packet is exceeded. It raises ERROR 1153 (08S01) 'Got a packet bigger than max_allowed_packet bytes' and the statement/connection is aborted. Default mysql CLI import (without --force) then stops at that statement entirely — the row is either absent or left at its prior value, not silently present-and-empty as the claim's mechanism describes.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "MySQL Server Error Reference, Error 1153 / SQLSTATE 08S01; default mysql client behavior aborts on error unless --force is passed",
+        "fatal": true
+      },
+      {
+        "claimId": "c5",
+        "kind": "alternative-explanation",
+        "statement": "The 'present in backup, present-but-empty in live DB' symptom for a serialized wp_options/postmeta value is commonly caused by charset/collation mismatch during import corrupting the PHP serialized string. PHP's serialize() format embeds exact byte-length counts (e.g. s:1234:\"...\";); any charset re-encoding during dump/import that changes byte length desyncs the prefix, unserialize() then fails silently, and WordPress's option/meta getters return empty/false — with zero packet-size limit involved.",
+        "evidenceClass": "community-knowledge",
+        "evidenceDetail": "Widely documented WordPress migration failure mode: utf8/utf8mb4 or latin1/utf8 mismatch corrupting serialized PHP data during SQL import, distinct from max_allowed_packet truncation",
+        "fatal": false
+      },
+      {
+        "claimId": "c5",
+        "kind": "configuration-dependency",
+        "statement": "Genuine silent (warning-only, no error) truncation of oversized string data during INSERT does exist in MySQL, but it applies to exceeding the destination column's declared length (e.g. VARCHAR/TEXT overflow) under non-strict SQL_MODE — not to max_allowed_packet. Since MySQL 5.7+ and MariaDB ship STRICT_TRANS_TABLES on by default, the same oversized value on a modern default install throws ERROR 1406 'Data too long for column' and aborts, rather than truncating silently.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "MySQL Reference Manual: Server SQL Modes (strict mode truncation behavior) and default sql_mode changes in 5.7/8.0",
+        "fatal": false
+      },
+      {
+        "claimId": "c6",
+        "kind": "counterexample",
+        "statement": "Exceeding max_allowed_packet does not silently truncate a row during import — MySQL raises ER_NET_PACKET_TOO_LARGE (error 1153, 'Got a packet bigger than max_allowed_packet bytes'), and the client typically also sees error 2006 ('MySQL server has gone away') or 2013 ('Lost connection'). The statement fails outright and the connection is dropped; no partial/blank row gets committed. A 'present-but-empty' row is not the signature of this limit.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "MySQL Reference Manual — Server Error Message Reference, ER_NET_PACKET_TOO_LARGE (1153); max_allowed_packet system variable docs describing connection termination on overflow",
+        "fatal": true
+      },
+      {
+        "claimId": "c6",
+        "kind": "alternative-explanation",
+        "statement": "The behavior actually described — a value silently ending up truncated/empty with no thrown error — is the signature of non-strict SQL mode plus a column-width limit (e.g. a VARCHAR/TEXT overflow), which MySQL truncates with only a warning, not the packet-size guard. If the restore target's sql_mode lacks STRICT_TRANS_TABLES/STRICT_ALL_TABLES, this is the more consistent mechanism for a quiet truncation, not max_allowed_packet.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "MySQL Reference Manual — Server SQL Modes (strict mode vs. permissive truncation-with-warning behavior for column data types)",
+        "fatal": false
+      },
+      {
+        "claimId": "c6",
+        "kind": "configuration-dependency",
+        "statement": "Default max_allowed_packet is 64MB on MySQL 8.0 (4MB/16MB on older 5.x defaults) — far larger than a typical serialized Custom-CSS blob. The limit only becomes a plausible culprit if a host has explicitly lowered it (common on cheap shared hosting) or if mysqldump/mysql client-side max_allowed_packet is set lower than the server's, making this cause conditional, not general.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "MySQL Reference Manual — max_allowed_packet default values by version; mysqldump docs noting client and server values must both be raised",
+        "fatal": false
+      },
+      {
+        "claimId": "c6b",
+        "kind": "counterexample",
+        "statement": "Tools that internally chunk/batch large imports (phpMyAdmin, Adminer, WP-CLI `wp db import`) don't reimplement the MySQL wire protocol themselves — they hand each statement to mysqli/PDO_MySQL, which enforces max_allowed_packet directly and raises a fatal, visible error (e.g. mysqli 'Packet too large' / PDOException, or CLI 'MySQL server has gone away') the moment a statement exceeds it. So any tool-level chunking limit is not independent of max_allowed_packet — it's the same wall, surfaced through the same client library, with the same fail-loud behavior, not a silent truncate-to-empty path.",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "mysqli/PDO_MySQL client behavior on oversized packets (documented MySQL client error path); mysql CLI 'ERROR 2006 (HY000): MySQL server has gone away' on oversized single-row INSERT",
+        "fatal": true
+      },
+      {
+        "claimId": "c6b",
+        "kind": "edge-case",
+        "statement": "Chunking as actually implemented by dump/restore tooling (mysqldump extended-insert batching, GUI import batch-size settings) works by splitting many separate complete rows into multiple INSERT statements — it cannot slice a single field's value mid-string within one row, because an unterminated quoted string is a SQL syntax error, not a valid empty value. For the scenario at hand (one oversized serialized value in one row), no row-batching chunk strategy is even mechanically capable of producing a clean present-but-empty result — it would either include the whole value or fail the statement outright.",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "SQL string-literal syntax requires a closing quote; partial literals are parse errors, not accepted truncated values",
+        "fatal": true
+      },
+      {
+        "claimId": "c6b",
+        "kind": "alternative-explanation",
+        "statement": "A present-but-empty option row is at least as well explained by ordinary WordPress/plugin behavior — many themes/plugins call add_option()/update_option() with an empty default during activation, upgrade routines, or a settings-repair pass — as by any import-time truncation. This alternative produces the identical symptom (present, empty) without any chunking or packet-size event occurring at all, so the proposed present-vs-empty test doesn't actually discriminate between the two causes.",
+        "evidenceClass": "community-knowledge",
+        "evidenceDetail": "Common WordPress plugin/theme pattern: add_option($key, '') run on (re)activation or upgrade hooks",
+        "fatal": false
+      },
+      {
+        "claimId": "c6b",
+        "kind": "configuration-dependency",
+        "statement": "If the Custom CSS field is stored as PHP-serialized data (vs. the reply's assumption it's a raw text blob), genuine mid-value truncation would break the length-prefixed serialization format, causing unserialize() to fail/warn or return false rather than yield a clean empty string — so the 'silent empty' signature described only lines up with truncation if the value is stored unserialized to begin with.",
+        "evidenceClass": "language-specification",
+        "evidenceDetail": "PHP serialize() format encodes explicit byte-length prefixes for strings; unserialize() on a truncated string errors ('Error at offset X') rather than degrading gracefully to empty",
+        "fatal": false
+      },
+      {
+        "claimId": "c7",
+        "kind": "counterexample",
+        "statement": "When a row exceeds max_allowed_packet during a SQL import, MySQL/MariaDB does not insert an empty or truncated row — it raises ERROR 1153 (08S01) \"Got a packet bigger than 'max_allowed_packet' bytes\", the statement is rejected outright, and (in non-interactive mysql CLI import, i.e. `mysql < dump.sql`) the import aborts at that line. No row is written for that statement at all.",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "MySQL/MariaDB server behavior on oversized packets (documented error 1153); mysqldump-generated single-row INSERTs for a large serialized option make the whole statement atomic — it fails whole or succeeds whole, it does not partially write.",
+        "fatal": true
+      },
+      {
+        "claimId": "c7",
+        "kind": "configuration-dependency",
+        "statement": "The only MySQL mechanism that silently truncates a value on INSERT is column-width truncation under non-strict SQL mode, which produces a warning and a truncated (not empty) value written to the row — but wp_options.option_value is LONGTEXT (4GB cap), so a large serialized CSS blob will not hit a column-width limit in practice. And since MySQL 5.7 the default SQL mode includes STRICT_TRANS_TABLES/STRICT_ALL_TABLES, under which an overlong value throws ERROR 1406 \"Data too long for column\" and the row is rejected, not silently truncated.",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "MySQL server SQL mode docs: strict mode rejects data-too-long errors by default since 5.7; LONGTEXT column type has no practical size ceiling relevant here.",
+        "fatal": false
+      },
+      {
+        "claimId": "c7",
+        "kind": "alternative-explanation",
+        "statement": "A present-but-empty option row is equally or more plausibly explained by PHP serialization corruption unrelated to any DB-layer truncation: if the dump/restore process altered byte-length-prefixed serialized data at all (encoding conversion, whitespace stripping, partial statement execution from a different cause, e.g. a text-mode transfer mangling one byte), `unserialize()` on read fails, and WordPress/the plugin's own code treats the corrupt value as empty/false when rendering — the DB row itself may not have been truncated by the import step.",
+        "evidenceClass": "community-knowledge",
+        "evidenceDetail": "Well-documented PHP serialize() format is byte-length-strict (s:1234:\"...\"); any character-count mismatch from encoding/charset conversion during migration breaks unserialize() silently returning false, a known WordPress migration pitfall independent of max_allowed_packet.",
+        "fatal": false
+      },
+      {
+        "claimId": "c8",
+        "kind": "counterexample",
+        "statement": "Default `mysql` CLI (and most WP restore paths that pipe a dump into it) aborts the entire import on the first SQL error unless `--force`/`-f` is passed. If the oversized-value statement throws (e.g. ERROR 1153, packet too big), every statement after it in the script — including ones holding values well under the size limit — never executes. So 'smaller values restore successfully' is false whenever those rows appear after the failure point, which is the common/default configuration, not an obscure edge case.",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "MySQL `mysql` command-line client reference: without --force, client execution halts on the first statement error",
+        "fatal": true
+      },
+      {
+        "claimId": "c8",
+        "kind": "counterexample",
+        "statement": "mysqldump's default `--extended-insert` bundles many rows into one multi-row INSERT statement, sized against net_buffer_length/max_allowed_packet as a whole packet, not per value. A small value can be batched in the same INSERT as one oversized value; if that packet is rejected, the entire batch fails as a unit, including the small row. Per-row size under the limit is therefore not sufficient for that row to restore.",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "mysqldump reference manual, --extended-insert / --net_buffer_length behavior",
+        "fatal": true
+      },
+      {
+        "claimId": "c8",
+        "kind": "configuration-dependency",
+        "statement": "Whether an oversized value causes a hard error or a silent truncation depends on sql_mode, not on max_allowed_packet. Under non-strict mode, MySQL truncates any value exceeding its destination COLUMN's declared width and only emits a warning — so a value can sit well below the packet limit and still be silently truncated, for a completely different 'size limit' than the one the claim assumes.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "MySQL Reference Manual, Server SQL Modes / strict mode data-truncation behavior",
+        "fatal": false
+      },
+      {
+        "claimId": "c8",
+        "kind": "alternative-explanation",
+        "statement": "Web-based import tools (e.g. phpMyAdmin) impose upload/execution-time limits and process large SQL files in chunks; a timeout or chunk cutoff can leave later statements unexecuted regardless of each value's individual size. This produces the same 'smaller entries survive, later/larger ones don't' pattern without any packet-size mechanism at all.",
+        "evidenceClass": "community-knowledge",
+        "evidenceDetail": "phpMyAdmin known execution-time-limit / chunked-import behavior on large SQL imports",
+        "fatal": false
+      },
+      {
+        "claimId": "c9",
+        "kind": "counterexample",
+        "statement": "The claim's own premise is that packet-limit truncation is what produces a present-but-empty row. But that mechanism doesn't behave that way: when a single INSERT (or extended-insert row) exceeds max_allowed_packet, MySQL rejects the packet atomically and raises ERROR 1153, aborting that statement rather than inserting a blank/truncated value. There is no MySQL code path where an oversized row 'inserts empty instead of throwing an error' — that's the same mechanism already shown false in the worked example. So finding the option empty-in-live/full-in-backup cannot be read as confirmation of packet-size truncation, because that specific cause doesn't produce that specific symptom.",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "MySQL server behavior on oversized packets: connection/query aborts with ERROR 1153 (08S01), not a partial insert",
+        "fatal": true
+      },
+      {
+        "claimId": "c9",
+        "kind": "alternative-explanation",
+        "statement": "A present-but-empty wp_options row is the expected fingerprint of several unrelated, well-documented WordPress failure modes: (1) search-replace migration tools (Better Search Replace, WP Migrate DB, Interconnect/it) corrupting the byte-length prefixes of serialized strings when rewriting URLs inside them, which makes is_serialized()/unserialize() fail and the option read back as false/empty; (2) the setting being explicitly reset (theme switch, Customizer save, plugin reactivation writing its default); (3) a persistent object cache (Redis/Memcached) serving a stale empty value for get_option() while the raw DB row is actually intact. None of these involve SQL-import packet truncation at all, yet all produce exactly the 'empty-live, full-backup' pattern the claim treats as diagnostic of it.",
+        "evidenceClass": "community-knowledge",
+        "evidenceDetail": "Well-known WordPress gotcha: search-replace tools mangling PHP serialized string length prefixes during migration; persistent object cache masking DB state",
+        "fatal": true
+      },
+      {
+        "claimId": "c9",
+        "kind": "edge-case",
+        "statement": "Even granting a truncation mechanism, WordPress's own unserialize path (maybe_unserialize/is_serialized in wp-includes/functions.php) means a mid-value truncation of a serialized string typically fails the serialized-format check and is returned as-is (a partial, garbled string) or as boolean false — not as a clean empty string. Genuine truncation therefore tends to leave a corrupted/partial value, not a tidy empty option, so the binary 'empty vs full' test the claim proposes is more likely to flag deliberate wipes/resets than actual truncation, inverting the conclusion it's used to support.",
+        "evidenceClass": "source-code",
+        "evidenceDetail": "WordPress core is_serialized()/maybe_unserialize() logic: malformed/truncated serialized data fails the format check or unserializes to false, rather than yielding an empty string",
+        "fatal": false
+      },
+      {
+        "claimId": "c10",
+        "kind": "alternative-explanation",
+        "statement": "Empty-live/full-backup is not diagnostic of truncation: deliberate deletion (user clears Additional CSS in Customizer, plugin reset, theme switch clearing custom_css post_content) produces the exact same signature — value present-and-blank live, full in the pre-deletion backup. The observation is consistent with both hypotheses, so it cannot be used to conclude truncation 'rather than' deletion.",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "Affirming-the-consequent: same observable state predicted by both causal paths",
+        "fatal": true
+      },
+      {
+        "claimId": "c10",
+        "kind": "configuration-dependency",
+        "statement": "WordPress Additional CSS is looked up via wp_get_custom_css_post()/wp_get_custom_css(), keyed by a post_name derived from the active theme's stylesheet slug — not by a fixed row ID. If live and backup environments differ in active theme slug (rename, theme switch, staging vs prod folder name), the lookup misses the row entirely and reports empty CSS even though the row is fully intact and full in the live DB. Same symptom, zero truncation and zero deletion.",
+        "evidenceClass": "official-implementation",
+        "evidenceDetail": "WP core wp-includes/theme.php: wp_get_custom_css_post($stylesheet) keys on sanitized stylesheet slug",
+        "fatal": true
+      },
+      {
+        "claimId": "c10",
+        "kind": "known-exception",
+        "statement": "The proposed mechanism doesn't produce the pattern claimed to diagnose it. Exceeding max_allowed_packet aborts the INSERT with MySQL error 1153 — it does not commit a blank/truncated row. A packet-limit failure typically leaves the option row missing altogether, not 'present but empty.' Finding a present-and-empty row is therefore weak evidence against this truncation mechanism, not for it.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "MySQL manual: Error 1153 (08S01) 'Got a packet bigger than max_allowed_packet bytes' aborts the statement",
+        "fatal": true
+      },
+      {
+        "claimId": "c11",
+        "kind": "counterexample",
+        "statement": "MySQL's actual max_allowed_packet failure is a hard abort — ERROR 1153 'Got a packet bigger than max_allowed_packet bytes' — which stops the import at that statement. It does not silently insert an empty or truncated row. If the observed symptom really is a present-but-empty/truncated row with no error, that symptom doesn't match max_allowed_packet behavior, so raising the setting is aimed at the wrong mechanism.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "MySQL Reference Manual, Error 1153 (08S01) semantics — session/connection aborts, no partial silent insert",
+        "fatal": true
+      },
+      {
+        "claimId": "c11",
+        "kind": "known-exception",
+        "statement": "The classic cause of silent (no-error) truncation in MySQL is non-strict SQL mode inserting a string longer than a column's max length (e.g. a TEXT/VARCHAR cap) — this produces only a truncation warning, not an abort, and has nothing to do with max_allowed_packet. That mechanism matches the described 'empty/truncated instead of erroring' symptom far better than a packet-size limit does, and raising max_allowed_packet does nothing for it.",
+        "evidenceClass": "primary-documentation",
+        "evidenceDetail": "MySQL Reference Manual, Server SQL Modes — strict vs non-strict truncation-warning behavior for over-length column data",
+        "fatal": true
+      },
+      {
+        "claimId": "c11",
+        "kind": "configuration-dependency",
+        "statement": "max_allowed_packet exists independently on client and server, and many restore paths (phpMyAdmin, wp-cli db import, hosting-panel import GUIs) enforce their own packet/chunk-size ceiling separate from the MySQL server global variable — the very 'chunking limit in whatever tool did the restore' the surrounding text already names as an alternate cause. Raising only the server-side setting leaves that tool-level ceiling untouched, so the fix can be a no-op for tool-driven restores.",
+        "evidenceClass": "widely-accepted-practice",
+        "evidenceDetail": "mysqldump/mysql client have their own --max_allowed_packet defaults; GUI/CLI migration tools commonly chunk imports independent of the server variable",
+        "fatal": true
+      },
+      {
+        "claimId": "c11",
+        "kind": "alternative-explanation",
+        "statement": "If the truncation already happened when the backup was created (e.g. mysqldump run with a low client-side --max_allowed_packet, or exported from a source server with a lower limit), the dump file itself already contains the truncated value. Restoring that same file to a host with a newly-raised max_allowed_packet just reproduces the truncated data — the fix has to happen at export time, not at the next import.",
+        "evidenceClass": "reasoned-inference",
+        "evidenceDetail": "mysqldump's own max_allowed_packet governs the size of generated INSERT statements at dump time, independent of the restore target's setting",
+        "fatal": true
+      },
+      {
+        "claimId": "c11",
+        "kind": "configuration-dependency",
+        "statement": "On many managed/shared hosting plans, max_allowed_packet is not user-changeable (fixed by the host, or requires a support ticket / parameter-group change on managed DBaaS), so 'checking and raising' it may not be actionable at all before the next restore.",
+        "evidenceClass": "community-knowledge",
+        "evidenceDetail": "Common shared-hosting/managed-MySQL (e.g. RDS parameter groups, cPanel-hosted MySQL) restrictions on global variable changes",
+        "fatal": false
+      }
+    ],
+    "epistemic": [
+      {
+        "claimId": "c9",
+        "languageCertainty": "asserted",
+        "supportedCertainty": "medium",
+        "quote": "check whether that option is present-but-empty in the live DB versus present-and-full in the backup dump",
+        "detail": "asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence"
+      }
+    ],
+    "resolution": {
+      "resolved": true,
+      "signals": [
+        {
+          "where": "post-body",
+          "matched": "UPDATE:",
+          "context": "post carries an UPDATE section: …y I can get that Custom CSS back? I have the Updraft backup UPDATE: I downloaded the Updraft database file and extracted it. I…",
+          "byOriginalPoster": true
+        },
+        {
+          "where": "comment",
+          "matched": "found it",
+          "context": "found the cause: …I knew was in the Custom CSS (eg: \".main-cta\") and when it found it, I selected the block of text for that chunk of CSS. I had…",
+          "byOriginalPoster": false
+        },
+        {
+          "where": "op-reply",
+          "matched": "this worked",
+          "context": "confirmed a fix worked: …Yes this worked…",
+          "byOriginalPoster": true
+        },
+        {
+          "where": "op-reply",
+          "matched": "this is what I did",
+          "context": "adopted the suggested fix: …Thanks this is what I did…",
+          "byOriginalPoster": true
+        }
+      ],
+      "detail": "the asker declared this resolved — 3 signal(s) from the original poster, plus 1 from other commenters"
+    },
+    "recorded_verdict": "REJECT",
+    "recorded_invalidated": 0
+  }
+}

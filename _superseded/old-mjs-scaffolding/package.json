@@ -1,0 +1,16 @@
+{
+  "name": "sgen-reddit-scout",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SGEN Reddit Scout — finds relevant conversations, scores them, drafts a disclosed reply, and routes it to a human for approval. Discovery and drafting only: it never posts, never votes, never operates an account. Zero npm deps, Node >=20.",
+  "engines": { "node": ">=20" },
+  "bin": { "scout": "src/cli.mjs" },
+  "scripts": {
+    "scan": "node src/cli.mjs scan",
+    "serve": "node src/cli.mjs serve",
+    "export": "node src/cli.mjs export",
+    "test": "node --test test/"
+  },
+  "dependencies": {}
+}

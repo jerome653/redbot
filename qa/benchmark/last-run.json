@@ -1,0 +1,61 @@
+{
+  "generated_from": "qa/benchmark/run.mjs",
+  "mode": "replay",
+  "cases": 4,
+  "passed": 4,
+  "failed": 0,
+  "distinct_drafts": 2,
+  "failure_classes": {
+    "unlabelled-regression-baseline": {
+      "pass": 1,
+      "total": 1
+    },
+    "already-solved-thread": {
+      "pass": 1,
+      "total": 1
+    },
+    "false-technical-claim": {
+      "pass": 1,
+      "total": 1
+    },
+    "false-technical-claim-refutation-unavailable": {
+      "pass": 1,
+      "total": 1
+    }
+  },
+  "stages": {
+    "provenance_correct": 0,
+    "provenance_declared": 9,
+    "refutation_tp": 10,
+    "refutation_fn": 5,
+    "refutation_fp": 0,
+    "epistemic_hit": 3,
+    "epistemic_expected": 3,
+    "propagated": 6
+  },
+  "calibration": {
+    "distinct_claims": 0,
+    "distinct_drafts": 0,
+    "inflated": 0,
+    "deflated": 0,
+    "mean_tier_delta": null,
+    "rows": []
+  },
+  "verdict_paths": {
+    "covered": 2,
+    "of": 6,
+    "byPath": {
+      "correct-REJECT": [
+        "HRC-001",
+        "HRC-001-A"
+      ],
+      "false-ESCALATE": [
+        "HRC-001-B"
+      ]
+    }
+  },
+  "confusion": {
+    "REJECT|REJECT": 3,
+    "ESCALATE|ESCALATE": 1
+  }
+}

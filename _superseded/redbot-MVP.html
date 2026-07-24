@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>redbot — MVP Proposal</title>
+<meta name="description" content="Approval-stage proposal for redbot: a Reddit user agent for SGEN, with a side-by-side against the Appilot bot it replaces.">
+<meta name="robots" content="noindex, nofollow">
+<style>
+/* ===================================================================
+   SGEN — 24-Month Strategy Report (self-contained artifact stylesheet)
+   All colors flow through tokens; theme-aware; no external assets.
+   =================================================================== */
+
+:root{
+  /* LIGHT palette (default) */
+  --paper:#FBFAF8;
+  --ink:#1B1A18;
+  --ink-2:#4A4744;
+  --ink-3:#6E6A65;
+  --line:#E7E3DD;
+  --surface:#F3EFE9;
+  --surface-2:#EFEAE2;
+  --accent:#C8181C;
+  --link:#B01218;
+  --accent-soft:rgba(200,24,28,.10);
+
+  /* Type */
+  --font-display:"Poppins","Segoe UI Semibold",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --font-body:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"Cascadia Code","SF Mono",Consolas,monospace;
+
+  --topbar-h:3.25rem;
+  --measure:74ch;
+}
+
+/* DARK via system preference */
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#121110;
+    --ink:#F2EEE8;
+    --ink-2:#B8B2AA;
+    --ink-3:#8A847C;
+    --line:#2C2A27;
+    --surface:#1B1A18;
+    --surface-2:#211F1C;
+    --accent:#ff5760;
+    --link:#ff8088;
+    --accent-soft:rgba(255,87,96,.14);
+  }
+}
+
+/* Explicit theme stamps win in BOTH directions (higher specificity than :root) */
+:root[data-theme="light"]{
+  --paper:#FBFAF8;
+  --ink:#1B1A18;
+  --ink-2:#4A4744;
+  --ink-3:#6E6A65;
+  --line:#E7E3DD;
+  --surface:#F3EFE9;
+  --surface-2:#EFEAE2;
+  --accent:#C8181C;
+  --link:#B01218;
+  --accent-soft:rgba(200,24,28,.10);
+}
+:root[data-theme="dark"]{
+  --paper:#121110;
+  --ink:#F2EEE8;
+  --ink-2:#B8B2AA;
+  --ink-3:#8A847C;
+  --line:#2C2A27;
+  --surface:#1B1A18;
+  --surface-2:#211F1C;
+  --accent:#ff5760;
+  --link:#ff8088;
+  --accent-soft:rgba(255,87,96,.14);
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+
+html{
+  scroll-behavior:smooth;
+  scroll-padding-top:calc(var(--topbar-h) + 20px);
+  -webkit-text-size-adjust:100%;
+}
+
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--font-body);
+  font-size:1.12rem;
+  line-height:1.7;
+  letter-spacing:.001em;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+
+::selection{ background:var(--accent-soft); color:inherit; }
+
+:focus-visible{
+  outline:2px solid var(--accent);
+  outline-offset:2px;
+  border-radius:3px;
+}
+
+/* ---------------- Top bar ---------------- */
+.topbar{
+  position:fixed; inset:0 0 auto 0;
+  height:var(--topbar-h);
+  z-index:50;
+  background:color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter:saturate(1.4) blur(10px);
+  -webkit-backdrop-filter:saturate(1.4) blur(10px);
+  border-bottom:1px solid var(--line);
+}
+.topbar-inner{
+  height:100%;
+  max-width:1240px; margin-inline:auto;
+  padding:0 1.25rem;
+  display:flex; align-items:center; justify-content:space-between; gap:1rem;
+}
+.brand{ display:flex; align-items:center; gap:.75rem; min-width:0; }
+.wordmark{
+  font-family:var(--font-display);
+  font-weight:700;
+  font-size:1.18rem;
+  letter-spacing:-.02em;
+  color:var(--ink);
+  line-height:1;
+}
+.vrule{
+  width:2px; height:1.15rem;
+  background:var(--accent);
+  border-radius:2px;
+  flex:0 0 auto;
+}
+.brand-sub{
+  font-size:.82rem;
+  color:var(--ink-3);
+  letter-spacing:.02em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.stamp{
+  font-family:var(--font-mono);
+  font-size:.72rem;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  white-space:nowrap;
+}
+
+/* ---------------- Scroll progress ---------------- */
+.progress{
+  position:fixed; left:0; right:0; top:var(--topbar-h);
+  height:3px; z-index:49;
+  background:transparent;
+}
+.progress-fill{
+  display:block; height:100%; width:0%;
+  background:var(--accent);
+  transition:width .08s linear;
+}
+
+/* ---------------- Shell / layout ---------------- */
+.shell{
+  width:100%;
+  padding:calc(var(--topbar-h) + 3px + 1.75rem) 1.25rem 5rem;
+}
+@media (min-width:1000px){
+  .shell{
+    display:grid;
+    grid-template-columns:262px minmax(0,1fr);
+    gap:3.25rem;
+    max-width:1240px; margin-inline:auto;
+    padding-left:2rem; padding-right:2rem;
+  }
+}
+
+/* ---------------- Sidebar / TOC ---------------- */
+.sidebar{ min-width:0; }
+@media (min-width:1000px){
+  .sidebar{
+    position:sticky;
+    top:calc(var(--topbar-h) + 3px + 1.5rem);
+    align-self:start;
+    max-height:calc(100vh - var(--topbar-h) - 3rem);
+    overflow:auto;
+    overscroll-behavior:contain;
+  }
+}
+.toc{
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:var(--surface);
+  padding:.35rem .35rem;
+}
+@media (min-width:1000px){
+  .toc{ border:none; background:transparent; padding:0; }
+  .toc > summary{ display:none; }
+}
+.toc > summary{
+  list-style:none;
+  cursor:pointer;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:.55rem .75rem;
+  font-family:var(--font-display);
+  font-weight:700;
+  font-size:.9rem;
+  letter-spacing:.02em;
+  color:var(--ink);
+  user-select:none;
+}
+.toc > summary::-webkit-details-marker{ display:none; }
+.toc-caret{
+  width:.5rem; height:.5rem;
+  border-right:2px solid var(--ink-3);
+  border-bottom:2px solid var(--ink-3);
+  transform:rotate(45deg);
+  transition:transform .2s ease;
+}
+.toc[open] > summary .toc-caret{ transform:rotate(-135deg); }
+
+.nav-head{
+  font-size:.7rem;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  padding:.2rem .6rem .6rem;
+  font-weight:600;
+}
+.nav-list{ list-style:none; margin:0; padding:.25rem; }
+.nav-list li{ margin:0; }
+.nav-list a{
+  display:flex; gap:.55rem; align-items:baseline;
+  padding:.36rem .6rem;
+  border-radius:8px;
+  text-decoration:none;
+  color:var(--ink-2);
+  font-size:.83rem;
+  line-height:1.3;
+  border-left:2px solid transparent;
+  transition:background .15s ease, color .15s ease, border-color .15s ease;
+}
+.nav-list a:hover{ background:var(--accent-soft); color:var(--ink); }
+.nav-list a.active{
+  background:var(--accent-soft);
+  color:var(--ink);
+  border-left-color:var(--accent);
+  font-weight:600;
+}
+.nav-list a .n-mark{
+  flex:0 0 auto;
+  font-family:var(--font-mono);
+  font-size:.74rem;
+  font-weight:700;
+  color:var(--accent);
+  letter-spacing:0;
+}
+.nav-list a .n-text{ min-width:0; }
+
+/* ---------------- Article ---------------- */
+.article{
+  min-width:0;
+  max-width:var(--measure);
+}
+@media (min-width:1000px){
+  .article{ margin-inline:auto; }
+}
+.article{ display:flex; flex-direction:column; }
+.article > *{ margin:0; }
+.article > * + *{ margin-top:1.05rem; }
+.article > h1{ margin-top:0; }
+.article > h2{ margin-top:2.6rem; }
+.article > h3{ margin-top:1.9rem; }
+.article > hr{ margin-top:2.4rem; }
+.article > .table-wrap{ margin-top:1.4rem; }
+.article > blockquote{ margin-top:1.5rem; }
+
+.loading{ color:var(--ink-3); font-style:italic; }
+
+/* Headings */
+h1,h2,h3,h4{
+  font-family:var(--font-display);
+  font-weight:700;
+  letter-spacing:-.01em;
+  line-height:1.18;
+  text-wrap:balance;
+  color:var(--ink);
+}
+.article h1{
+  font-size:2.4rem;
+  line-height:1.1;
+  margin-bottom:.4rem;
+  letter-spacing:-.02em;
+}
+.article h2{
+  font-size:1.7rem;
+  padding-top:2rem;
+  border-top:1px solid var(--line);
+  scroll-margin-top:calc(var(--topbar-h) + 24px);
+  display:flex; flex-direction:column; gap:.35rem;
+}
+.article h3{
+  font-size:1.25rem;
+  color:var(--ink);
+  scroll-margin-top:calc(var(--topbar-h) + 24px);
+}
+.article h4{ font-size:1.05rem; }
+.eyebrow{
+  font-family:var(--font-mono);
+  font-size:.82rem;
+  font-weight:700;
+  letter-spacing:.06em;
+  color:var(--accent);
+  line-height:1;
+}
+.htitle{ display:block; }
+
+/* Paragraphs & inline */
+.article p{ color:var(--ink); }
+.article strong{ font-weight:700; color:var(--ink); }
+.article em{ font-style:italic; }
+.article a{
+  color:var(--link);
+  text-decoration:none;
+  border-bottom:1px solid color-mix(in srgb, var(--link) 32%, transparent);
+  overflow-wrap:anywhere;
+  transition:border-color .15s ease, background .15s ease;
+}
+.article a:hover,.article a:focus-visible{
+  border-bottom-color:var(--link);
+  background:var(--accent-soft);
+}
+
+code{
+  font-family:var(--font-mono);
+  font-size:.86em;
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:5px;
+  padding:.08em .38em;
+  overflow-wrap:anywhere;
+  color:var(--ink);
+}
+
+/* Horizontal rule */
+hr{
+  border:none;
+  height:1px;
+  background:var(--line);
+  width:100%;
+}
+/* An <hr> directly followed by a section heading is redundant with the
+   heading's own top border — soften it so sections don't double-rule. */
+.article > hr + h2{ border-top:none; padding-top:0; }
+
+/* Lists */
+.article ul,.article ol{
+  padding-left:1.35rem;
+  color:var(--ink);
+}
+.article li{ margin:.28rem 0; }
+.article li::marker{ color:var(--ink-3); }
+.article ol{ list-style:decimal; }
+.article ul{ list-style:disc; }
+.article li > ul,.article li > ol{ margin-top:.28rem; }
+
+/* Task lists */
+.article ul.task-list{ list-style:none; padding-left:.1rem; }
+.article li.task{
+  list-style:none;
+  display:flex; gap:.6rem; align-items:flex-start;
+  margin:.34rem 0;
+}
+.article li.task .chk{
+  flex:0 0 auto;
+  width:1.05em; height:1.05em;
+  margin-top:.28em;
+  border:2px solid var(--ink-3);
+  border-radius:4px;
+  position:relative;
+  background:transparent;
+}
+.article li.task.done .chk{
+  border-color:var(--accent);
+  background:var(--accent);
+}
+.article li.task.done .chk::after{
+  content:"";
+  position:absolute;
+  left:.28em; top:.05em;
+  width:.28em; height:.55em;
+  border:solid var(--paper);
+  border-width:0 2px 2px 0;
+  transform:rotate(42deg);
+}
+.article li.task .task-body{ min-width:0; }
+
+/* Blockquotes */
+.article blockquote{
+  border-left:3px solid var(--accent);
+  background:var(--surface);
+  border-radius:0 10px 10px 0;
+  padding:.9rem 1.15rem;
+  color:var(--ink-2);
+}
+.article blockquote > *{ margin:0; }
+.article blockquote > * + *{ margin-top:.6rem; }
+.article blockquote strong{ color:var(--ink); }
+.article blockquote ul,.article blockquote ol{ margin:.2rem 0; }
+
+/* Tables */
+.table-wrap{
+  overflow-x:auto;
+  max-width:100%;
+  border:1px solid var(--line);
+  border-radius:10px;
+  -webkit-overflow-scrolling:touch;
+}
+table{
+  border-collapse:collapse;
+  width:100%;
+  font-size:.92rem;
+  line-height:1.5;
+}
+table.wide{ width:auto; min-width:1040px; }
+thead th{
+  background:var(--surface-2);
+  color:var(--ink);
+  font-family:var(--font-display);
+  font-weight:700;
+  font-size:.82rem;
+  letter-spacing:.01em;
+  text-align:left;
+  vertical-align:bottom;
+  white-space:nowrap;
+  padding:.6rem .7rem;
+  border-bottom:1px solid var(--line);
+}
+tbody td{
+  padding:.55rem .7rem;
+  border-bottom:1px solid var(--line);
+  color:var(--ink-2);
+  vertical-align:top;
+  font-variant-numeric:tabular-nums;
+}
+tbody tr:last-child td{ border-bottom:none; }
+tbody tr:nth-child(even){ background:var(--surface); }
+td.num,th.num{
+  font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums;
+  color:var(--ink);
+}
+.ta-center{ text-align:center; }
+.ta-right{ text-align:right; }
+.ta-left{ text-align:left; }
+tbody td.ta-center,tbody td.ta-right{ white-space:nowrap; }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce){
+  html{ scroll-behavior:auto; }
+  *,*::before,*::after{
+    transition:none !important;
+    animation:none !important;
+  }
+}
+
+/* Small screens */
+@media (max-width:640px){
+  body{ font-size:1.04rem; }
+  .article h1{ font-size:1.95rem; }
+  .article h2{ font-size:1.42rem; }
+  .article h3{ font-size:1.14rem; }
+  .stamp{ display:none; }
+}
+</style>
+
+
+<style>
+/* ---- additions for this report: code blocks + diagrams ---- */
+.codeblock{
+  margin:1.6rem 0;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:var(--surface);
+  overflow:hidden;
+  position:relative;
+}
+.codeblock[data-lang]::before{
+  content:attr(data-lang);
+  position:absolute; top:0; right:0;
+  font-family:var(--font-mono);
+  font-size:.66rem; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--ink-3);
+  background:var(--surface-2);
+  border-left:1px solid var(--line); border-bottom:1px solid var(--line);
+  border-radius:0 8px 0 8px;
+  padding:.25rem .6rem;
+}
+.codeblock pre{
+  margin:0; padding:1.1rem 1.15rem;
+  overflow-x:auto;
+  font-family:var(--font-mono);
+  font-size:.86rem; line-height:1.6;
+  color:var(--ink-2);
+  tab-size:2;
+}
+.codeblock code{
+  background:none; border:0; padding:0; font-size:inherit; color:inherit;
+  white-space:pre;
+}
+.diagram{
+  margin:1.9rem 0;
+  padding:1.1rem;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:var(--surface);
+  overflow-x:auto;
+}
+.diagram pre.mermaid{
+  margin:0;
+  font-family:var(--font-mono);
+  font-size:.8rem; line-height:1.5;
+  color:var(--ink-3);
+  white-space:pre;
+}
+.diagram svg{ max-width:100%; height:auto; display:block; margin-inline:auto; }
+.callout{
+  border-left:3px solid var(--accent);
+  background:var(--accent-soft);
+  padding:.9rem 1.1rem;
+  border-radius:0 6px 6px 0;
+  margin:1.5rem 0;
+}
+@media print{ .codeblock, .diagram{ break-inside:avoid; } }
+</style>
+<style>
+  /* standalone-only: page chrome + print */
+  body{ margin:0; }
+  @media print{
+    .topbar, .progress, .sidebar{ display:none !important; }
+    .shell{ display:block; max-width:none; padding:0; }
+    .article{ max-width:none; padding:0; }
+    a[href^="http"]::after{ content:" (" attr(href) ")"; font-size:.72em; color:#666; word-break:break-all; }
+    h1,h2,h3{ break-after:avoid; }
+    table, .diagram, .codeblock{ break-inside:avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="topbar" role="banner">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="wordmark">SGEN</span>
+      <span class="vrule" aria-hidden="true"></span>
+      <span class="brand-sub">redbot — MVP Proposal</span>
+    </div>
+    <div class="stamp">v1 &middot; 2026-07-22</div>
+  </div>
+</div>
+
+<div class="progress" aria-hidden="true"><span class="progress-fill" id="progressFill"></span></div>
+
+<div class="shell">
+  <aside class="sidebar">
+    <details class="toc" id="toc">
+      <summary><span>Contents</span><span class="toc-caret" aria-hidden="true"></span></summary>
+      <nav aria-label="Report sections">
+        <div class="nav-head">Sections</div>
+        <ul class="nav-list" id="navList">
+        <li><a href="#the-ask-in-one-paragraph" data-target="the-ask-in-one-paragraph"><span class="n-text">The ask, in one paragraph</span></a></li>
+        <li><a href="#1-side-by-side" data-target="1-side-by-side"><span class="n-text">1. Side by side</span></a></li>
+        <li><a href="#2-what-the-mvp-does" data-target="2-what-the-mvp-does"><span class="n-text">2. What the MVP does</span></a></li>
+        <li><a href="#3-how-it-works" data-target="3-how-it-works"><span class="n-text">3. How it works</span></a></li>
+        <li><a href="#4-multiple-accounts--how-and-where-the-ceiling-is" data-target="4-multiple-accounts--how-and-where-the-ceiling-is"><span class="n-text">4. Multiple accounts — how, and where the ceiling is</span></a></li>
+        <li><a href="#5-what-redbot-does-differently-and-why-each-one-matters" data-target="5-what-redbot-does-differently-and-why-each-one-matters"><span class="n-text">5. What redbot does differently, and why each one matters</span></a></li>
+        <li><a href="#6-timeline" data-target="6-timeline"><span class="n-text">6. Timeline</span></a></li>
+        <li><a href="#7-what-sgen-needs-to-provide" data-target="7-what-sgen-needs-to-provide"><span class="n-text">7. What SGEN needs to provide</span></a></li>
+        <li><a href="#8-definition-of-done" data-target="8-definition-of-done"><span class="n-text">8. Definition of done</span></a></li>
+        <li><a href="#9-risks" data-target="9-risks"><span class="n-text">9. Risks</span></a></li>
+        <li><a href="#10-recommendation" data-target="10-recommendation"><span class="n-text">10. Recommendation</span></a></li>
+        <li><a href="#approval" data-target="approval"><span class="n-text">Approval</span></a></li>
+        </ul>
+      </nav>
+    </details>
+  </aside>
+  <main class="article" id="article">
+<h1 id="redbot--mvp-proposal">redbot — MVP Proposal</h1>
+<p><strong>For approval</strong> · 2026-07-22 · prepared for SGEN<br><strong>Supersedes:</strong> nothing. <strong>Depends on:</strong> <code>REDBOT-CANON.md</code>, <code>ADR/</code>, <code>Requirements/</code><br><strong>Companion:</strong> <code>Projects/appilot-analysis/</code> — the teardown this is answering</p>
+<hr>
+<h2 id="the-ask-in-one-paragraph"><span class="htitle">The ask, in one paragraph</span></h2>
+<p>Build <strong>redbot</strong>: a Reddit user agent that does what a person does — reads, searches,<br>browses, writes, replies, manages its own account — under SGEN's direction, at human pace,<br>from real accounts. Same capability as the Appilot bot SGEN already paid for, built on<br>SGEN's existing stack instead of a phone farm, with the six structural problems found in<br>Appilot's binary fixed by construction rather than inherited.</p>
+<p><strong>~8 weeks to a tested system. ~$20–40k build. ~$2–4k/year to run.</strong><br>Against Appilot's shape: 5–6 months, ~$100k, $30–45k/year.</p>
+<p>The difference is not cleverness. It is that Appilot built for <em>their</em> business — selling<br>mobile-device automation to many customers — and SGEN does not need mobile. SGEN needs the<br>capability.</p>
+<hr>
+<h2 id="1-side-by-side"><span class="htitle">1. Side by side</span></h2>
+<h3 id="11-can-it-do-the-thing">1.1 Can it do the thing?</h3>
+<p>Capability parity is the first question. It is not the interesting one, but it has to be<br>answered before anything else matters.</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>What a person does on Reddit</th><th>Appilot</th><th>redbot MVP</th><th>redbot v1</th></tr></thead><tbody><tr><td>Browse a feed, scroll, load more</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Open a subreddit, sort it</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Search</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Open a post, read the thread</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Read comment trees, expand replies</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Comment on a post</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Reply to a comment</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Submit an original post</td><td>✅ <em>(undocumented)</em></td><td>➖</td><td>✅</td></tr><tr><td>Edit / delete own content</td><td>❓</td><td>➖</td><td>✅</td></tr><tr><td>Send / read direct messages</td><td>❌</td><td>➖</td><td>✅</td></tr><tr><td>Join / leave subreddits</td><td>❓</td><td>➖</td><td>✅</td></tr><tr><td>Save, follow, hide, report</td><td>❓</td><td>➖</td><td>✅</td></tr><tr><td>Read own karma / account health</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Upvote / downvote</td><td>✅ <em>(undocumented)</em></td><td>🔒</td><td>🔒</td></tr><tr><td>Human-like pacing and typing</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Warm-up browsing before work</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Recover from an unexpected screen</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Run unattended for hours</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>Multiple accounts</td><td>✅ <em>(one phone each)</em></td><td>➖</td><td>✅</td></tr></tbody></table></div>
+<p>✅ shipped · ➖ specified, later phase · 🔒 specified, config-gated off (ADR-0007) ·<br>❓ not determinable from the artifact</p>
+<p><strong>Read that table honestly: Appilot's bot works.</strong> It is a competent piece of engineering<br>by people who had clearly shipped Android automation before. The case for redbot is not<br>that Appilot's bot is bad. It is everything below this line.</p>
+<h3 id="12-how-it-is-built">1.2 How it is built</h3>
+<div class="table-wrap"><table class="md-table"><thead><tr><th></th><th>Appilot</th><th>redbot</th></tr></thead><tbody><tr><td>Runs on</td><td>a physical Android phone per account</td><td>a browser session per account</td></tr><tr><td>Needs</td><td>phones, SIMs, mobile proxies, a shelf, an Android team</td><td>a laptop or a small VPS</td></tr><tr><td>Drives Reddit via</td><td>Accessibility Service reading the app's view tree</td><td>Playwright driving reddit.com</td></tr><tr><td>New behaviour requires</td><td><strong>a new APK, re-signed, re-downloaded, re-installed on every device</strong></td><td><strong>a new JSON file</strong></td></tr><tr><td>Reddit changes its UI</td><td>rebuild + redistribute the binary</td><td>edit a selector pack, push in minutes</td></tr><tr><td>Selectors live</td><td>~60 view IDs compiled into the binary</td><td>a versioned data file, hot-swappable</td></tr><tr><td>Core logic</td><td>one class, 608 methods</td><td>4 layers, boundaries asserted in CI</td></tr><tr><td>Storage</td><td>hand-rolled CSV, corrupts on kill-mid-write</td><td>JSONL, atomic write-and-rename</td></tr><tr><td>Secrets</td><td><strong>2 live API keys compiled into the APK</strong></td><td>environment only, CI check blocks a leak</td></tr><tr><td>TLS</td><td><code>getUnsafeOkHttpClient()</code>, user CAs trusted, cleartext permitted</td><td>standard, no bypass helper exists</td></tr><tr><td>Updates</td><td>downloads an APK from a GitHub repo that <strong>404s publicly</strong></td><td>git</td></tr><tr><td>Crash reporting</td><td>none</td><td>structured events + typed errors</td></tr><tr><td>Tests</td><td>none visible</td><td>offline suite is a phase gate</td></tr><tr><td>Audit trail</td><td>drafts batched to a server</td><td>every write logged before and after, with content</td></tr><tr><td>Disclosure</td><td><em>requested</em> in the prompt, "mention SGEN organically"</td><td><em>enforced</em> by a linter — no disclosure, no queue</td></tr><tr><td>AI-detection evasion</td><td>instructed: deliberate typos, fabricated war stories</td><td>forbidden, and the linter rejects it</td></tr><tr><td>Voting</td><td><strong>on at 50%, undocumented in the user guide</strong></td><td>off, config-gated, requires a superseding ADR</td></tr></tbody></table></div>
+<h3 id="13-what-it-costs">1.3 What it costs</h3>
+<div class="table-wrap"><table class="md-table"><thead><tr><th></th><th>Appilot shape</th><th>redbot</th></tr></thead><tbody><tr><td>Build</td><td>5–6 months, ~$100k</td><td><strong>~8 weeks, $20–40k</strong></td></tr><tr><td>Phones</td><td>~$1,000 for 5</td><td>$0</td></tr><tr><td>Proxies</td><td>$1,800–4,800/yr <em>(mobile ports, one per phone)</em></td><td><strong>$0</strong> — see §4.4; $11–216/yr if you want IP separation anyway</td></tr><tr><td>Selector maintenance</td><td><strong>$25–40k/yr</strong> — Reddit ships, buttons move, someone fixes</td><td>~$3–5k/yr — a pack edit, not a release</td></tr><tr><td>LLM</td><td>~$600/yr</td><td>~$600–1,800/yr</td></tr><tr><td>Hosting</td><td>n/a</td><td>~$250/yr</td></tr><tr><td><strong>Year 1 total</strong></td><td><strong>~$130–150k</strong></td><td><strong>~$25–45k</strong></td></tr><tr><td><strong>Year 2+</strong></td><td><strong>~$30–45k/yr</strong></td><td><strong>~$4–7k/yr</strong></td></tr></tbody></table></div>
+<p>The gap is not in the build. It is in the treadmill. Appilot's architecture makes every<br>Reddit release an engineering event; redbot's makes it a data edit.</p>
+<hr>
+<h2 id="2-what-the-mvp-does"><span class="htitle">2. What the MVP does</span></h2>
+<h3 id="in-scope">In scope</h3>
+<p><strong>Agent</strong></p>
+<ul><li>One account, real browser session, saved and restored — no re-login every run</li><li>Read: open subreddit, open post, read comment trees, scroll, search</li><li>Write: comment on a post, reply to a comment — <strong>both behind the approval gate</strong></li><li>Account health: is the session alive, is it shadowbanned, what is the karma</li><li>Recover from a wrong screen without ending the run</li><li>Kill switch: one command halts everything, mid-step</li></ul>
+<p><strong>Intelligence</strong></p>
+<ul><li>Engagement scoring → tier 1/2/3 (is this thread actually alive right now)</li><li>LLM qualification → is this answerable, is it in SGEN's competence, is it answerable</li></ul>
+<p><em>without</em> pitching the product</p>
+<ul><li>LLM drafting → a reply a real engineer would be willing to put their name on</li><li>Draft linter → rejects missing disclosure, fabricated experience, deliberate typos,</li></ul>
+<p>engagement bait</p>
+<p><strong>Control</strong></p>
+<ul><li>Approval queue: read the thread, read the draft, edit it, approve or reject</li><li>Audit log: every write, before and after, with content and permalink</li><li>CLI: <code>run</code>, <code>serve</code>, <code>approve</code>, <code>halt</code>, <code>doctor</code></li></ul>
+<p><strong>Engineering</strong></p>
+<ul><li>Workflows are JSON documents — new behaviour without a release</li><li>Selector pack v1, tiered resolution, degradation telemetry</li><li>Rate ledger enforced in code — no path from a write to the network skips it</li><li>Log-normal timing, not uniform ranges</li><li>Offline test suite that passes with the network disabled</li></ul>
+<h3 id="out-of-mvp--specified-phased">Out of MVP — specified, phased</h3>
+<p>Original posts · edit/delete · direct messages · join/leave/save/follow/hide/report ·<br>multi-account orchestration · vote actions (ADR-0007) · mention monitoring *(moves in if<br>the primary objective is defensive)* · MOE integration · any platform but Reddit.</p>
+<hr>
+<h2 id="3-how-it-works"><span class="htitle">3. How it works</span></h2>
+<div class="diagram"><pre class="mermaid">flowchart TD
+  subgraph CONTROL["Control — people"]
+    CLI["CLI"]
+    DASH["Approval dashboard"]
+    KILL["Kill switch"]
+  end
+  subgraph ENGINE["Engine — intent"]
+    WF["Workflow interpreter&lt;br/&gt;JSON documents, no release needed"]
+    SM["Run state machine"]
+    HUM["Humanize policy&lt;br/&gt;log-normal timing"]
+    LED["Rate ledger&lt;br/&gt;hard stop, no bypass"]
+    Q["Approval queue"]
+    REC["Recovery routines"]
+  end
+  subgraph ACTIONS["Actions — Reddit meaning"]
+    RD["read · write · curate · account"]
+  end
+  subgraph SURFACE["Surface — the browser"]
+    PACK["Selector pack&lt;br/&gt;versioned data, hot-swappable"]
+    DRV["Page driver — Playwright"]
+    SESS["Session store, one per account"]
+  end
+  LLM["LLM&lt;br/&gt;qualify · draft · lint"]
+  LOG[("Audit log&lt;br/&gt;before + after every write")]
+
+  CLI --&gt; WF
+  DASH --&gt; Q
+  KILL --&gt; SM
+  WF --&gt; SM --&gt; RD
+  HUM --&gt; SM
+  SM --&gt; LED
+  LED --&gt; Q
+  Q --&gt; RD
+  REC --&gt; SM
+  RD --&gt; DRV
+  PACK --&gt; DRV
+  SESS --&gt; DRV
+  DRV --&gt; R["reddit.com"]
+  SM --&gt; LLM
+  LLM --&gt; Q
+  RD --&gt; LOG
+  Q --&gt; LOG</pre></div>
+<p><strong>The layering is the point.</strong> Surface knows the DOM and nothing about Reddit. Actions know<br>Reddit and nothing about workflows. Engine knows intent and never touches the DOM. Control<br>knows people. A CI test fails the build if an import points the wrong way.</p>
+<p>That rule exists for one reason: Appilot's <code>RedditAutomation</code> class holds 608 of its ~1,500<br>methods because perception, actuation, flow control, data capture and recovery all live<br>together with no boundary. That collapse is not an accident of skill — it is what happens<br>without an enforced line. redbot draws the line on day one and lets CI hold it.</p>
+<h3 id="the-run-loop">The run loop</h3>
+<div class="diagram"><pre class="mermaid">sequenceDiagram
+  participant O as Operator
+  participant E as Engine
+  participant L as Rate ledger
+  participant A as Actions
+  participant R as reddit.com
+  participant Q as Approval queue
+
+  O-&gt;&gt;E: run wf_answer_in_subreddit --subreddit wordpress
+  E-&gt;&gt;E: validate workflow (schema, actions exist, vote-gate, ledger headroom)
+  E-&gt;&gt;A: openSubreddit
+  A-&gt;&gt;R: navigate + verify header matches
+  loop until budget or maxWrites
+    E-&gt;&gt;E: humanize.wait() — log-normal, not uniform
+    E-&gt;&gt;A: scrollFeed / openPost / readComments
+    A--&gt;&gt;E: observations + evidence
+    E-&gt;&gt;E: score → tier
+    E-&gt;&gt;E: qualify (LLM) → worthy? answerable without pitching?
+    alt worthy
+      E-&gt;&gt;E: draft (LLM) → lintDraft()
+      alt lint fails
+        E-&gt;&gt;E: reject, log reason, continue
+      else lint passes
+        E-&gt;&gt;L: may this account write now?
+        alt blocked
+          L--&gt;&gt;E: RATE_LIMITED + reason (logged, not a warning)
+        else allowed
+          E-&gt;&gt;Q: enqueue for human approval
+          Q--&gt;&gt;O: dashboard: thread + draft + score
+          O-&gt;&gt;Q: edit / approve
+          Q-&gt;&gt;A: submitComment
+          A-&gt;&gt;R: type at human cadence, submit
+          A--&gt;&gt;E: permalink captured
+        end
+      end
+    end
+  end
+  E-&gt;&gt;E: run.completed + audit flush</pre></div>
+<hr>
+<h2 id="4-multiple-accounts--how-and-where-the-ceiling-is"><span class="htitle">4. Multiple accounts — how, and where the ceiling is</span></h2>
+<p>This was asked directly, so here is the real answer rather than a comfortable one.</p>
+<h3 id="the-mechanics-are-easy">The mechanics are easy</h3>
+<p>Playwright's isolation primitive is the <strong>browser context</strong>. One browser, N contexts, each<br>with its own cookie jar, localStorage, sessionStorage and cache. Verified against current<br>Playwright docs:</p>
+<div class="codeblock" data-lang="js"><pre><code>// log in once, by hand, per account — then never again
+await ctx.storageState({ path: 'data/accounts/sgen_dev/session.json' });
+
+// every run after that restores the session
+const ctx = await browser.newContext({
+  storageState: 'data/accounts/sgen_dev/session.json',
+  proxy:      { server: 'http://…', username: '…', password: '…' },  // per context
+  locale:     'en-GB',
+  timezoneId: 'Europe/London',
+  viewport:   { width: 1440, height: 900 }
+});</code></pre></div>
+<p><code>proxy</code>, <code>locale</code>, <code>timezoneId</code>, <code>viewport</code>, <code>geolocation</code>, <code>colorScheme</code> and <code>permissions</code><br>are all settable <strong>per context</strong>. For a heavier profile — one that keeps extensions and full<br>browser state on disk — <code>chromium.launchPersistentContext(userDataDir, opts)</code> gives each<br>account a real Chrome profile directory. *(Caveat from Playwright's own docs: use a fresh<br>directory, never Chrome's main "User Data" folder, and no two instances may share one.)*</p>
+<h3 id="the-ceiling-is-where-it-gets-honest">The ceiling is where it gets honest</h3>
+<p>Contexts isolate <strong>storage</strong>. They do not isolate <strong>identity</strong>.</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Signal</th><th>Isolated by a context?</th></tr></thead><tbody><tr><td>Cookies, localStorage, session</td><td>✅ yes</td></tr><tr><td>IP address</td><td>❌ no — same machine, same IP, unless you set a per-context proxy</td></tr><tr><td>User agent, locale, timezone, viewport</td><td>⚠️ settable, but you have to set them</td></tr><tr><td>Canvas / WebGL / font / audio fingerprint</td><td>❌ <strong>no — same browser binary, same hardware, identical across every context</strong></td></tr><tr><td>Behaviour: timing, phrasing, active hours, subreddit overlap</td><td>❌ no — that is a design problem, not an API one</td></tr></tbody></table></div>
+<p>Reddit states it correlates IP address, login patterns and voting timing to identify<br>coordinated accounts. Contexts do not defeat that, and nothing in a browser automation<br>library does.</p>
+<p><strong>This is precisely why Appilot used one physical phone per account.</strong> A separate phone on<br>a separate SIM genuinely is a different device on a different network. That is the one thing<br>their architecture buys that redbot's does not, and it deserves to be said plainly rather<br>than buried.</p>
+<h3 id="what-redbot-does-about-it">What redbot does about it</h3>
+<p>Ordered by how much they actually help:</p>
+<ol><li><strong>One context per account, always.</strong> Never share a session. Baseline, non-negotiable.</li><li><strong>Never run two accounts at the same time.</strong> Serial execution, staggered by hours. Timing</li></ol>
+<p>correlation is the cheapest signal to give away and the easiest to avoid.</p>
+<ol><li><strong>Per-account persona in config</strong> — its own subreddits, its own active hours, its own</li></ol>
+<p>writing register, its own rate ceiling. Accounts that behave identically look identical.</p>
+<ol><li><strong>Per-context emulation</strong> — distinct UA, locale, timezone, viewport per account.</li><li><strong>Persistent profiles</strong> (<code>launchPersistentContext</code>) once accounts have history worth</li></ol>
+<p>keeping.</p>
+<ol><li><strong>Per-context proxy</strong> — <em>optional, and cheaper than the category assumes.</em> See §4.4.</li><li><strong>Beyond ~5 accounts:</strong> separate machines or VMs, or a purpose-built anti-detect browser.</li></ol>
+<p>Notably, the anti-detect vendors Appilot's own site lists — Multilogin, GoLogin, AdsPower,<br>Kameleo — exist because this ceiling is real and browser contexts do not clear it.</p>
+<h3 id="44-what-multi-account-actually-costs">4.4 What multi-account actually costs</h3>
+<p>An earlier draft of this proposal priced proxies at $30–80 per account per month. **That was<br>wrong by roughly 10–100×*<em> — it quoted dedicated 4G </em>mobile ports*, which is phone-farm<br>equipment, not the product a browser needs. Corrected, with pricing verified 2026-07-22:</p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Product</th><th>Real price</th><th>Right for redbot?</th></tr></thead><tbody><tr><td>Static residential IP, dedicated, flat monthly</td><td><strong>$0.30–$6 per IP/month</strong> (Webshare from $0.30; Oxylabs $16 premium tier)</td><td>yes, if you want IP separation</td></tr><tr><td>Rotating residential, metered</td><td>$1–8/GB, $3–8 typical</td><td>works, but rotation buys nothing here</td></tr><tr><td>Mobile / 4G port</td><td>$30–80/month</td><td>no — that is for imitating a phone</td></tr></tbody></table></div>
+<p>Three accounts on dedicated static residential IPs: <strong>$11–216/year.</strong></p>
+<p><strong>And the more useful correction: you may need none of it.</strong> Reddit does not action accounts<br>merely for sharing an IP — it cannot, since households, offices, universities and carrier-grade<br>NAT put large numbers of genuine accounts behind single addresses. Enforcement follows<br><em>coordinated behaviour</em>: accounts voting on the same content, replying to one another, posting<br>the same links, moving in lockstep.</p>
+<p>The entire proxy and anti-detect industry exists to make **connected accounts look<br>unconnected**. redbot's accounts are disclosed SGEN staff. The connection is public by<br>construction. There is nothing to conceal, so there is nothing to buy.</p>
+<p>Shared IP is fine provided the accounts never interact, never post in the same thread, keep<br>different active hours and different subreddits, and do not vote. Every one of those is a<br>scheduling rule enforced by the engine — not a purchase.</p>
+<p><strong>Revised cost of multi-account:</strong></p>
+<div class="table-wrap"><table class="md-table"><thead><tr><th></th><th>Cost</th></tr></thead><tbody><tr><td>Infrastructure for 2–3 disclosed accounts on a shared IP</td><td><strong>$0</strong></td></tr><tr><td>Optional static residential IPs</td><td>$11–216/yr</td></tr><tr><td>Engineering — session store, ledger and persona config are already per-account</td><td><strong>~3–5 days, one time (~$1.2–2k)</strong></td></tr><tr><td>LLM</td><td>unchanged; scales with volume, not accounts</td></tr></tbody></table></div>
+<p>Multi-account is a small one-time engineering item, not a recurring infrastructure bill.</p>
+<p>*<em>What does stay expensive is account </em>supply<em>, not account </em>operation<em>.</em>* Large subreddits<br>gate new accounts on age and karma. Growing one honestly takes 3–6 months; buying them breaks<br>Reddit's rules and they are banned in sweeps. No budget shortens that calendar, which is the<br>real reason the recommendation below still starts at one account.</p>
+<h3 id="the-recommendation">The recommendation</h3>
+<p><strong>Start with one account.</strong> Not as a limitation — as the correct sequencing. One real,<br>disclosed account posting genuinely useful replies tells you within two weeks whether any of<br>this works. If the replies land, scaling to 2–3 accounts with per-context proxies is a week<br>of work. If they do not land, you have learned that for the price of a fortnight instead of<br>a proxy contract and a fingerprinting problem.</p>
+<p>Multi-account is in the architecture from day one — the session store, the ledger and the<br>persona config are all per-account — so nothing has to be rebuilt. It is simply not the<br>thing to turn on first, and per §4.4 it is cheap enough that the decision can wait until<br>there is evidence to base it on.</p>
+<hr>
+<h2 id="5-what-redbot-does-differently-and-why-each-one-matters"><span class="htitle">5. What redbot does differently, and why each one matters</span></h2>
+<p><strong>1. Behaviour is data.</strong> Appilot compiles one bot per target per customer. A new behaviour<br>is a new binary, re-signed, re-downloaded, re-installed on every device. redbot interprets a<br>JSON workflow. New behaviour ships in minutes and is reviewable as a diff.</p>
+<p><strong>2. Selectors are a hot-swappable pack.</strong> ~60 Reddit element IDs are compiled into<br>Appilot's binary; every Reddit release can break them and every fix is a full rebuild-and-<br>redistribute cycle. redbot's live in a versioned data file with three fallback tiers, and<br>every resolution reports which tier won — so a selector <em>degrading</em> is visible days before<br>it <em>fails</em>.</p>
+<p><strong>3. Secrets cannot ship.</strong> Two live API keys — Anthropic and OpenRouter — are compiled into<br>the APK SGEN was given. An APK is a zip file. redbot reads credentials from the environment<br>only, and a CI check fails the build on a key-shaped string.</p>
+<p><strong>4. Disclosure is enforced, not requested.</strong> Appilot's prompt asks the model to mention<br>sgen.com "organically". redbot's linter refuses to queue any draft that mentions SGEN<br>without the disclosure line. A prompt is a request; models drift. A gate does not.</p>
+<p><strong>5. No manufactured authenticity.</strong> Appilot's prompts instruct the model toward "100% human<br>feel" — deliberate typos, fabricated war stories, invented personas. redbot's linter rejects<br>all three. The reply is good because it is genuinely useful and genuinely attributed, which<br>also happens to be what works on r/WordPress.</p>
+<p><strong>6. Every write is auditable.</strong> Logged before it is sent and after it lands, with content<br>and permalink. That log is the evidence trail if disclosure is ever questioned, and it is<br>the reason an unknown-outcome write is investigated by hand rather than blindly retried.</p>
+<hr>
+<h2 id="6-timeline"><span class="htitle">6. Timeline</span></h2>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>Phase</th><th>Weeks</th><th>Contains</th><th>Gate to proceed</th></tr></thead><tbody><tr><td><strong>P0 Plan</strong></td><td>✅ done</td><td>canon · 7 ADRs · architecture · 20 modules · 36 requirements · action registry · workflow schema · event contract</td><td>complete 2026-07-22</td></tr><tr><td><strong>P1 Engineer</strong></td><td>1–3</td><td>config · store · selector pack · page driver · action registry · workflow parser · humanize · rate ledger</td><td>unit tests green offline</td></tr><tr><td><strong>P2 Platform</strong></td><td>4–6</td><td>engine · LLM · qualify/draft/lint · approval queue · dashboard · audit · alerts · CLI · kill switch</td><td>a workflow drives a full cycle</td></tr><tr><td><strong>P3 Test</strong></td><td>7–8</td><td>fixture site · golden-page corpus · offline suite</td><td><strong>green with the network disabled</strong></td></tr><tr><td><strong>P4 Real test</strong></td><td>+2 days</td><td>live, <strong>logged out, read-only</strong>, one subreddit</td><td>reads real Reddit, writes nothing</td></tr><tr><td><strong>P5 Pilot</strong></td><td>9–10</td><td>one real account, human-approved writes, r/WordPress</td><td>2 weeks measured</td></tr><tr><td><strong>P6 Deploy</strong></td><td>11+</td><td>only if P5 clears</td><td>explicit go/no-go</td></tr></tbody></table></div>
+<p><strong>No phase skips. P4 cannot start before P3 is green.</strong> That rule is why MOE shipped<br>something real, and it is inherited deliberately.</p>
+<p>Note what P4 proves and what it does not: reading reddit.com logged-out validates the entire<br>surface layer — selectors, page driver, extraction, scoring, qualification, drafting — with<br>no account, no API access, and no write risk. Everything except the last mile is verifiable<br>before SGEN commits an account to it.</p>
+<hr>
+<h2 id="7-what-sgen-needs-to-provide"><span class="htitle">7. What SGEN needs to provide</span></h2>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>#</th><th>Item</th><th>When</th><th>Blocks</th></tr></thead><tbody><tr><td class="num">1</td><td><strong>Check r/WordPress rules on vendor/employee participation</strong></td><td>before P1 ends</td><td>everything downstream — five minutes of reading</td></tr><tr><td class="num">2</td><td>Anthropic API key in the environment <em>(and rotate the two in the Appilot APK)</em></td><td>P2</td><td>qualify + draft</td></tr><tr><td class="num">3</td><td>Which account redbot drives — named staff or a brand account</td><td>P5</td><td>pilot only</td></tr><tr><td class="num">4</td><td>Any existing SGEN Reddit history or karma</td><td>P5</td><td>pilot only</td></tr><tr><td class="num">5</td><td>Named daily operator</td><td>P5</td><td>pilot only</td></tr><tr><td class="num">6</td><td>Primary objective: mention defence · lead generation · presence</td><td>P2</td><td>module ordering only</td></tr></tbody></table></div>
+<p>Items 3–6 do not block engineering. Item 1 could invalidate the publishing half of this<br>proposal entirely, and it is the cheapest thing on the list — worth doing this week.</p>
+<hr>
+<h2 id="8-definition-of-done"><span class="htitle">8. Definition of done</span></h2>
+<p>The MVP is accepted when all eight hold. Six need no Reddit account and no network.</p>
+<ol><li><code>npm test</code> green <strong>with the network disabled</strong></li><li>A JSON workflow drives a full read → score → qualify → draft cycle against the fixture site</li><li>A draft mentioning SGEN without disclosure is rejected by the linter — <strong>with a test proving it</strong></li><li>A write exceeding the rate ledger is blocked — <strong>with a test proving it</strong></li><li>A workflow referencing <code>upvote</code> fails validation — <strong>with a test proving it</strong></li><li>The kill switch halts a running workflow mid-step — <strong>with a test proving it</strong></li><li>A live logged-out read-only run against reddit.com returns real, scored, qualified threads</li><li>Zero secrets in the repository, asserted by a CI check</li></ol>
+<hr>
+<h2 id="9-risks"><span class="htitle">9. Risks</span></h2>
+<div class="table-wrap"><table class="md-table"><thead><tr><th>#</th><th>Risk</th><th>Likelihood</th><th>Impact</th><th>What we do</th></tr></thead><tbody><tr><td>R-1</td><td>r/WordPress forbids vendor participation</td><td>unknown</td><td><strong>fatal to publishing</strong></td><td>check before P1 ends; listening still works</td></tr><tr><td>R-2</td><td>Account suspended or shadowbanned</td><td>medium</td><td>high</td><td>rate ledger in code, human pace, one identity, disclosure</td></tr><tr><td>R-3</td><td>Reddit changes its DOM</td><td><strong>certain</strong></td><td>low</td><td>selector pack + golden pages + degradation alerts</td></tr><tr><td>R-4</td><td>Public astroturfing accusation</td><td>low <em>(with disclosure)</em></td><td>high</td><td>disclosure enforced, human gate, kill criteria</td></tr><tr><td>R-5</td><td>FTC undisclosed endorsement</td><td>low</td><td>high</td><td>linter + audit log as evidence</td></tr><tr><td>R-6</td><td>Drafts are mediocre and nobody uses them</td><td>medium</td><td>medium</td><td>P5 measures it before P6 spends anything more</td></tr><tr><td>R-7</td><td>Automation detected</td><td>medium</td><td>medium</td><td>log-normal timing, one session per account, serial runs</td></tr><tr><td>R-8</td><td>Nobody operates it and it rots</td><td>medium</td><td>high</td><td>named operator required before P5</td></tr></tbody></table></div>
+<p><strong>Kill criteria, agreed up front:</strong> any moderator removal, any public astroturfing<br>accusation, any account health degradation, or two consecutive unknown-outcome writes →<br>publishing stops, listening continues, and restarting requires a written note saying what<br>changed.</p>
+<hr>
+<h2 id="10-recommendation"><span class="htitle">10. Recommendation</span></h2>
+<p>Approve P1–P4: **8 weeks, ~$20–40k, to a tested system proven against real Reddit data with<br>no account risk taken.** Decide on the pilot after P4, when there is something real to look<br>at rather than a proposal to imagine.</p>
+<p>The honest summary: Appilot sold SGEN a working bot with six structural problems, two of<br>which — the compiled-in API keys and the undocumented voting — are things SGEN should act on<br>this week regardless of whether redbot is ever built. redbot is the same capability without<br>those problems, on the stack SGEN already runs, at roughly a fifth of the running cost, and<br>with the parts that create legal exposure enforced in code rather than requested in a prompt.</p>
+<hr>
+<h2 id="approval"><span class="htitle">Approval</span></h2>
+<div class="table-wrap"><table class="md-table"><thead><tr><th></th><th>Name</th><th>Date</th><th>Decision</th></tr></thead><tbody><tr><td>Proposed by</td><td></td><td>2026-07-22</td><td>—</td></tr><tr><td>Reviewed by</td><td></td><td></td><td>☐ approve ☐ revise ☐ decline</td></tr><tr><td>Approved by</td><td></td><td></td><td>☐ P1–P4 ☐ P1–P6 ☐ hold</td></tr></tbody></table></div>
+<p><strong>On approval, P1 begins with M-01 through M-08</strong> (config · store · selector pack · page<br>driver · action registry · workflow parser · humanize · rate ledger), per <code>MODULES.md</code>.</p>
+  </main>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var links = Array.prototype.slice.call(document.querySelectorAll("#navList a"));
+  var toc = document.getElementById("toc");
+  var sb  = document.querySelector(".sidebar");
+  var byId = {};
+  links.forEach(function(a){
+    byId[a.dataset.target] = a;
+    a.addEventListener("click", function(){
+      if(!window.matchMedia("(min-width:1000px)").matches){ toc.open = false; }
+    });
+  });
+  var current = null;
+  function setActive(id){
+    if(current === id) return;
+    current = id;
+    links.forEach(function(a){ a.classList.toggle("active", a.dataset.target === id); });
+    var link = byId[id];
+    if(link && sb && window.matchMedia("(min-width:1000px)").matches){
+      var lr = link.getBoundingClientRect(), sr = sb.getBoundingClientRect();
+      if(lr.top < sr.top || lr.bottom > sr.bottom){ sb.scrollTop += (lr.top - sr.top) - 48; }
+    }
+  }
+  var h2s = Array.prototype.slice.call(document.querySelectorAll("#article h2"));
+  if("IntersectionObserver" in window){
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ if(e.isIntersecting) setActive(e.target.id); });
+    }, { rootMargin: "-80px 0px -70% 0px", threshold: 0 });
+    h2s.forEach(function(h){ io.observe(h); });
+  }
+  if(h2s.length) setActive(h2s[0].id);
+
+  var fill = document.getElementById("progressFill");
+  function onScroll(){
+    var de = document.documentElement;
+    var max = de.scrollHeight - de.clientHeight;
+    var p = max > 0 ? (de.scrollTop / max) : 0;
+    if(p < 0) p = 0; if(p > 1) p = 1;
+    fill.style.width = (p * 100).toFixed(2) + "%";
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll);
+  onScroll();
+
+  function applyToc(){ toc.open = window.matchMedia("(min-width:1000px)").matches; }
+  applyToc();
+  window.addEventListener("resize", applyToc);
+})();
+</script>
+
+<script type="module">
+  try{
+    const m = await import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs");
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    m.default.initialize({ startOnLoad:true, theme: dark ? "dark" : "neutral", securityLevel:"strict" });
+    await m.default.run({ querySelector:"pre.mermaid" });
+  }catch(e){
+    /* offline or blocked: diagrams remain readable as monospace source */
+    document.querySelectorAll(".diagram").forEach(d => d.setAttribute("data-fallback","text"));
+  }
+</script>
+</body>
+</html>

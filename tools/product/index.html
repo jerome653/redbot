@@ -1,0 +1,1504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>redbot — operations</title>
+<!-- The same mark as the logo: boxed head, red eyes, fingers on a keyboard. Inline as a data
+     URI so there is no second request and no file to keep in step with the header. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23000'/%3E%3Cg fill='none' stroke='%237C8288' stroke-width='2.1' stroke-linecap='round'%3E%3Cpath d='M16 6.4V4.2'/%3E%3Crect x='5.6' y='6.6' width='20.8' height='13.6' rx='4'/%3E%3Cpath d='M6.8 28.4h18.4' stroke-width='1.8'/%3E%3C/g%3E%3Cg fill='%23E5453A'%3E%3Ccircle cx='16' cy='3.1' r='1.7'/%3E%3Ccircle cx='11.6' cy='13.4' r='2.1'/%3E%3Ccircle cx='20.4' cy='13.4' r='2.1'/%3E%3C/g%3E%3Cg stroke='%23E5453A' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M10.8 22.8v3.2M16 22.8v4M21.2 22.8v3.2'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+/* ============================================================
+   redbot — operations
+   One job: decide whether a written reply should go out.
+
+   The signature is the verdict lens — a frosted panel whose glow is coloured by
+   the judgment, sitting directly above the reply. You read the verdict through
+   the same glass as the words. Colour carries information here; everywhere else
+   the surfaces stay quiet so that one panel is the thing you remember.
+
+   Warm charcoal, not the blue-white glass this style usually ships with. Two low
+   ambient washes — ember and slate — give the frost something to refract.
+   ============================================================ */
+
+:root{
+  /* Pure black, white type, red where something is wrong, green where it is not.
+     Opaque surfaces — the translucency turned every panel to mud at small sizes. */
+  --bg:#000000;
+  --wash-a:transparent;
+  --wash-b:transparent;
+  --glass:#0C0C0D;
+  --glass-2:#151517;
+  --edge:#26262A;
+  --edge-2:#3B3B41;
+  --ink:#FFFFFF;
+  --ink-2:#B8B8BD;
+  --ink-3:#78787F;
+  --ember:#FF4438;
+  --ember-soft:rgba(255,68,56,.13);
+  --amber:#E8A93B;
+  --amber-soft:rgba(232,169,59,.12);
+  --jade:#3DDC84;
+  --jade-soft:rgba(61,220,132,.12);
+  --shadow:none;
+
+  --grotesk:"Inter","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+  --mono:"Cascadia Mono",ui-monospace,"SF Mono",Consolas,"Liberation Mono",monospace;
+
+  --pad:1.7rem;
+  --r:16px;
+}
+:root[data-theme="light"]{
+  /* the same contract inverted: pure white, black type, same red and green */
+  --bg:#FFFFFF;
+  --wash-a:transparent;
+  --wash-b:transparent;
+  --glass:#FAFAFA;
+  --glass-2:#F1F1F2;
+  --edge:#E3E3E5;
+  --edge-2:#C6C6CB;
+  --ink:#000000;
+  --ink-2:#3A3A3D;
+  --ink-3:#75757C;
+  --ember:#D70015;
+  --ember-soft:rgba(215,0,21,.08);
+  --amber:#8A6A2B;
+  --amber-soft:rgba(138,106,43,.10);
+  --jade:#00875A;
+  --jade-soft:rgba(0,135,90,.09);
+  --shadow:none;
+}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]){
+    --bg:#FFFFFF;--wash-a:transparent;--wash-b:transparent;
+    --glass:#FAFAFA;--glass-2:#F1F1F2;
+    --edge:#E3E3E5;--edge-2:#C6C6CB;
+    --ink:#000000;--ink-2:#3A3A3D;--ink-3:#75757C;
+    --ember:#D70015;--ember-soft:rgba(215,0,21,.08);
+    --amber:#8A6A2B;--amber-soft:rgba(138,106,43,.10);
+    --jade:#00875A;--jade-soft:rgba(0,135,90,.09);
+    --shadow:none;
+  }
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+/* No scrollbar chrome anywhere. Panes still scroll by wheel, trackpad, keyboard and touch —
+   the bars themselves are just gone. */
+*{scrollbar-width:none;-ms-overflow-style:none}
+*::-webkit-scrollbar{width:0;height:0;display:none}
+/* App shell: the page itself never scrolls. Chrome is fixed, the working area fills what is
+   left, and each pane scrolls inside its own box — so the whole structure stays on screen at
+   every width instead of being something you hunt for by scrolling. */
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:var(--grotesk);font-size:15.5px;line-height:1.68;
+  letter-spacing:-.005em;-webkit-font-smoothing:antialiased;
+  height:100vh;height:100dvh;overflow:hidden;
+  display:flex;flex-direction:column;
+}
+.bar,.banner,.pulse{flex:none}
+body > section{flex:1;min-height:0;display:flex;flex-direction:column}
+body > section.sheet{overflow-y:auto}
+@media (max-width:1200px){
+  /* below the three-column layout there is genuinely more content than height; let it scroll */
+  body{height:auto;min-height:100vh;overflow:auto}
+  body > section{display:block}
+}
+/* no ambient wash — a flat black field, so every pixel of colour means something */
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.021em;text-wrap:balance}
+[hidden]{display:none!important}
+a{color:var(--ember);text-underline-offset:2px}
+::selection{background:var(--ember-soft)}
+:focus-visible{outline:2px solid var(--ember);outline-offset:2px;border-radius:6px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ---------- glass primitive ---------- */
+.glass{
+  background:var(--glass);
+  -webkit-backdrop-filter:blur(18px) saturate(150%);
+  backdrop-filter:blur(18px) saturate(150%);
+  border:1px solid var(--edge);
+  border-radius:var(--r);
+  box-shadow:var(--shadow);
+}
+
+/* ---------- top bar ---------- */
+.bar{
+  position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:1.1rem;
+  padding:.85rem 1.5rem;flex-wrap:wrap;
+  background:color-mix(in srgb,var(--bg) 72%,transparent);
+  -webkit-backdrop-filter:blur(20px) saturate(160%);
+  backdrop-filter:blur(20px) saturate(160%);
+  border-bottom:1px solid var(--edge);
+}
+.logo{display:flex;align-items:center;gap:.55rem;font-family:var(--mono);font-weight:700;font-size:.9rem;letter-spacing:.02em}
+.logo svg{width:24px;height:24px;flex:none;margin-top:-1px}
+.lg-a{color:var(--ink-3)} .lg-b{color:var(--ember)}
+.steps{display:flex;align-items:center;gap:.2rem;margin-left:.5rem;flex-wrap:wrap}
+.step{
+  appearance:none;border:1px solid transparent;background:none;cursor:pointer;font:inherit;
+  font-size:.855rem;color:var(--ink-3);padding:.42rem .82rem;border-radius:9px;
+  display:flex;align-items:center;gap:.45rem;transition:color .16s,background .16s,border-color .16s;
+}
+.step:hover{color:var(--ink);background:var(--glass)}
+.step[aria-current="page"]{color:var(--ink);font-weight:600;background:var(--glass-2);border-color:var(--edge)}
+.step .g{font-family:var(--mono);font-size:.72rem;color:var(--ink-3)}
+.step b{
+  font-family:var(--mono);font-size:.7rem;font-weight:700;padding:.08rem .38rem;border-radius:6px;
+  background:var(--ember);color:#fff;
+}
+.right{margin-left:auto;display:flex;align-items:center;gap:.5rem}
+button.mini{
+  font:inherit;font-family:var(--mono);font-size:.72rem;cursor:pointer;
+  background:var(--glass);color:var(--ink-2);border:1px solid var(--edge);
+  border-radius:9px;padding:.36rem .7rem;transition:color .16s,border-color .16s;
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+}
+button.mini:hover{color:var(--ink);border-color:var(--edge-2)}
+
+.banner{
+  margin:1.1rem 1.5rem 0;padding:.75rem 1.1rem;border-radius:12px;
+  font-size:.79rem;color:var(--ink-2);line-height:1.6;
+  background:var(--amber-soft);border:1px solid color-mix(in srgb,var(--amber) 26%,transparent);
+}
+.banner b{color:var(--ink)}
+
+/* ---------- pulse ---------- */
+.pulse{
+  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.85rem;
+  padding:1.1rem 1.5rem 0;
+}
+@media (max-width:1100px){.pulse{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:620px){.pulse{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.p{
+  padding:1rem 1.15rem;display:flex;flex-direction:column;gap:.15rem;
+  background:var(--glass);border:1px solid var(--edge);border-radius:13px;
+  -webkit-backdrop-filter:blur(16px) saturate(150%);backdrop-filter:blur(16px) saturate(150%);
+  box-shadow:var(--shadow);
+}
+.p b{font-family:var(--mono);font-size:1.72rem;font-variant-numeric:tabular-nums;line-height:1.1;letter-spacing:-.02em}
+.p span{font-size:.665rem;color:var(--ink-3);font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase}
+.p em{font-style:normal;font-size:.7rem;color:var(--ink-3)}
+.p.good b{color:var(--jade)} .p.warn b{color:var(--amber)} .p.bad b{color:var(--ember)}
+.p.act{cursor:pointer;transition:border-color .16s,transform .16s}
+.p.act:hover{border-color:var(--edge-2);transform:translateY(-1px)}
+
+.sheet{padding:1.5rem 1.5rem 4rem;max-width:1460px}
+h2.sec{font-size:1.32rem;letter-spacing:-.025em;margin-bottom:.3rem}
+.sub{font-size:.8rem;color:var(--ink-3);margin-bottom:1.4rem;font-family:var(--mono)}
+
+/* ---------- review ---------- */
+.work{
+  display:grid;grid-template-columns:300px 1fr;gap:.9rem;padding:.9rem 1.2rem 1.2rem;
+  flex:1;min-height:0;
+}
+@media (max-width:1200px){.work{grid-template-columns:1fr;min-height:0;flex:none}}
+.stack{
+  background:var(--glass);border:1px solid var(--edge);border-radius:var(--r);
+  box-shadow:var(--shadow);overflow:hidden;min-height:0;
+  display:flex;flex-direction:column;
+}
+@media (max-width:1200px){.stack{max-height:260px}}
+.stack-h{
+  padding:.9rem 1.1rem;font-size:.665rem;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-3);font-family:var(--mono);display:flex;justify-content:space-between;
+  border-bottom:1px solid var(--edge);
+}
+.stack-l{overflow-y:auto}
+.card-q{
+  width:100%;text-align:left;appearance:none;background:none;cursor:pointer;border:0;
+  border-bottom:1px solid var(--edge);padding:.85rem 1.1rem;display:grid;
+  grid-template-columns:auto 1fr;gap:.7rem;font:inherit;transition:background .16s;
+  /* a button does not inherit colour — without this the titles render in the UA default
+     and vanish against black */
+  color:var(--ink-2);
+}
+.card-q[aria-current="true"]{color:var(--ink)}
+.card-q:hover{color:var(--ink)}
+.card-q:hover{background:var(--glass-2)}
+.card-q[aria-current="true"]{background:var(--glass-2);box-shadow:inset 3px 0 0 var(--ember)}
+.dot{width:9px;height:9px;border-radius:50%;margin-top:.42rem;flex:none;background:var(--ink-3)}
+.dot.stop{background:var(--ember);box-shadow:0 0 0 4px var(--ember-soft)}
+.dot.hold{background:var(--amber);box-shadow:0 0 0 4px var(--amber-soft)}
+.dot.pass{background:var(--jade);box-shadow:0 0 0 4px var(--jade-soft)}
+.ct{font-size:.87rem;line-height:1.45;display:block}
+/* block, not inline — inline ran the count straight into the title: "prodcuts?7 things wrong" */
+.cm{font-family:var(--mono);font-size:.665rem;color:var(--ink-3);margin-top:.3rem;display:block}
+
+.split{display:grid;grid-template-columns:1fr 1fr;gap:.9rem;min-width:0;min-height:0}
+@media (max-width:1200px){.split{grid-template-columns:1fr;min-height:0}}
+/* each column scrolls in its own box, so the three-pane structure is always on screen
+   and nothing is clipped off the bottom of the page */
+.side{
+  padding:1.3rem 1.4rem;min-width:0;overflow-wrap:break-word;overflow-y:auto;min-height:0;
+  background:var(--glass);border:1px solid var(--edge);border-radius:var(--r);
+  box-shadow:var(--shadow);
+}
+@media (max-width:1200px){.side{overflow-y:visible;max-height:none}}
+.lbl{
+  font-family:var(--mono);font-size:.655rem;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:1rem;display:flex;gap:.7rem;align-items:center;
+}
+.lbl::after{content:"";flex:1;height:1px;background:var(--edge)}
+.tt{font-family:var(--serif);font-size:1.4rem;line-height:1.34;margin-bottom:.5rem;letter-spacing:-.008em}
+.tm{font-family:var(--mono);font-size:.71rem;color:var(--ink-3);margin-bottom:1.1rem}
+.tb{font-family:var(--serif);font-size:1.02rem;line-height:1.78;color:var(--ink-2);white-space:pre-wrap;max-width:66ch}
+.cmt{border-top:1px solid var(--edge);margin-top:1.1rem;padding-top:.9rem;font-family:var(--serif);font-size:.94rem;color:var(--ink-2);line-height:1.72;max-width:66ch}
+.cmt .who{font-family:var(--mono);font-size:.665rem;color:var(--ink-3);display:block;margin-bottom:.3rem;letter-spacing:.02em}
+
+/* supporting context, not a second headline — the verdict is the only thing wearing the accent */
+.why{
+  margin:.9rem 0;padding:.85rem 1rem;border-radius:12px;font-size:.85rem;line-height:1.64;
+  background:var(--glass);border:1px solid var(--edge);border-left:2px solid var(--edge-2);
+  color:var(--ink-2);
+}
+.why b{display:block;font-family:var(--mono);font-size:.645rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);margin-bottom:.3rem}
+
+/* ---------- THE VERDICT LENS — the one loud thing ---------- */
+.lens{
+  position:relative;border-radius:var(--r);margin-bottom:1.3rem;overflow:hidden;
+  border:1px solid var(--edge-2);
+  background:var(--glass-2);
+  -webkit-backdrop-filter:blur(22px) saturate(165%);backdrop-filter:blur(22px) saturate(165%);
+  box-shadow:var(--shadow);
+}
+/* the glow is the judgment; it sits behind the frost, not on it */
+/* the verdict is carried by a solid rule and the heading colour, not by a glow */
+.lens{border-left:3px solid var(--edge-2)}
+.lens.REJECT{border-left-color:var(--ember)}
+.lens.ESCALATE{border-left-color:var(--amber)}
+.lens.CERTIFIED{border-left-color:var(--jade)}
+.lens-h{position:relative;z-index:1;padding:1.3rem 1.4rem 1.05rem;border-bottom:1px solid var(--edge)}
+.vd{
+  font-size:1.92rem;line-height:1.06;letter-spacing:-.036em;font-weight:600;margin-bottom:.35rem;
+}
+.lens.REJECT .vd{color:var(--ember)}
+.lens.ESCALATE .vd{color:var(--amber)}
+.lens.CERTIFIED .vd{color:var(--jade)}
+.vd-w{font-size:.9rem;color:var(--ink-2);line-height:1.6;max-width:54ch}
+.vd-m{font-family:var(--mono);font-size:.665rem;color:var(--ink-3);margin-top:.6rem;letter-spacing:.02em}
+.lens-b{position:relative;z-index:1;padding:1.1rem 1.4rem 1.25rem}
+.lead{font-size:.83rem;color:var(--ink-2);margin-bottom:1rem;line-height:1.64}
+
+/* A label repeated down every row is noise. It prints once per run of the same kind. */
+.rgroup{
+  font-family:var(--mono);font-size:.665rem;color:var(--ember);letter-spacing:.09em;
+  text-transform:uppercase;margin:1rem 0 .1rem;display:flex;align-items:center;gap:.6rem;
+}
+.rgroup::after{content:"";flex:1;height:1px;background:var(--edge)}
+.rgroup:first-child{margin-top:0}
+.rule{padding:.6rem 0;border-bottom:1px solid var(--edge);display:grid;grid-template-columns:auto 1fr;gap:.75rem}
+.rule:last-child{border-bottom:0}
+.rule .pip{width:5px;height:5px;border-radius:50%;background:var(--ember);opacity:.55;margin-top:.62rem}
+.rule .body{font-size:.885rem;color:var(--ink-2);line-height:1.66;max-width:62ch}
+.rule details{margin-top:.45rem}
+.rule summary{
+  font-family:var(--mono);font-size:.665rem;color:var(--ink-3);cursor:pointer;list-style:none;
+  display:inline-flex;align-items:center;gap:.35rem;padding:.2rem .5rem;border-radius:7px;
+  border:1px solid var(--edge);transition:color .16s,border-color .16s;
+}
+.rule summary::-webkit-details-marker{display:none}
+.rule summary:hover{color:var(--ink-2);border-color:var(--edge-2)}
+.rule .det{
+  display:block;margin-top:.55rem;padding:.8rem .95rem;border-radius:10px;
+  background:var(--glass);border:1px solid var(--edge);
+  font-size:.83rem;color:var(--ink-3);line-height:1.72;max-width:64ch;
+}
+.stab{
+  margin-top:1rem;padding:.9rem 1.05rem;border-radius:12px;font-size:.83rem;line-height:1.7;color:var(--ink-2);
+  background:var(--amber-soft);border:1px solid color-mix(in srgb,var(--amber) 26%,transparent);
+}
+.stab b{color:var(--amber);font-family:var(--mono);font-size:.645rem;letter-spacing:.11em;text-transform:uppercase;display:block;margin-bottom:.3rem}
+
+.reply{
+  padding:1.25rem 1.35rem;border-radius:13px;font-size:.96rem;line-height:1.76;white-space:pre-wrap;
+  background:var(--glass-2);border:1px solid var(--edge);max-width:66ch;
+}
+.gates{margin-top:1.1rem;display:flex;flex-direction:column;gap:.45rem}
+.gate{display:flex;gap:.6rem;font-size:.845rem;color:var(--ink-2);align-items:baseline}
+.gate i{font-style:normal;font-family:var(--mono);font-size:.8rem}
+.gate i.y{color:var(--jade)} .gate i.n{color:var(--ember)}
+.do{margin-top:1.5rem;padding-top:1.2rem;border-top:1px solid var(--edge)}
+.cmdline{
+  font-family:var(--mono);font-size:.755rem;border-radius:11px;padding:.7rem .85rem;
+  background:var(--glass);border:1px solid var(--edge);color:var(--ink-2);
+  display:flex;align-items:center;gap:.8rem;overflow-x:auto;
+}
+.cmdline span{white-space:nowrap}
+.cmdline button{margin-left:auto;flex:none}
+.tiny{font-size:.79rem;color:var(--ink-3);line-height:1.68;margin-top:.7rem;max-width:66ch}
+
+/* ---------- tables ---------- */
+.wrap{
+  overflow-x:auto;border-radius:var(--r);border:1px solid var(--edge);
+  background:var(--glass);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);box-shadow:var(--shadow);
+}
+table{width:100%;border-collapse:collapse;font-size:.865rem}
+th{
+  text-align:left;font-family:var(--mono);font-size:.645rem;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:600;padding:.9rem 1rem;border-bottom:1px solid var(--edge);white-space:nowrap;
+}
+td{padding:.95rem 1rem;border-bottom:1px solid var(--edge);vertical-align:top;line-height:1.62}
+tr:last-child td{border-bottom:0}
+tr.dim td{color:var(--ink-3)}
+td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.tag{
+  display:inline-block;font-family:var(--mono);font-size:.655rem;padding:.16rem .5rem;border-radius:7px;
+  border:1px solid var(--edge-2);color:var(--ink-3);white-space:nowrap;letter-spacing:.03em;
+}
+.tag.ok{color:var(--jade);border-color:color-mix(in srgb,var(--jade) 34%,transparent);background:var(--jade-soft)}
+.tag.no{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 34%,transparent);background:var(--amber-soft)}
+.tag.stop{color:var(--ember);border-color:color-mix(in srgb,var(--ember) 34%,transparent);background:var(--ember-soft)}
+
+/* ---------- cards ---------- */
+/* bounded, so a single account reads as one card rather than as a mostly-empty page */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr));gap:1rem;max-width:1080px}
+.card{
+  padding:1.35rem 1.45rem;display:flex;flex-direction:column;gap:.9rem;border-radius:var(--r);
+  background:var(--glass);border:1px solid var(--edge);
+  -webkit-backdrop-filter:blur(18px) saturate(150%);backdrop-filter:blur(18px) saturate(150%);
+  box-shadow:var(--shadow);
+}
+.card.attn{border-color:color-mix(in srgb,var(--amber) 36%,transparent)}
+.chead{display:flex;align-items:center;gap:.7rem}
+.chead b{font-family:var(--mono);font-size:1rem;flex:1;min-width:0;letter-spacing:-.01em}
+.cstats{display:grid;grid-template-columns:repeat(3,1fr);gap:.7rem;padding:.95rem 0;border-top:1px solid var(--edge);border-bottom:1px solid var(--edge)}
+.cstats>span{display:flex;flex-direction:column-reverse;gap:.2rem;font-family:var(--mono);font-size:.62rem;color:var(--ink-3);letter-spacing:.08em;text-transform:uppercase}
+.cstats b{color:var(--ink);font-size:1.24rem;font-variant-numeric:tabular-nums;text-transform:none;letter-spacing:-.02em}
+.cstats b.none{color:var(--ink-3);font-size:.79rem;letter-spacing:0}
+
+.note{
+  margin-top:1.5rem;padding:1.25rem 1.45rem;border-radius:var(--r);font-size:.885rem;line-height:1.76;color:var(--ink-2);
+  background:var(--glass);border:1px solid var(--edge);border-left:3px solid var(--ink-3);
+  -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
+}
+.note.warn{border-left-color:var(--amber)}
+.note.stop{border-left-color:var(--ember)}
+.note b{color:var(--ink)}
+.empty{
+  padding:3.4rem 1.6rem;text-align:center;color:var(--ink-3);border-radius:var(--r);
+  background:var(--glass);border:1px dashed var(--edge-2);line-height:1.72;
+}
+.empty b{display:block;font-size:1.14rem;color:var(--ink);margin-bottom:.5rem;letter-spacing:-.02em}
+.empty span{display:block;max-width:52ch;margin:0 auto}
+.src{font-family:var(--mono);font-size:.665rem;color:var(--ink-3);margin-top:.7rem}
+
+/* ---------- run log ---------- */
+.runlog{margin-top:.7rem;border:1px solid var(--edge);border-radius:10px;background:var(--glass-2);
+  max-height:230px;overflow-y:auto;padding:.5rem .7rem}
+.runline{display:grid;grid-template-columns:3.2rem 1fr;gap:.6rem;font-size:.78rem;color:var(--ink-2);
+  line-height:1.55;padding:.12rem 0}
+.runline .t{font-family:var(--mono);font-size:.66rem;color:var(--ink-3);white-space:pre}
+.runline.ok{color:var(--jade)} .runline.bad{color:var(--ember)}
+.runout{margin:.35rem 0 .5rem;padding:.55rem .7rem;border-radius:8px;background:var(--bg);
+  border:1px solid var(--edge);font-family:var(--mono);font-size:.7rem;line-height:1.6;
+  color:var(--ink-3);white-space:pre-wrap;overflow-x:auto}
+
+/* ---------- collecting ---------- */
+.collect{border:1px solid var(--edge);border-radius:var(--r);background:var(--glass);margin-bottom:1.6rem;max-width:1080px}
+.collect-h{display:flex;align-items:center;gap:.8rem;padding:1rem 1.2rem;border-bottom:1px solid var(--edge);flex-wrap:wrap}
+.collect-h h3{font-size:.98rem}
+.collect-h .hint{font-family:var(--mono);font-size:.665rem;color:var(--ink-3);margin-left:auto}
+.collect-b{padding:.5rem 1.2rem 1.2rem}
+.srcgrp{font-family:var(--mono);font-size:.645rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);margin:1rem 0 .3rem}
+.src-row{display:grid;grid-template-columns:auto 1fr auto;gap:.85rem;align-items:start;padding:.6rem 0;border-bottom:1px solid var(--edge)}
+.src-row:last-child{border-bottom:0}
+.sw{
+  position:relative;width:34px;height:19px;border-radius:100px;background:var(--glass-2);
+  border:1px solid var(--edge-2);cursor:pointer;flex:none;transition:background .16s,border-color .16s;margin-top:.15rem;
+}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:var(--ink-3);transition:transform .16s,background .16s}
+.sw[aria-pressed="true"]{background:var(--jade-soft);border-color:var(--jade)}
+.sw[aria-pressed="true"]::after{transform:translateX(15px);background:var(--jade)}
+.src-t{font-size:.89rem;color:var(--ink);line-height:1.5}
+.src-w{font-size:.79rem;color:var(--ink-3);line-height:1.6;margin-top:.15rem;max-width:62ch}
+.src-n{font-family:var(--mono);font-size:.68rem;color:var(--ink-3);white-space:nowrap;padding-top:.2rem}
+.runbox{margin-top:1.2rem;padding-top:1rem;border-top:1px solid var(--edge)}
+.runbox .cmdline{margin-bottom:.4rem}
+
+/* ---------- warm-up coach ---------- */
+.wcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:1rem;max-width:1080px;margin-bottom:1.6rem}
+.wcard{padding:1.3rem 1.4rem;border:1px solid var(--edge);border-radius:var(--r);background:var(--glass)}
+.wcard.attn{border-left:3px solid var(--amber)}
+.whead{display:flex;align-items:baseline;gap:.7rem;margin-bottom:1rem}
+.whead b{font-family:var(--mono);font-size:1rem}
+.whead .st{font-family:var(--mono);font-size:.665rem;color:var(--ink-3);margin-left:auto}
+.bar-t{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.665rem;color:var(--ink-3);margin-bottom:.4rem}
+.bar-t b{color:var(--ink);font-size:.9rem}
+.track{height:7px;border-radius:4px;background:var(--glass-2);overflow:hidden;border:1px solid var(--edge)}
+.track i{display:block;height:100%;background:var(--ember);min-width:2px}
+.track i.mid{background:var(--amber)} .track i.done{background:var(--jade)}
+.wtoday{margin-top:1.1rem;padding-top:1rem;border-top:1px solid var(--edge)}
+.wtoday h4{font-family:var(--mono);font-size:.665rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);margin:0 0 .6rem;font-weight:600}
+.todo{display:flex;gap:.65rem;padding:.42rem 0;font-size:.87rem;color:var(--ink-2);line-height:1.6;align-items:baseline}
+.todo .box{font-family:var(--mono);color:var(--ink-3);flex:none}
+.todo b{color:var(--ink)}
+
+.steps-n{counter-reset:s}
+.stepn{display:grid;grid-template-columns:2rem 1fr;gap:1rem;padding:1.05rem 0;border-bottom:1px solid var(--edge);counter-increment:s}
+.stepn:last-child{border-bottom:0}
+.stepn::before{
+  content:counter(s);font-family:var(--mono);font-size:.8rem;color:var(--ember);font-weight:700;
+  border:1px solid var(--edge-2);border-radius:50%;width:1.85rem;height:1.85rem;
+  display:flex;align-items:center;justify-content:center;
+}
+.stepn .txt{font-size:.9rem;color:var(--ink-2);line-height:1.74;max-width:64ch}
+.stepn .txt b{color:var(--ink)}
+.stepn .txt em{font-style:normal;color:var(--ink-3)}
+.egs{margin-top:.7rem;padding:.85rem 1rem;border-radius:10px;border:1px solid var(--edge);background:var(--glass-2);font-family:var(--serif);font-size:.92rem;line-height:1.7;color:var(--ink-2)}
+.egs .tagline{font-family:var(--mono);font-size:.63rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);display:block;margin-bottom:.4rem}
+.never{display:grid;gap:.5rem;margin-top:.3rem}
+.never div{display:flex;gap:.65rem;font-size:.88rem;color:var(--ink-2);line-height:1.65}
+.never i{font-style:normal;color:var(--ember);flex:none;font-family:var(--mono)}
+
+.stage{display:grid;grid-template-columns:7rem 1fr;gap:1.1rem;padding:1.05rem 0;border-bottom:1px solid var(--edge)}
+.stage:last-child{border-bottom:0}
+@media (max-width:560px){.stage{grid-template-columns:1fr;gap:.35rem}}
+.stage .num{font-family:var(--mono);font-size:.71rem;color:var(--ember);font-weight:700;padding-top:.2rem;letter-spacing:.02em}
+.stage .txt{font-size:.895rem;color:var(--ink-2);line-height:1.72;max-width:64ch}
+.stage .txt b{color:var(--ink)}
+
+/* ---------- walkthrough ---------- */
+button.mini.q{width:2rem;padding:.36rem 0;text-align:center;font-weight:700}
+button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:70}
+:root[data-theme="light"] .scrim{background:rgba(255,255,255,.72)}
+.guide{
+  position:fixed;z-index:71;top:0;right:0;bottom:0;width:min(560px,100%);
+  background:var(--bg);border-left:1px solid var(--edge-2);
+  display:flex;flex-direction:column;
+}
+@media (max-width:620px){.guide{width:100%;border-left:0}}
+.guide-h{
+  display:flex;align-items:baseline;gap:.9rem;padding:1.4rem 1.6rem 1rem;
+  border-bottom:1px solid var(--edge);
+}
+.guide-h h2{font-size:1.3rem;letter-spacing:-.025em}
+.guide-h .x{margin-left:auto}
+.guide-b{overflow-y:auto;padding:1.4rem 1.6rem 3rem}
+.g-sec{padding:1.15rem 0;border-bottom:1px solid var(--edge)}
+.g-sec:last-child{border-bottom:0}
+.g-sec h3{
+  font-family:var(--mono);font-size:.7rem;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:.5rem;
+}
+.g-sec.on h3{color:var(--ember)}
+.g-sec p{margin:0 0 .6rem;font-size:.9rem;line-height:1.74;color:var(--ink-2);max-width:56ch}
+.g-sec p:last-child{margin-bottom:0}
+.g-sec b{color:var(--ink)}
+.g-flow{display:flex;flex-wrap:wrap;gap:.4rem;margin:.2rem 0 .8rem}
+.g-flow span{
+  font-family:var(--mono);font-size:.685rem;padding:.24rem .55rem;border-radius:7px;
+  border:1px solid var(--edge-2);color:var(--ink-2);
+}
+.g-flow span.you{border-color:var(--ember);color:var(--ember)}
+.g-rule{
+  margin-top:.7rem;padding:.85rem 1rem;border-radius:10px;border:1px solid var(--edge-2);
+  border-left:3px solid var(--ember);font-size:.87rem;line-height:1.7;color:var(--ink-2);
+}
+.g-rule b{color:var(--ink)}
+
+.toast{
+  position:fixed;bottom:1.4rem;left:50%;transform:translateX(-50%) translateY(160%);
+  background:var(--glass-2);color:var(--ink);border:1px solid var(--edge-2);
+  -webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);
+  padding:.65rem 1.25rem;border-radius:100px;font-size:.83rem;transition:transform .28s cubic-bezier(.2,.8,.2,1);
+  z-index:60;box-shadow:var(--shadow);
+}
+.toast.show{transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <span class="logo" aria-label="redbot">
+    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <path d="M16 6V3.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".45"/>
+      <circle cx="16" cy="2.4" r="1.7" fill="var(--ember)"/>
+      <rect x="5.2" y="6" width="21.6" height="14.6" rx="4.2" stroke="currentColor" stroke-width="2.1" opacity=".45"/>
+      <circle cx="11.4" cy="13.3" r="2.05" fill="var(--ember)"/>
+      <circle cx="20.6" cy="13.3" r="2.05" fill="var(--ember)"/>
+      <path d="M10.4 23.4v3.4M16 23.4v4.2M21.6 23.4v3.4" stroke="var(--ember)" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M6.4 29.4h19.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".45"/>
+    </svg><span class="lg-a">red</span><span class="lg-b">bot</span></span>
+  <!-- Ordered by what the work actually is right now: both accounts are new, so nurturing
+       them is the job and everything else is downstream of it. -->
+  <nav class="steps" id="steps">
+    <button class="step" data-v="today" aria-current="page">Today <b id="nTod">0</b></button>
+    <button class="step" data-v="accounts">Accounts <span class="g" id="nAcc">0</span></button>
+    <button class="step" data-v="review">Review <span class="g" id="nRev">0</span></button>
+    <button class="step" data-v="discovery">Threads <span class="g" id="nDisc">0</span></button>
+    <button class="step" data-v="outcomes">Results <span class="g" id="nOut">0</span></button>
+  </nav>
+  <div class="right">
+    <button class="mini" id="pulseChip" title="Connection health">checking…</button>
+    <button class="mini q" id="help" aria-expanded="false" aria-controls="guide" title="What is this?">?</button>
+    <button class="mini" id="reload">refresh</button>
+    <button class="mini" id="theme">theme</button>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="guide" id="guide" hidden aria-label="What this is">
+  <div class="guide-h">
+    <h2>What this is</h2>
+    <button class="mini x" id="guideX">close</button>
+  </div>
+  <div class="guide-b">
+
+    <div class="g-sec" data-g="what">
+      <h3>in one line</h3>
+      <p>redbot finds Reddit threads where somebody has a WordPress problem, writes a reply, and then tries to prove its own reply wrong. <b>You decide whether any of it goes out.</b></p>
+      <div class="g-flow">
+        <span>find</span><span>rank</span><span>write</span><span>fact-check</span><span class="you">you decide</span><span class="you">you send</span>
+      </div>
+      <div class="g-rule"><b>There is no send button anywhere in here.</b> Sending is a command you type in a terminal, so every word that goes out is one a person chose to put their name on. This screen can only read.</div>
+    </div>
+
+    <div class="g-sec" data-g="review">
+      <h3>Review — the screen you live on</h3>
+      <p>Their question on the left, in their own words. What redbot made of it on the right.</p>
+      <p>The verdict comes <b>before</b> the reply on purpose. Reading a well-written reply first makes you judge whether it <i>sounds</i> right instead of whether it <i>is</i> right — that is exactly how a confident, fluent, completely wrong reply nearly got sent.</p>
+      <p><b>Do not send</b> means something in the reply was shown to be false. <b>Needs a look</b> means the check could not settle it. <b>Holds up</b> means nothing could be disproved — you still decide.</p>
+    </div>
+
+    <div class="g-sec" data-g="discovery">
+      <h3>Threads — how one gets chosen</h3>
+      <p>You collect them by hand: read a subreddit, or run a search. Up to 15 a time. Then each one has to survive six filters:</p>
+      <p><b>1. Is it a question?</b> Anything tagged Guide, PSA, Showcase, Promo, Megathread and the like is dropped on the title alone. So is anyone shopping for a product.</p>
+      <p><b>2. Is it still live?</b> Over 72 hours old and it is dropped — measured from right now, not from when it was collected.</p>
+      <p><b>3. What has already been said?</b> Every claim already in the thread gets listed, and the holes get named: a wrong claim nobody corrected, a part nobody answered, a question nobody thought to ask, an answer that stops short, a diagnosis nobody can confirm.</p>
+      <p><b>4. Can we actually fill the hole?</b> Checked against the thread's own words. Generic hosting and database terms only count when WordPress is genuinely in the picture.</p>
+      <p><b>5. Score it.</b> A wrong claim standing uncorrected is worth most, then a missing diagnostic question, then something never answered. What is already well covered is penalised, so a thread with twelve good answers does not win.</p>
+      <p><b>6. Is it worth a stranger appearing?</b> Below 40 it is skipped. 40 is exactly one unanswered part that we can genuinely answer, and nothing else.</p>
+      <p>Out of 58 threads collected, 24 got this far, 17 were worth answering. <b>Skip is meant to be the common answer</b> — anything that finds an opportunity in every thread has not found one.</p>
+    </div>
+
+    <div class="g-sec" data-g="accounts">
+      <h3>Accounts — who would be posting</h3>
+      <p>Only accounts that have actually been measured appear here. A browser sign-in sitting on this machine is not proof of an account, so the two numbers are shown separately rather than smoothed into one.</p>
+      <p>Karma under 10 is the state Reddit's filters are built to catch. Comments can be removed or held back quietly — still visible to you while signed in, invisible to everybody else.</p>
+    </div>
+
+    <div class="g-sec" data-g="today">
+      <h3>Growing — why nothing is happening yet</h3>
+      <p>Both accounts are new. Getting them to where a reply survives is roughly six weeks of comments written by a person, two to four a day, no links and no product names.</p>
+      <p><b>redbot cannot speed this up.</b> Karma comes from other people finding comments useful. It can find threads, write, keep the pace slow and record what gets taken down — that is all.</p>
+    </div>
+
+    <div class="g-sec" data-g="outcomes">
+      <h3>Results — empty on purpose</h3>
+      <p>Karma on a comment, replies to it, whether a moderator removed it: all of it only exists after something is sent. Nothing has been sent, so there is nothing here.</p>
+      <p>That is an empty screen, not a screen full of zeroes. The difference matters — a zero would mean measured and none, and nothing here has been measured.</p>
+    </div>
+
+  </div>
+</aside>
+
+<p class="banner" id="banner">Loading…</p>
+<div class="pulse" id="pulse"></div>
+
+<section id="v-review"><div class="work">
+  <aside class="stack">
+    <div class="stack-h"><span>Waiting for you</span><span id="stackN">0</span></div>
+    <div class="stack-l" id="stackList"></div>
+  </aside>
+  <div class="split" id="split"></div>
+</div></section>
+
+<section id="v-today" class="sheet" hidden></section>
+<section id="v-discovery" class="sheet" hidden></section>
+<section id="v-accounts" class="sheet" hidden></section>
+<section id="v-outcomes" class="sheet" hidden></section>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+"use strict";
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const el=(t,c,h)=>{const n=document.createElement(t);if(c)n.className=c;if(h!=null)n.innerHTML=h;return n};
+let S=null, CUR='today', SEL=null;
+
+/**
+ * Plain English wherever a person can see it.
+ *
+ * The engine's own vocabulary — certify, claim, contradiction, provenance — is precise
+ * and belongs in the engine. On this screen it makes a reader guess, and a reader who is
+ * guessing cannot tell a good reply from a bad one. Same facts, ordinary words.
+ */
+const VERDICT={
+  REJECT   :{word:'Do not send',  why:'The check found things in this reply that are wrong.'},
+  ESCALATE :{word:'Needs a look', why:'The check could not settle this on its own. Someone who knows the subject has to read it.'},
+  CERTIFIED:{word:'Holds up',     why:'Nothing in this reply could be shown to be wrong. You still decide.'}
+};
+const DOT={REJECT:'stop',ESCALATE:'hold',CERTIFIED:'pass'};
+const RULE={
+  'fatal-contradiction'            :'Proven wrong',
+  'thread-resolved'                :'Already solved',
+  'overconfident-language'         :'Said too surely',
+  'invalidated-dependency'         :'Rests on something wrong',
+  'falsifiable-claim-weak-evidence':'Not backed up',
+  'unrefuted-falsifiable-claim'    :'Never checked',
+  'low-confidence-as-fact'         :'Guess stated as fact',
+  'no-provenance'                  :'No source given'
+};
+const ruleWord=r=>RULE[r]||String(r).replace(/-/g,' ');
+
+const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1900)};
+const ago=iso=>{if(!iso)return '';const d=(Date.now()-new Date(iso).getTime())/1000;
+  if(d<60)return Math.round(d)+'s ago';if(d<3600)return Math.round(d/60)+'m ago';
+  if(d<86400)return Math.round(d/3600)+'h ago';return Math.round(d/86400)+'d ago'};
+/* A measured zero and an absent measurement are different facts, and look different. */
+const num=(v,none)=>v==null?`<b class="none">${esc(none||'never measured')}</b>`:`<b>${v}</b>`;
+
+/* ---------------- pulse ---------------- */
+function pulse(){
+  const p=S.pulse, w=$('#pulse'); w.textContent='';
+  const cell=(cls,val,label,sub)=>{
+    const d=el('div','p '+cls);
+    d.append(el('b',null,String(val)),el('span',null,esc(label)));
+    if(sub)d.append(el('em',null,esc(sub)));
+    return d;
+  };
+  w.append(
+    cell(p.waitingOnYou?'bad act':'',p.waitingOnYou,'waiting for you','written, not sent'),
+    cell('',p.accountsInLogs,'accounts',p.profilesProvisioned+' sign-ins set up'),
+    cell(p.published?'good':'',p.published,'replies sent','all time'),
+    cell(p.operatorDecisions?'':'warn',p.operatorDecisions,'you decided on','approved or turned down'),
+    cell('',p.removals,'taken down','by a moderator')
+  );
+  w.querySelectorAll('.act').forEach(n=>n.onclick=()=>go('review'));
+}
+
+/* ---------------- review ---------------- */
+/* Ignored replies leave the queue. They are not deleted — the toggle at the top brings them
+   back — but "ignore" that leaves something in front of you is just a label. */
+let SHOW_IGNORED=false;
+function review(){
+  const list=$('#stackList'); list.textContent='';
+  const pending=S.review.filter(d=>d.status==='pending');
+  const ignored=pending.filter(d=>d.workflow&&d.workflow.status==='ignored');
+  const items=SHOW_IGNORED?pending:pending.filter(d=>!(d.workflow&&d.workflow.status==='ignored'));
+  $('#stackN').textContent=items.length;
+  if(ignored.length){
+    const t=el('button','mini');
+    t.textContent=SHOW_IGNORED?`hide ${ignored.length} ignored`:`show ${ignored.length} ignored`;
+    t.style.cssText='margin:.6rem .9rem;font-size:.7rem';
+    t.onclick=()=>{SHOW_IGNORED=!SHOW_IGNORED;review()};
+    list.append(t);
+  }
+  if(!items.length)list.append(el('div','empty','<b>Nothing waiting</b><span>No reply has been written that is still undecided.</span>'));
+  if(!SEL||!items.some(d=>d.id===SEL))SEL=items.length?items[0].id:null;
+  items.forEach(d=>{
+    const c=d.certification;
+    const b=el('button','card-q'); b.dataset.id=d.id;
+    b.setAttribute('aria-current',String(SEL===d.id));
+    const wfs=(d.workflow&&d.workflow.status)||'none';
+    const mark=wfs==='ignored'?'<span class="tag">ignored</span> ':wfs==='read'?'<span class="tag">read</span> ':wfs==='actioned'?'<span class="tag ok">actioned</span> ':'';
+    b.innerHTML=`<span class="dot ${c?DOT[c.verdict]||'':''}"></span><span><span class="ct">${esc(d.title)}</span>`+
+      `<span class="cm">${mark}${c?esc(c.fatal?`${c.fatal} thing${c.fatal===1?'':'s'} wrong`:'nothing proven wrong'):'not checked yet'}</span></span>`;
+    if(wfs==='ignored')b.style.opacity='.5';
+    b.onclick=()=>{SEL=d.id;review()};
+    list.append(b);
+  });
+
+  const d=S.review.find(x=>x.id===SEL);
+  const split=$('#split'); split.textContent='';
+  if(!d){split.append(el('div','empty','<b>Nothing to review</b><span>Write a reply first.</span>'));return}
+
+  /* --- their side --- */
+  const L=el('div','side');
+  const l1=el('div','lbl');l1.textContent='what they asked';L.append(l1);
+  const t=d.thread;
+  if(t){
+    L.append(el('div','tt',esc(t.title)));
+    L.append(el('div','tm',esc(`r/${t.subreddit} · ${t.commentCount} comments · ${t.ageText||''} · seen ${ago(t.collectedAt)}`)));
+    L.append(el('div','tb',esc(t.body||'(no text)')));
+    (t.comments||[]).forEach(c=>{
+      const n=el('div','cmt');
+      n.append(el('span','who',esc((c.byOriginalPoster?'the asker · ':'')+(c.author||'someone'))));
+      n.append(document.createTextNode(c.body||''));
+      L.append(n);
+    });
+  } else L.append(el('div','tb','This thread is no longer on file.'));
+  split.append(L);
+
+  /* --- our side: verdict first, reply last --- */
+  const R=el('div','side');
+  const l2=el('div','lbl');l2.textContent='what redbot made of it';R.append(l2);
+
+  const c=d.certification;
+  if(c){
+    const V=VERDICT[c.verdict]||{word:c.verdict,why:''};
+    const lens=el('div','lens '+c.verdict);
+    const h=el('div','lens-h');
+    h.append(el('div','vd',esc(V.word)));
+    h.append(el('div','vd-w',esc(V.why)));
+    h.append(el('div','vd-m',esc(`checked ${ago(c.certifiedAt)} · ${c.claims.length} separate statements · ${c.fatal} shown to be wrong`)));
+    lens.append(h);
+
+    const b=el('div','lens-b');
+    b.append(el('div','lead','Every statement in the reply was taken on its own and someone tried to prove it wrong. This is what that turned up.'));
+
+    /**
+     * One finding, one line a person can read.
+     *
+     * The engine writes its counterexamples for whoever has to verify them, so they run
+     * long and full of table names. Cutting them at a character count ended sentences
+     * mid-word and hid the point. Lead with the first whole sentence; keep the rest one
+     * click away for whoever wants it.
+     */
+    const firstSentence=x=>{
+      const s=String(x||'').replace(/^[a-z-]+:\s*/,'').trim();
+      const m=s.match(/^[\s\S]*?[.!?](?=\s|$)/);
+      const head=(m?m[0]:s).trim();
+      return {head,rest:s.slice(head.length).trim()};
+    };
+    /**
+     * Three findings, then the reply.
+     *
+     * Six pushed the reply itself off the screen, and the reply is the thing being judged.
+     * Three is enough to show the verdict is grounded; the rest are one line away.
+     */
+    const seen=new Set();
+    let lastRule=null;
+    c.reasons.forEach(r=>{
+      if(seen.size>=3)return;
+      const k=r.rule+(r.claimId||'');
+      if(seen.has(k))return; seen.add(k);
+      if(r.rule!==lastRule){lastRule=r.rule;b.append(el('div','rgroup',esc(ruleWord(r.rule))))}
+      const {head,rest}=firstSentence(r.detail);
+      const n=el('div','rule');
+      n.innerHTML=`<span class="pip"></span><div class="body">${esc(head)}`+
+        (rest?`<details><summary>the technical detail</summary><span class="det">${esc(rest)}</span></details>`:'')+`</div>`;
+      b.append(n);
+    });
+    const more=c.reasons.length-seen.size;
+    if(more>0)b.append(el('div','tiny',`and ${more} more`));
+
+    if(d.stability&&d.stability.runs>1){
+      const s=d.stability, counts=s.claims.filter(x=>x>0);
+      b.append(el('div','stab',`<b>this one was checked ${s.runs} times</b>`+
+        `Each time it broke the reply into a different number of statements — ${esc(counts.join(', '))} — and did not always find the same problems. `+
+        `It said <strong>${esc((VERDICT[s.verdicts[0]]||{}).word||s.verdicts[0])}</strong> every time. `+
+        `So read the findings above; the count is not a fixed property of the reply.`));
+    }
+    lens.append(b);R.append(lens);
+    /* context sits under the judgment: why this thread was picked, and what the reply adds */
+    if(d.assessment){
+      const th=d.assessment.thesis||{};
+      if(th.whyThread)R.append(el('div','why',`<b>why this one</b>${esc(th.whyThread)}`));
+      if(th.whatNew)R.append(el('div','why',`<b>what it adds that nobody said</b>${esc(th.whatNew)}`));
+    }
+  } else {
+    R.append(el('div','note stop','<b>Not checked yet.</b> Nothing has fact-checked this reply. Have it checked before you read it — reading a well-written reply first makes you judge whether it <em>sounds</em> right instead of whether it <em>is</em> right.'));
+  }
+
+  const l3=el('div','lbl');l3.textContent='the reply itself';R.append(l3);
+  R.append(el('div','reply',esc(d.body)));
+
+  const g=el('div','gates');
+  const row=(ok,txt)=>el('div','gate',`<i class="${ok?'y':'n'}">${ok?'✓':'✕'}</i><span>${esc(txt)}</span>`);
+  g.append(row(d.lintIssues.length===0,d.lintIssues.length?`${d.lintIssues.length} thing(s) flagged by the safety check`:'nothing in it gives away that a tool wrote it'));
+  g.append(row(!d.hasDisclosure,'does not mention our company anywhere'));
+  g.append(row(!!c&&c.verdict==='CERTIFIED',c?`fact-check: ${String((VERDICT[c.verdict]||{}).word||c.verdict).toLowerCase()}`:'not fact-checked'));
+  R.append(g);
+
+  /* ---- what you do with it ---- */
+  const doBox=el('div','do');
+  const l4=el('div','lbl');l4.textContent='what do you want to do with it';doBox.append(l4);
+
+  const wf=(d.workflow&&d.workflow.status)||'none';
+  const wfRow=el('div');wfRow.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem';
+  const mark=(label,value,hint)=>{
+    const bt=el('button','mini');
+    bt.textContent=label;
+    bt.title=hint;
+    bt.style.cssText='padding:.45rem .85rem;font-size:.8rem'+
+      (wf===value?';border-color:var(--jade);color:var(--jade)':'');
+    bt.onclick=async()=>{
+      const r=await fetch('/api/status',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({draftId:d.id,status:wf===value?'none':value})}).then(x=>x.json());
+      if(r.ok){toast(wf===value?'Cleared':label);await load()}else toast(r.error||'Did not save');
+    };
+    return bt;
+  };
+  wfRow.append(mark('Ignore','ignored','Not worth answering — keep it out of the way'));
+  wfRow.append(mark('Mark as read','read','Seen it, deciding later'));
+  wfRow.append(mark('Actioned','actioned','Dealt with — sent, or handled another way'));
+  doBox.append(wfRow);
+
+  const acts=el('div');acts.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap';
+  acts.append(actionButton(c?'Check it again':'Fact-check it',doAction(async say=>{
+    say('Checking every statement…');
+    const r=await runNow({key:'check',draftId:d.id,override:true});
+    if(!r.ok)throw new Error(r.error||'The check did not run');
+    return 'Checked';
+  })));
+
+  /**
+   * Send.
+   *
+   * Deliberately two steps and deliberately awkward: you type the word, and you say why.
+   * That is the whole safety property — an approval that cannot happen by accident and
+   * that leaves a reason behind. It is not styled as the obvious next click, because on
+   * every reply so far the right answer has been no.
+   */
+  const sendBtn=el('button','mini');
+  sendBtn.textContent='Send it…';
+  sendBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;border-color:var(--ember);color:var(--ember)';
+  sendBtn.onclick=()=>{
+    const panel=el('div','sendbox');
+    panel.innerHTML=
+      (c&&c.verdict==='REJECT'?'<div class="tiny" style="color:var(--ember);margin-bottom:.5rem"><strong>The fact-check says do not send this one.</strong> Sending anyway is your call, and it is recorded as such.</div>':'')+
+      '<div class="tiny">Type <b>SEND</b> to confirm, and say why in a word or two.</div>';
+    const cw=el('div');cw.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem';
+    const conf=el('input');conf.placeholder='SEND';
+    conf.style.cssText='width:110px;font:inherit;font-family:var(--mono);font-size:.8rem;padding:.45rem .6rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+    const why=el('input');why.placeholder='why you are sending it';
+    why.style.cssText='flex:1;min-width:200px;font:inherit;font-size:.83rem;padding:.45rem .6rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+    const goBtn=actionButton('Confirm and send',doAction(async say=>{
+      if(conf.value!=='SEND')throw new Error('Type SEND exactly to confirm');
+      say('Publishing…');
+      const r=await fetch('/api/publish',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({draftId:d.id,confirm:conf.value,reason:why.value})}).then(x=>x.json());
+      if(r.output&&LAST_DETAIL)LAST_DETAIL(r.output);
+      if(!r.ok)throw new Error((r.error||'The send did not complete')+(r.recorded?' (your approval was recorded)':''));
+      return 'Sent';
+    }));
+    cw.append(conf,why,goBtn);panel.append(cw);
+    sendBtn.replaceWith(panel);conf.focus();
+  };
+  acts.append(sendBtn);
+  doBox.append(acts);
+
+  doBox.append(el('div','tiny',
+    'Sending publishes to Reddit under that account. It cannot be undone from here — a comment can be edited or deleted, but people will have seen it.'+
+    (c&&c.verdict==='REJECT'?' <strong>The check says do not send this one.</strong>':'')));
+  R.append(doBox);
+  split.append(R);
+}
+
+/* ---------------- threads ---------------- */
+/**
+ * Which sources are switched on.
+ *
+ * Kept in this browser, not written back to sources.json — this console never writes. The
+ * switches decide what the run commands below say, so the panel does something real rather
+ * than pretending to be a scheduler. Nothing collects on its own; a person runs the command.
+ */
+/* ---------------- doing things ----------------
+ * Every button that changes something goes through here: one job at a time, the button says
+ * what is happening while it happens, and a failure is reported in words rather than dropped.
+ */
+let BUSY=false;
+const runNow=async body=>{
+  const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify(body)}).then(x=>x.json());
+  /* whatever redbot printed goes on screen, success or failure — this is the only place
+     the operator can see why something did not work */
+  if(LAST_DETAIL&&(r.output||r.error))LAST_DETAIL(r.output||r.error);
+  return r;
+};
+
+function actionButton(label,handler){
+  const bt=el('button','mini');
+  bt.textContent=label;
+  bt.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+  bt.onclick=()=>handler(bt);
+  return bt;
+}
+/**
+ * Wraps a job so it is never invisible.
+ *
+ * These runs take minutes. A button that only changes its own label leaves you unable to
+ * tell "working" from "hung", and a failure that arrives as a three-second toast is a
+ * failure you cannot read. So: a panel appears under the button, each step is logged with
+ * the time it took, and whatever redbot actually printed is kept on screen — especially
+ * when it goes wrong.
+ */
+function doAction(job){
+  return async(bt)=>{
+    if(BUSY){toast('Something else is still running');return}
+    BUSY=true;
+    const original=bt.textContent;
+    bt.disabled=true;bt.style.opacity='.6';
+
+    let panel=bt.parentElement.querySelector('.runlog');
+    if(!panel){panel=el('div','runlog');bt.parentElement.append(panel)}
+    panel.textContent='';panel.hidden=false;
+    const t0=Date.now();
+    const line=(text,cls)=>{
+      const n=el('div','runline'+(cls?' '+cls:''));
+      n.innerHTML=`<span class="t">${String(Math.round((Date.now()-t0)/1000)).padStart(3,' ')}s</span><span>${esc(text)}</span>`;
+      panel.append(n);panel.scrollTop=panel.scrollHeight;
+      return n;
+    };
+    const say=m=>{bt.textContent=m;line(m)};
+    const detail=out=>{
+      if(!out)return;
+      const d=el('pre','runout');
+      d.textContent=String(out).replace(/\[[0-9;]*m/g,'').trim().split('\n').slice(-14).join('\n');
+      panel.append(d);panel.scrollTop=panel.scrollHeight;
+    };
+    LAST_DETAIL=detail;
+    try{
+      const done=await job(say);
+      line(done||'Done','ok');
+      bt.textContent=done||'Done';
+      await load();
+    }catch(e){
+      line(String(e&&e.message||e),'bad');
+      bt.textContent=original;
+    }finally{
+      LAST_DETAIL=null;
+      BUSY=false;bt.disabled=false;bt.style.opacity='';
+      setTimeout(()=>{bt.textContent=original},4000);
+    }
+  };
+}
+/* set while a job runs, so runNow can push the command's own output into the panel */
+let LAST_DETAIL=null;
+
+const srcKey=(kind,id)=>`redbot.src.${kind}.${id}`;
+const srcOn=(kind,id,dflt)=>{
+  try{const v=localStorage.getItem(srcKey(kind,id)); if(v!==null)return v==='1'}catch{}
+  return !!dflt;
+};
+const srcSet=(kind,id,on)=>{try{localStorage.setItem(srcKey(kind,id),on?'1':'0')}catch{}};
+
+function collecting(root){
+  const s=S.collect;
+  if(!s){root.append(el('div','note warn','<b>No sources file.</b> Add <code>data/sources.json</code> to choose where redbot looks.'));return}
+
+  const box=el('div','collect');
+  box.append(el('div','collect-h','<h3>Where redbot looks</h3>'+
+    `<span class="hint">${s.maxPerRun?esc(s.maxPerRun+' threads per run'):''}</span>`));
+  const b=el('div','collect-b');
+
+  const rows=(kind,items,label,nameOf,descOf)=>{
+    b.append(el('div','srcgrp',label));
+    items.forEach(it=>{
+      const id=nameOf(it);
+      const row=el('div','src-row');
+      const sw=el('button','sw');
+      sw.type='button';
+      sw.setAttribute('aria-pressed',String(srcOn(kind,id,it.enabled)));
+      sw.setAttribute('aria-label',`${srcOn(kind,id,it.enabled)?'Stop':'Start'} looking in ${id}`);
+      sw.onclick=()=>{
+        const now=sw.getAttribute('aria-pressed')!=='true';
+        srcSet(kind,id,now);sw.setAttribute('aria-pressed',String(now));
+        renderRun();
+      };
+      row.append(sw);
+      const mid=el('div');
+      mid.append(el('div','src-t',kind==='sub'?esc('r/'+id):esc('“'+id+'”')));
+      mid.append(el('div','src-w',esc(descOf(it))));
+      row.append(mid);
+      const n=kind==='sub'?(s.collected[id]||0):null;
+      row.append(el('div','src-n',n==null?'':`${n} on file`));
+      b.append(row);
+    });
+  };
+  rows('sub',s.subreddits,'subreddits to read',x=>x.name,x=>x.why);
+  rows('q',s.searches,'saved searches',x=>x.query,x=>x.why);
+
+  /* ---- add a place to look ---- */
+  b.append(el('div','srcgrp','add another'));
+  const add=el('div');add.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.5rem 0';
+  const kind=el('select');
+  kind.style.cssText='font:inherit;font-size:.8rem;padding:.45rem .6rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+  [['subreddit','a subreddit'],['search','a search phrase']].forEach(([v,l])=>{
+    const o=el('option',null,l);o.value=v;kind.append(o)});
+  const val=el('input');
+  val.placeholder='WordPress';
+  val.setAttribute('aria-label','Subreddit name or search phrase');
+  val.style.cssText='flex:1;min-width:220px;font:inherit;font-size:.85rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+  kind.onchange=()=>{val.placeholder=kind.value==='search'?'wordpress site slow after update':'WordPress'};
+  const addBtn=el('button','mini');addBtn.textContent='Add it';
+  addBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+  addBtn.onclick=async()=>{
+    if(!val.value.trim()){toast('Type a name first');return}
+    const r=await fetch('/api/sources/add',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({kind:kind.value,value:val.value.trim()})}).then(x=>x.json());
+    if(!r.ok){toast(r.error);return}
+    val.value='';toast('Added');await load();
+  };
+  add.append(kind,val,addBtn);b.append(add);
+  b.append(el('div','tiny','A subreddit is read straight through. A search phrase is run as a Reddit search. Either way nothing happens until you press Collect.'));
+
+  const run=el('div','runbox');
+  const rl=el('div','lbl');rl.textContent='collect';run.append(rl);
+  const btns=el('div');btns.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap';run.append(btns);
+  const note=el('div','tiny');run.append(note);
+  b.append(run);
+
+  function renderRun(){
+    btns.textContent='';
+    const subs=s.subreddits.filter(x=>srcOn('sub',x.name,x.enabled));
+    const qs=s.searches.filter(x=>srcOn('q',x.query,x.enabled));
+    const total=subs.length+qs.length;
+    if(!total){note.textContent='Nothing switched on. Turn on at least one source above.';return}
+
+    const go=doAction(async(say)=>{
+      for(const x of subs){
+        say(`Looking through r/${x.name}…`);
+        const r=await runNow({key:'find-threads',subreddit:x.name});
+        if(!r.ok)throw new Error(r.error||`r/${x.name} did not work`);
+      }
+      for(const x of qs){
+        say(`Searching “${x.query}”…`);
+        const r=await runNow({key:'find-search',query:x.query});
+        if(!r.ok)throw new Error(r.error||'that search did not work');
+      }
+      say('Working out which are worth answering…');
+      const sc=await runNow({key:'score'});
+      if(!sc.ok)throw new Error(sc.error||'scoring did not work');
+      return `Done — looked through ${total} place${total===1?'':'s'}.`;
+    });
+
+    btns.append(actionButton(`Collect from ${total} source${total===1?'':'s'}`,go));
+    note.innerHTML=`Opens your signed-in Chrome, reads up to ${esc(String(s.maxPerRun||15))} threads from each place, then works out which are worth answering. Takes a few minutes. ${esc(s.limitNote||'')}`;
+  }
+  renderRun();
+
+  box.append(b);root.append(box);
+}
+
+function discovery(){
+  const d=S.discovery, r=$('#v-discovery'); r.textContent='';
+  r.append(el('h2','sec','Threads redbot found'));
+  r.append(el('div','sub',esc(`${d.threadsCollected} collected · ${d.assessed} looked at · ${d.contribute} worth answering · ${d.skip} left alone · ${d.drafted} written`)));
+  collecting(r);
+  const w=el('div','wrap'), tb=el('table');
+  tb.innerHTML='<thead><tr><th class="n">Score</th><th>Thread</th><th>Call</th><th>What it would add</th><th>Reply</th></tr></thead>';
+  const body=el('tbody');
+  d.items.forEach(i=>{
+    const tr=el('tr',i.verdict==='skip'?'dim':'');
+    tr.innerHTML=`<td class="n">${i.score}</td>`+
+      `<td><a href="${esc(i.permalink)}" target="_blank" rel="noopener">${esc(i.title)}</a>`+
+      `<div class="cm">${esc([i.subreddit?'r/'+i.subreddit:'',i.comments!=null?i.comments+' comments':'',i.ageText||''].filter(Boolean).join(' · '))}</div></td>`+
+      `<td><span class="tag ${i.verdict==='contribute'?'ok':'no'}">${i.verdict==='contribute'?'answer it':'leave it'}</span></td>`+
+      `<td>${esc(String((i.thesis&&i.thesis.whatNew)||(i.reasons[0]||'')).slice(0,160))}</td>`+
+      `<td>${i.draftId?`<span class="tag ${i.draftStatus==='pending'?'stop':''}">${esc(i.draftStatus==='pending'?'waiting':i.draftStatus)}</span>`:'<span class="cm">—</span>'}</td>`;
+    body.append(tr);
+  });
+  tb.append(body);w.append(tb);r.append(w);
+  r.append(el('div','note',`<b>Leaving threads alone is most of the value.</b> ${d.skip} of the ${d.assessed} threads looked at were dropped before anyone spent time on them — a guide rather than a question, one already solved, or a subject these accounts cannot honestly speak to.`));
+}
+
+/* ---------------- accounts ---------------- */
+function accounts(){
+  const r=$('#v-accounts'); r.textContent='';
+  r.append(el('h2','sec','Accounts'));
+  r.append(el('div','sub','who redbot would be posting as'));
+  const g=el('div','cards');
+  S.accounts.forEach(a=>{
+    const c=el('div','card'+(a.stage==='warming'?' attn':''));
+    c.append(el('div','chead',`<b>${esc(a.handle)}</b>`+
+      (a.role?`<span class="tag">${esc(a.role)}</span>`:'')+
+      `<span class="tag ${a.stage==='warming'?'no':a.stage==='unmeasured'?'stop':'ok'}">${esc(a.stage==='warming'?'still growing':a.stage==='unmeasured'?'never measured':a.stage)}</span>`));
+    if(a.speaks)c.append(el('div','tiny',esc(a.speaks)));
+    c.append(el('div','cstats',`<span>karma ${num(a.karma)}</span><span>replies sent ${num(a.published)}</span><span>measurements ${num(a.observations)}</span>`));
+    if(a.configured){
+      c.append(el('div','tiny',
+        `Posts in ${a.subreddits.length?esc(a.subreddits.map(s=>'r/'+s).join(', ')):'nowhere set'} · `+
+        `${a.dailyCeiling!=null?esc(a.dailyCeiling+' reply a day at most'):'no daily limit set'} · `+
+        `quiet ${a.quietHours?esc(a.quietHours[0]+':00–'+a.quietHours[1]+':00'):'not set'} ${esc(a.timezone||'')}`));
+      c.append(el('div','tiny',
+        `Sign-in folder <code>${esc(a.profileDir||'—')}</code> ${a.profileExists?'<span class="tag ok">on disk</span>':'<span class="tag stop">missing</span>'} · port ${esc(a.debugPort||'—')}`));
+    } else {
+      c.append(el('div','tiny','<strong>Not in the accounts file.</strong> This handle appears in the run records but nothing describes it — no subreddits, no daily limit, no quiet hours.'));
+    }
+    c.append(el('div','tiny',a.karmaMeasuredAt
+      ? `Karma checked ${esc(ago(a.karmaMeasuredAt))}, while signed in.`
+      : 'Karma has never been checked for this account.'));
+    if(a.karma!=null&&a.karma<10)c.append(el('div','tiny','<strong>Under 10 karma.</strong> Exactly the kind of account Reddit filters are built to catch — early comments can be removed or held back quietly, still visible to you while signed in and invisible to everyone else.'));
+    g.append(c);
+  });
+  if(!S.accounts.length)g.append(el('div','empty','<b>No accounts yet</b><span>Add one below.</span>'));
+  r.append(g);
+
+  addAccount(r);
+
+  r.append(el('div','note warn',`<b>${S.profiles.length} sign-in folder${S.profiles.length===1?'':'s'} on disk, ${S.accounts.filter(a=>a.karma!=null).length} account${S.accounts.filter(a=>a.karma!=null).length===1?'':'s'} actually measured.</b> A folder on this machine is not proof of an account, and a name in a config file is an intention rather than a fact. Both are shown separately on purpose.`));
+  if(S.accountRules&&S.accountRules.length){
+    const n=el('div','note stop');
+    n.innerHTML='<b>The standing rules</b>'+S.accountRules.map(x=>`<div style="margin-top:.4rem">— ${esc(x)}</div>`).join('');
+    r.append(n);
+  }
+}
+
+/**
+ * Adding an account.
+ *
+ * redbot never launches a browser and never creates a profile — it attaches to a Chrome a
+ * person started. So there is nothing here for a button to do, and pretending otherwise would
+ * hide the one step that actually matters: signing in yourself, once, in a real window.
+ * What this panel can do is hand over the exact commands with no clashing port or folder,
+ * and the config to paste. It writes nothing.
+ */
+function addAccount(root){
+  const n=S.newAccount;
+  if(!n)return;
+  const box=el('div','collect');
+  box.append(el('div','collect-h','<h3>Add an account</h3><span class="hint">four steps, about ten minutes</span>'));
+  const b=el('div','collect-b');
+
+  const field=(label,ph,val)=>{
+    const w=el('div');w.style.marginBottom='.85rem';
+    w.append(el('div','tiny',esc(label)));
+    const i=el('input');
+    i.placeholder=ph; if(val)i.value=val;
+    i.setAttribute('aria-label',label);
+    i.style.cssText='width:100%;max-width:420px;margin-top:.25rem;font:inherit;font-size:.86rem;padding:.55rem .75rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+    w.append(i);b.append(w);return i;
+  };
+  const fHandle=field('Their Reddit username','wp-fixer');
+  const fRole  =field('What is this account for?','Support desk');
+  const fSpeaks=field('What do they talk about?','Error messages, plugin conflicts, getting unstuck');
+  const fSubs  =field('Which subreddits? (comma separated)','WordPress, Wordpress_Help','WordPress');
+
+  const steps=el('div');b.append(steps);
+  const status=el('div','tiny');status.style.marginTop='.5rem';b.append(status);
+  let made=null;
+
+  const button=(text,onClick,disabled)=>{
+    const bt=el('button','mini');bt.textContent=text;bt.disabled=!!disabled;
+    bt.style.cssText='padding:.5rem .9rem;font-size:.8rem;'+(disabled?'opacity:.4;cursor:not-allowed':'');
+    if(!disabled)bt.onclick=onClick;
+    return bt;
+  };
+  const post=(path,body)=>fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+
+  function draw(){
+    steps.textContent='';
+    const mk=(title,why,ctl,done)=>{
+      const s=el('div','stepn');
+      const t=el('div','txt');
+      t.innerHTML=`<b>${esc(title)}</b>${done?' <span class="tag ok">done</span>':''}<div class="tiny" style="margin-top:.3rem">${esc(why)}</div>`;
+      const holder=el('div');holder.style.marginTop='.6rem';holder.append(ctl);t.append(holder);
+      s.append(t);steps.append(s);
+    };
+
+    mk('Set the account up','Picks a free port and its own browser folder, and writes it down. Nothing is asked of you but the name.',
+      button(made?'Set up ✓':'Set it up',async()=>{
+        status.textContent='Setting up…';
+        const r=await post('/api/account/create',{
+          handle:fHandle.value, role:fRole.value, speaks:fSpeaks.value,
+          subreddits:fSubs.value.split(',').map(s=>s.trim()).filter(Boolean)
+        });
+        if(!r.ok){status.innerHTML=`<span style="color:var(--ember)">${esc(r.error)}</span>`;return}
+        made=r.account;status.textContent=`Ready. Its browser folder is ${r.account.profileDir}, on port ${r.account.debugPort}.`;
+        toast('Account set up');draw();
+      },!!made),!!made);
+
+    mk('Open their browser and sign in','A Chrome window opens on the Reddit sign-in page. Type the password there — redbot never sees it and stores no password anywhere. Leave the window open.',
+      button('Open the browser',async()=>{
+        status.textContent='Opening Chrome…';
+        const r=await post('/api/account/open',{handle:made.handle});
+        status.innerHTML=r.ok?'Chrome is open. Sign in, then come back and press the last button.'
+                            :`<span style="color:var(--ember)">${esc(r.error)}</span>`;
+      },!made),false);
+
+    mk('Check it worked','Reads the karma off their profile and writes it down, so Today has a real number to plan against.',
+      button('Check the account',async()=>{
+        status.textContent='Checking…';
+        const r=await post('/api/run',{key:'check-karma',cdp:`http://127.0.0.1:${made.debugPort}`,operator:'jerome'});
+        status.innerHTML=r.ok?'Done. Reloading…':`<span style="color:var(--ember)">${esc(r.error||'That did not work')}</span>`;
+        if(r.ok){await load();toast('Account added');}
+      },!made),false);
+  }
+  draw();
+  b.append(el('div','tiny','The only thing you do by hand is type the password into a real browser window. That one step stays manual on purpose — an account nobody signed into is not really yours.'));
+
+  box.append(b);root.append(box);
+}
+
+/* ---------------- growing — the warm-up coach ----------------
+ * Written for somebody who has never used Reddit. Every step is something you can do in the
+ * next ten minutes; nothing here is a principle you have to interpret.
+ *
+ * What it can and cannot know: karma comes from a real measurement, so the stage and the
+ * targets are real. Comments you write by hand in your own browser never pass through redbot,
+ * so it cannot count them — where that is true, it says so instead of showing a made-up zero.
+ */
+const STAGE=k=>k==null?null
+  :k<10 ?{n:1,label:'brand new',target:100,daily:'2 to 4',weeks:'weeks 1-2'}
+  :k<100?{n:1,label:'starting out',target:100,daily:'2 to 4',weeks:'weeks 1-2'}
+  :k<300?{n:2,label:'getting known',target:500,daily:'3 to 4',weeks:'weeks 3-6'}
+  :k<500?{n:2,label:'nearly there',target:500,daily:'3 to 4',weeks:'weeks 3-6'}
+  :       {n:3,label:'settled',target:null,daily:'up to 4',weeks:'week 7 on'};
+
+function today(){
+  const r=$('#v-today'); r.textContent='';
+  r.append(el('h2','sec','Growing the accounts'));
+  r.append(el('div','sub','what to do today, per account'));
+
+  /* ---- per-account state ---- */
+  const g=el('div','wcards');
+  S.accounts.forEach(a=>{
+    const st=STAGE(a.karma);
+    const c=el('div','wcard'+(st&&st.n<3?' attn':''));
+    c.append(el('div','whead',`<b>${esc(a.handle)}</b>`+
+      (st?`<span class="tag ${st.n===3?'ok':'no'}">${esc(st.label)}</span><span class="st">${esc(st.weeks)}</span>`
+         :'<span class="tag stop">never measured</span>')));
+
+    if(st&&st.target){
+      const pct=Math.max(0,Math.min(100,Math.round((a.karma/st.target)*100)));
+      c.append(el('div','bar-t',`<span><b>${a.karma}</b> karma</span><span>${st.target} needed</span>`));
+      const tr=el('div','track');tr.append(el('i',pct>=100?'done':pct>=50?'mid':''));
+      tr.firstChild.style.width=pct+'%';c.append(tr);
+    } else if(!st){
+      c.append(el('div','tiny','Karma has never been checked for this account, so there is nothing to plan against yet. Check it first.'));
+    } else {
+      c.append(el('div','bar-t',`<span><b>${a.karma}</b> karma</span><span>past the warm-up</span>`));
+    }
+
+    const days=a.karmaMeasuredAt?Math.floor((Date.now()-new Date(a.karmaMeasuredAt))/86400000):null;
+    const t=el('div','wtoday');
+    t.append(el('h4',null,'today'));
+    const todo=(txt,note)=>t.append(el('div','todo',`<span class="box">[ ]</span><span>${txt}${note?` <em>— ${esc(note)}</em>`:''}</span>`));
+    if(st){
+      todo(`Write <b>${st.daily} comments</b>`, st.n===1?'threads under 2 hours old':'questions with few answers');
+      if(st.n===1)todo('Comment somewhere <b>outside WordPress</b>','an account that only does support reads as a marketing asset');
+      todo('Check your first comments <b>in a signed-out window</b>','the only way to see if they were quietly removed');
+    }
+    if(days==null||days>=7)todo('<b>Re-check karma</b>',days==null?'never done':`last checked ${days} days ago`);
+    /* the button that replaces "go and type probe-karma somewhere" */
+    const kb=el('div');kb.style.marginTop='.8rem';
+    kb.append(actionButton('Check karma now',doAction(async say=>{
+      say('Reading their profile…');
+      const rr=await runNow({key:'check-karma',account:a.handle});
+      if(!rr.ok)throw new Error(rr.error||'Could not read the profile — is their browser open?');
+      return 'Karma updated';
+    })));
+    t.append(kb);
+    c.append(t);
+    g.append(c);
+  });
+  if(!S.accounts.length)g.append(el('div','empty','<b>No account measured yet</b><span>Check an account’s karma first — without that there is nothing to plan against.</span>'));
+  r.append(g);
+
+  /* ---- the unattended loop ---- */
+  const loop=el('div','collect');
+  loop.append(el('div','collect-h','<h3>Run it on its own</h3><span class="hint">never publishes</span>'));
+  const lb=el('div','collect-b');
+  const st=(PULSE_LAST&&PULSE_LAST.auto)||{running:false};
+  lb.append(el('div','tiny','Collects threads, works out which are worth answering, writes a reply and fact-checks it — on a loop, without you. It stops there. Approving and sending stays yours, and it will not act during an account’s quiet hours or past its daily limit.'));
+
+  const ctl=el('div');ctl.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.8rem';
+  const who=el('select');
+  who.style.cssText='font:inherit;font-size:.8rem;padding:.45rem .6rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+  S.accounts.forEach(a=>{const o=el('option',null,a.handle);o.value=a.handle;who.append(o)});
+  const mins=el('select');
+  mins.style.cssText=who.style.cssText;
+  [['30','every 30 minutes'],['60','every hour'],['180','every 3 hours'],['360','every 6 hours']].forEach(([v,l])=>{
+    const o=el('option',null,l);o.value=v;if(v==='60')o.selected=true;mins.append(o)});
+
+  if(st.running){
+    const stopBtn=el('button','mini');
+    stopBtn.textContent='Stop the loop';
+    stopBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;border-color:var(--ember);color:var(--ember)';
+    stopBtn.onclick=async()=>{
+      const r=await fetch('/api/auto/stop',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(x=>x.json());
+      toast(r.ok?'Stopped':(r.error||'Could not stop'));await pulseCheck();today();
+    };
+    ctl.append(el('span','tag ok',`running as ${esc(st.account||'')} · every ${esc(String(st.everyMinutes||''))} min`),stopBtn);
+  } else {
+    const startBtn=el('button','mini');
+    startBtn.textContent='Start the loop';
+    startBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;border-color:var(--jade);color:var(--jade)';
+    startBtn.onclick=async()=>{
+      const r=await fetch('/api/auto/start',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({account:who.value,everyMinutes:Number(mins.value)})}).then(x=>x.json());
+      toast(r.ok?'Started':(r.error||'Could not start'));await pulseCheck();today();
+    };
+    ctl.append(who,mins,startBtn);
+  }
+  lb.append(ctl);
+
+  if(st.running&&st.log&&st.log.length){
+    const lg=el('div','runlog');lg.style.marginTop='.8rem';
+    st.log.slice(-12).forEach(l=>lg.append(el('div','runline',`<span class="t"></span><span>${esc(l)}</span>`)));
+    lb.append(lg);
+  }
+  loop.append(lb);r.append(loop);
+
+  /* ---- the command, since redbot cannot do this for you ---- */
+  const cmdBox=el('div','card');
+  const l=el('div','lbl');l.textContent='to re-check karma';cmdBox.append(l);
+  const cmd=el('div','cmdline');
+  const cmdText='node dist/cli.js probe-karma';
+  cmd.append(el('span',null,esc(cmdText)));
+  const cp=el('button','mini','copy');
+  cp.onclick=()=>navigator.clipboard.writeText(cmdText).then(()=>toast('Copied'),()=>toast('Could not copy'));
+  cmd.append(cp);cmdBox.append(cmd);
+  cmdBox.append(el('div','tiny','Reads the number off the profile page in your own signed-in browser and writes it down. Do it weekly — a measurement that never gets recorded is not evidence.'));
+  r.append(cmdBox);
+
+  /* ---- the routine, for somebody who has never used Reddit ---- */
+  const h=el('h2','sec');h.textContent='How to actually do it';h.style.marginTop='2rem';r.append(h);
+  r.append(el('div','sub','assume you have never commented on Reddit before'));
+  const steps=el('div','card steps-n');
+  [
+   ['<b>Karma is just other people upvoting your comments.</b> One comment that helps somebody might earn 5-20. One that reads like an advert earns nothing and can get you removed. There is no way to buy it, and no way to rush it.'],
+   ['<b>Open the subreddit and sort by New.</b> Threads under two hours old have few answers, so yours actually gets read. A thread from yesterday already has twenty replies and nobody will reach yours.'],
+   ['<b>Find a question you can genuinely answer.</b> Not one where you would be guessing. If you have to look it up to sound sure, pick a different thread — being wrong in public is the one thing that costs more than saying nothing.'],
+   ['<b>Write two or three sentences, in your own words.</b> Say the specific thing that helps. No greeting, no sign-off, no company name, no links at all — links from a new account are the fastest way to get filtered.',
+    '<span class="tagline">a comment that works</span>Check whether the plugin is loading its own copy of jQuery — you can see it in the page source as two separate script tags. That is usually what breaks the slider after an update.'],
+   ['<b>Post it, then open the same thread in a private window.</b> If your comment is not there while signed out, it was removed or held for a moderator — <em>you would never know from your own screen, because it still looks fine to you.</em> Do this for your first ten comments.'],
+   ['<b>Come back in a few hours and answer any reply.</b> A conversation earns far more than a single comment, and it is what makes the account look like a person rather than a drop-box.'],
+   ['<b>Stop at your daily number.</b> Two to four while the account is new. Spread across the day, not in one sitting. Ten comments in an hour from a new account is the pattern that gets accounts caught.'],
+   ['<b>Once a week, re-check karma</b> with the command above, and look at this screen again. The targets move as the number does.']
+  ].forEach(([txt,eg])=>{
+    const s=el('div','stepn');
+    s.append(el('div','txt',txt+(eg?`<div class="egs">${eg}</div>`:'')));
+    steps.append(s);
+  });
+  r.append(steps);
+
+  /* ---- the hard lines ---- */
+  const nh=el('h2','sec');nh.textContent='Never, at any point';nh.style.marginTop='2rem';r.append(nh);
+  const nv=el('div','card');
+  const list=el('div','never');
+  [['Both accounts in the same thread','it reads as one person pretending to be two, which is exactly what it would be'],
+   ['The accounts replying to each other or voting on each other','this is vote manipulation and it is what gets accounts permanently banned'],
+   ['Any link, or the company name, while warming up','a new account posting links is the clearest possible spam signal'],
+   ['Making a new account after one gets suspended','from the same machine that is ban evasion, and turns one suspension into a permanent one'],
+   ['Voting at all through this tool','there is no code for it, and there will not be']]
+  .forEach(([a,b])=>list.append(el('div',null,`<i>✕</i><span><b>${esc(a)}</b> — ${esc(b)}</span>`)));
+  nv.append(list);r.append(nv);
+
+  r.append(el('div','note','<b>redbot cannot do this part.</b> These comments are written by you, in your own browser, and never pass through this tool — which is why it cannot count them for you. It can find threads, draft, fact-check, keep the pace slow and record what gets taken down. Karma comes from other people finding your comments useful, and nothing here changes that.'));
+}
+
+/* ---------------- results ---------------- */
+function outcomes(){
+  const o=S.outcomes, r=$('#v-outcomes'); r.textContent='';
+  r.append(el('h2','sec','What happened after sending'));
+  r.append(el('div','sub','the only question that matters: did the reply help anyone'));
+  if(o.published===0){
+    r.append(el('div','empty','<b>Nothing has been sent yet.</b><span>Everything this screen exists to show — karma on a comment, replies to it, whether a moderator took it down — only exists after something is sent. Nothing has been.</span>'));
+  }
+  const h=el('h2','sec');h.textContent='What has been measured';h.style.marginTop='2rem';r.append(h);
+  const w=el('div','wrap'), t=el('table');
+  t.innerHTML='<thead><tr><th>When</th><th>Account</th><th>What</th><th class="n">Value</th><th>How</th></tr></thead>';
+  const b=el('tbody');
+  o.observations.forEach(x=>{
+    b.innerHTML+=`<tr><td>${esc(ago(x.ts))}</td><td>${esc(x.account||'—')}</td><td><span class="tag">${esc(x.kind)}</span></td><td class="n">${esc(x.value)}</td><td>${esc(x.note||'')}</td></tr>`;
+  });
+  if(!o.observations.length)b.innerHTML='<tr><td colspan="5" class="cm">nothing measured yet</td></tr>';
+  t.append(b);w.append(t);r.append(w);
+  r.append(el('div','note warn',`<b>${o.reviews} replies decided on · ${o.regret} looked at again later.</b> How good the writing is stays unknown until replies are approved or turned down at the prompt — that is the only place a person's actual opinion gets written down, and it has never been used.`));
+}
+
+/* ---------------- routing ---------------- */
+const R={today,accounts,review,discovery,outcomes};
+function go(v){
+  CUR=v;
+  document.querySelectorAll('.steps .step').forEach(b=>b.setAttribute('aria-current',b.dataset.v===v?'page':'false'));
+  Object.keys(R).forEach(k=>{$('#v-'+k).hidden=(k!==v)});
+  R[v]();
+  scrollTo({top:0,behavior:'instant'});
+}
+document.querySelectorAll('.steps .step').forEach(b=>b.onclick=()=>go(b.dataset.v));
+/* ---------------- walkthrough ----------------
+ * Opens itself once, on the first visit, and never again unasked. After that it is the ?
+ * in the bar. Opening it from a screen highlights that screen's section, so the answer to
+ * "what am I looking at" is the first thing in view rather than something to hunt for. */
+function guide(open,section){
+  const g=$('#guide'), s=$('#scrim'), btn=$('#help');
+  g.hidden=!open; s.hidden=!open;
+  btn.setAttribute('aria-expanded',String(open));
+  if(!open){btn.focus();return}
+  document.querySelectorAll('.g-sec').forEach(n=>n.classList.remove('on'));
+  const target=section&&document.querySelector(`.g-sec[data-g="${section}"]`);
+  if(target){target.classList.add('on');target.scrollIntoView({block:'start',behavior:'instant'})}
+  else $('.guide-b').scrollTop=0;
+  $('#guideX').focus();
+  try{localStorage.setItem('redbot.seenGuide','1')}catch{}
+}
+$('#help').onclick=()=>guide($('#guide').hidden,CUR);
+$('#guideX').onclick=()=>guide(false);
+$('#scrim').onclick=()=>guide(false);
+addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&!$('#guide').hidden)guide(false);
+  else if(e.key==='?'&&$('#guide').hidden&&!/^(INPUT|TEXTAREA)$/.test(e.target.tagName))guide(true,CUR);
+});
+
+$('#theme').onclick=()=>{
+  const dark=(document.documentElement.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';
+  document.documentElement.setAttribute('data-theme',dark?'light':'dark');
+};
+$('#reload').onclick=()=>load().then(()=>toast('Refreshed'));
+
+/* ---------------- pulse ----------------
+ * Polls the machine's real state every 15 seconds: is each account's browser actually
+ * answering, is its folder still there, is anything running. It reports what it finds and
+ * does not attempt to repair anything — a console that silently "auto-heals" a disconnected
+ * browser would be inventing a connection nobody has verified. It names the fix instead.
+ */
+let PULSE_LAST=null;
+async function pulseCheck(){
+  const chip=$('#pulseChip');
+  try{
+    const p=await fetch('/api/pulse').then(r=>r.json());
+    const was=PULSE_LAST; PULSE_LAST=p;
+    if(p.running){
+      chip.textContent=`running ${p.running}`;
+      chip.style.cssText='color:var(--amber);border-color:var(--amber)';
+    } else if(p.healthy){
+      chip.textContent='all connected';
+      chip.style.cssText='color:var(--jade);border-color:var(--jade)';
+    } else {
+      chip.textContent=`${p.problems.length} problem${p.problems.length===1?'':'s'}`;
+      chip.style.cssText='color:var(--ember);border-color:var(--ember)';
+    }
+    chip.title=p.problems.length?p.problems.join('\n'):'Every account browser is answering.';
+    /* tell me once when it changes, not every fifteen seconds */
+    if(was&&was.healthy&&!p.healthy)toast(p.problems[0]);
+    if(was&&!was.healthy&&p.healthy)toast('Everything reconnected');
+  }catch{
+    chip.textContent='console offline';
+    chip.style.cssText='color:var(--ember);border-color:var(--ember)';
+  }
+}
+$('#pulseChip').onclick=()=>{
+  const p=PULSE_LAST;
+  if(!p){toast('Still checking');return}
+  toast(p.problems.length?p.problems.join(' · '):'Everything is connected');
+};
+
+async function load(){
+  const res=await fetch('/api/state');
+  S=await res.json();
+  /* Today's badge counts the actions actually outstanding, not a total — it is the only
+     number in the bar that should make you click. */
+  const due=S.accounts.reduce((n,a)=>{
+    const st=STAGE(a.karma);
+    const days=a.karmaMeasuredAt?Math.floor((Date.now()-new Date(a.karmaMeasuredAt))/86400000):null;
+    return n+(st?(st.n===1?3:2):0)+((days==null||days>=7)?1:0);
+  },0);
+  $('#nTod').textContent=due;
+  $('#nRev').textContent=S.pulse.waitingOnYou;
+  $('#nDisc').textContent=S.discovery.assessed;
+  $('#nAcc').textContent=S.accounts.length;
+  $('#nOut').textContent=S.outcomes.published;
+  $('#banner').innerHTML=S.pulse.published===0
+    ? '<b>Nothing has been sent yet.</b> Threads, scores and replies below are real output from live runs. Results is empty because there are no results.'
+    : `<b>${S.pulse.published} sent.</b> Every figure is read fresh from the run records.`;
+  pulse();go(CUR);
+  let seen=false; try{seen=localStorage.getItem('redbot.seenGuide')==='1'}catch{}
+  if(!seen)guide(true);
+}
+load().catch(e=>{$('#banner').textContent='Could not load: '+e.message});
+pulseCheck(); setInterval(pulseCheck,15000);
+})();
+</script>
+</body>
+</html>
