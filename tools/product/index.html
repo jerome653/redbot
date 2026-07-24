@@ -693,7 +693,8 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const el=(t,c,h)=>{const n=document.createElement(t);if(c)n.className=c;if(h!=null)n.innerHTML=h;return n};
-let S=null, CUR='today', SEL=null;
+let S=null, CUR='today', SEL=null, OPS=null;
+async function loadOperators(){ OPS=await fetch('/api/operators').then(r=>r.json()).catch(()=>({operators:[],selected:null})); }
 
 /**
  * Plain English wherever a person can see it.
@@ -1163,11 +1164,57 @@ function discovery(){
   r.append(el('div','note',`<b>Leaving threads alone is most of the value.</b> ${d.skip} of the ${d.assessed} threads looked at were dropped before anyone spent time on them — a guide rather than a question, one already solved, or a subject these accounts cannot honestly speak to.`));
 }
 
+/* ---------------- who pays (operator / billing) ----------------
+   The account is who redbot POSTS as; the operator is whose Claude login the model calls are
+   BILLED to. They are different questions and used to be invisible — the console billed
+   whoever launched the server. This picker makes it explicit, and can only choose among
+   operators already registered at a terminal (`redbot operators add`), never invent one. */
+function renderBilling(container){
+  const box=el('div','wcard');
+  const o=OPS||{operators:[],selected:null};
+  const sel=(o.operators||[]).find(x=>x.name===o.selected)||null;
+
+  const head=el('div','bar-t','<b>Model calls billed to</b>');
+  box.append(head);
+
+  if(!o.operators.length){
+    box.append(el('div','tiny','<strong>No operator registered.</strong> Every run needs one, or it refuses (fails closed). Add one at a terminal: <code>redbot operators add &lt;name&gt;</code>'));
+    container.append(box);
+    return;
+  }
+
+  const pick=el('select','opsel');
+  pick.append(new Option('— none (runs will refuse) —',''));
+  for(const op of o.operators){
+    const label=op.name+(op.shared?'  · shares this machine\'s login':op.ready?'  · own login':'  · not signed in yet');
+    const opt=new Option(label,op.name); if(op.name===o.selected)opt.selected=true; pick.append(opt);
+  }
+  pick.onchange=async()=>{
+    const r=await fetch('/api/operator/select',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({name:pick.value})}).then(x=>x.json()).catch(e=>({ok:false,error:String(e)}));
+    if(!r.ok){toast(r.error||'Could not select');}
+    else{toast(pick.value?('Billing → '+pick.value):'Billing cleared');await loadOperators();accounts();}
+  };
+  box.append(pick);
+
+  if(sel&&sel.shared){
+    box.append(el('div','tiny','<span class="tag no">shared login</span> Runs as this operator bill whoever owns this machine\'s Claude login. For a dedicated wallet: <code>redbot operators add &lt;name&gt;</code>, sign in, then pick it here.'));
+  } else if(sel&&!sel.ready){
+    box.append(el('div','tiny','<span class="tag stop">not signed in</span> The folder exists but no Claude login is set up in it yet — a run will fail until you sign in.'));
+  } else if(sel){
+    box.append(el('div','tiny','<span class="tag ok">own login</span> Runs the console starts are billed to this operator.'));
+  } else {
+    box.append(el('div','tiny','Nothing selected — a run started from here will refuse rather than guess whose login to spend.'));
+  }
+  container.append(box);
+}
+
 /* ---------------- accounts ---------------- */
 function accounts(){
   const r=$('#v-accounts'); r.textContent='';
   r.append(el('h2','sec','Accounts'));
   r.append(el('div','sub','who redbot would be posting as'));
+  renderBilling(r);
   const g=el('div','cards');
   S.accounts.forEach(a=>{
     const c=el('div','card'+(a.stage==='warming'?' attn':''));
@@ -1570,6 +1617,7 @@ function argusRecord(){
 async function load(){
   const res=await fetch('/api/state');
   S=await res.json();
+  await loadOperators();
   /* Today's badge counts the actions actually outstanding, not a total — it is the only
      number in the bar that should make you click. */
   const due=S.accounts.reduce((n,a)=>{

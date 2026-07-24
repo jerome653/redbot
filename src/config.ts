@@ -253,8 +253,60 @@ export interface OperatorRecord {
   note?: string;
 }
 
+export const operatorsPath = join(DATA, 'operators', 'operators.json');
+
+/** A registered operator, with enough status to pick one without reading credentials. */
+export interface OperatorInfo {
+  name: string;
+  /** Where their Claude credentials live. Local-only — never sent to the browser. */
+  configDir: string;
+  /**
+   * True when configDir is NOT a dedicated `data/operators/<name>/claude` folder — i.e. it
+   * points at a shared login (this machine's own `~/.claude`). Not wrong, but it means model
+   * calls for this operator bill whoever owns that login, so it is always surfaced.
+   */
+  shared: boolean;
+  /** True when the credential folder actually exists — a login has been set up there. */
+  ready: boolean;
+  declaredBy?: string;
+  note?: string;
+}
+
+/**
+ * Every operator declared in `operators.json`, with credential status. Read by the CLI
+ * (`redbot operators`) and, via a path-stripped projection, by the console picker.
+ *
+ * The console must never invent a billing identity from a web request, so a picker offers
+ * ONLY the names this function returns — a list only someone with filesystem access could
+ * have written. That is the same trust model the account picker already uses.
+ */
+export function listOperators(): OperatorInfo[] {
+  if (!existsSync(operatorsPath)) return [];
+  let all: Record<string, OperatorRecord>;
+  try {
+    all = JSON.parse(readFileSync(operatorsPath, 'utf8')) as Record<string, OperatorRecord>;
+  } catch {
+    throw new OperatorAuthError('data/operators/operators.json is not readable JSON. Fix or delete it.');
+  }
+  const dedicatedRoot = join(DATA, 'operators');
+  return Object.entries(all)
+    .filter(([, rec]) => rec && typeof rec.configDir === 'string' && rec.configDir)
+    .map(([name, rec]) => {
+      // A dedicated folder lives under data/operators/<name>/; anything else is a shared login.
+      const shared = !rec.configDir.split('\\').join('/').startsWith(dedicatedRoot.split('\\').join('/'));
+      return {
+        name,
+        configDir: rec.configDir,
+        shared,
+        ready: existsSync(rec.configDir),
+        ...(rec.declaredBy ? { declaredBy: rec.declaredBy } : {}),
+        ...(rec.note ? { note: rec.note } : {})
+      };
+    });
+}
+
 export function operatorRecord(name: string): OperatorRecord | null {
-  const file = join(DATA, 'operators', 'operators.json');
+  const file = operatorsPath;
   if (!existsSync(file)) return null;
   try {
     const all = JSON.parse(readFileSync(file, 'utf8')) as Record<string, OperatorRecord>;

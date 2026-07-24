@@ -6,6 +6,7 @@
  * approving it first, and nothing is posted at all unless every gate in src/gates.ts passes.
  */
 import { login } from './commands/login.js';
+import { operators } from './commands/operators.js';
 import { read } from './commands/read.js';
 import { search } from './commands/search.js';
 import { draft } from './commands/draft.js';
@@ -30,6 +31,8 @@ redbot — Reddit engagement assistant
 
   Reading
     redbot login                 confirm the browser session
+    redbot operators [add <name>]
+                                 who can run redbot, and whose Claude login pays
     redbot session [--kind short|medium] [--sub <name>]
                                  one human-shaped browsing session (reads only)
     redbot read <subreddit>      collect threads from a subreddit
@@ -137,6 +140,7 @@ async function main(): Promise<number> {
 
   switch (cmd) {
     case 'login':   return login();
+    case 'operators': return operators(positional[0], positional[1]);
     case 'read':    return read(positional[0]);
     case 'search':  return search(positional[0], undefined, flagValue('commit'));
     case 'draft':   return draft(positional[0]);

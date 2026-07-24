@@ -122,6 +122,8 @@ export type HistoryKind =
   /** an attempted sign-in that Reddit refused — feeds the health state machine */
   | 'login.fail'
   | 'read'
+  /** a new operator was registered (dedicated Claude-login folder created) */
+  | 'operator.add'
   /** a committed collection — threads entered the corpus */
   | 'search'
   /**

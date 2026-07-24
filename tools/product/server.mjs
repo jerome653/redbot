@@ -366,6 +366,13 @@ function runAction(key, opts) {
      */
     const env = { ...process.env };
     if (opts && opts.account) env.REDBOT_ACCOUNT = String(opts.account);
+    /**
+     * Bill the run to the operator the console picked, overriding whatever the server's shell
+     * inherited. Only ever a name already in operators.json (the select endpoint validates it),
+     * so the browser is choosing among pre-authorised local identities, not naming a new one.
+     * If nothing is selected, the child's config.ts fails closed with "No Claude operator set".
+     */
+    if (selectedOperator) env.REDBOT_OPERATOR = selectedOperator;
     // H5: the CDP endpoint is NOT taken from the request. The selected account already resolves
     // its own debug port from accounts.json (config.ts); letting the browser body set REDBOT_CDP
     // would let a caller point redbot at a debugger they control and harvest every scraped
@@ -401,6 +408,36 @@ function runAction(key, opts) {
  * password, and an account nobody signed into is not really yours.
  * ------------------------------------------------------------------ */
 const accountsPath = join(DATA, 'accounts.json');
+const operatorsPath = join(DATA, 'operators', 'operators.json');
+
+/* ------------------------------------------------------------------ *
+ * Operators — whose Claude login pays for a run.
+ *
+ * The console must NEVER invent a billing identity from a web request. So the picker offers
+ * only names already written into operators.json by someone with filesystem access — the same
+ * trust model as the account picker. Selecting one just chooses among pre-authorised local
+ * identities; it cannot create one, and the credential PATHS never reach the browser.
+ *
+ * `selectedOperator` starts as whatever REDBOT_OPERATOR the server was launched with, so a
+ * shell that already named an operator keeps working with no click.
+ * ------------------------------------------------------------------ */
+let selectedOperator = process.env.REDBOT_OPERATOR || null;
+
+function readOperators() {
+  const all = readJson(operatorsPath, null);
+  if (!all || typeof all !== 'object') return [];
+  const dedicatedRoot = join(DATA, 'operators').split('\\').join('/');
+  return Object.entries(all)
+    .filter(([, r]) => r && typeof r.configDir === 'string' && r.configDir)
+    .map(([name, r]) => ({
+      name,
+      // shared = not a dedicated data/operators/<name>/ folder → bills a login someone else owns
+      shared: !r.configDir.split('\\').join('/').startsWith(dedicatedRoot),
+      ready: existsSync(r.configDir),
+      note: r.note || ''
+      // configDir is deliberately NOT included — it is a filesystem path and never leaves the machine.
+    }));
+}
 
 function chromeBinary() {
   const candidates = [
@@ -641,6 +678,23 @@ const server = createServer((req, res) => {
         const r = autoStop();
         return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
+      if (url.pathname === '/api/operator/select') {
+        const name = typeof body.name === 'string' ? body.name : null;
+        // Empty/null clears the pick → runs fall back to the server's shell env, or fail closed.
+        if (!name) {
+          selectedOperator = process.env.REDBOT_OPERATOR || null;
+          return send(200, JSON.stringify({ ok: true, selected: selectedOperator }));
+        }
+        // The browser can only choose among registered operators; it cannot create one.
+        if (!readOperators().some((o) => o.name === name)) {
+          return send(400, JSON.stringify({
+            ok: false,
+            error: `"${name}" is not a registered operator. Add one at a terminal: redbot operators add ${String(name).replace(/[^a-z0-9._-]/gi, '')}`
+          }));
+        }
+        selectedOperator = name;
+        return send(200, JSON.stringify({ ok: true, selected: selectedOperator }));
+      }
       if (url.pathname === '/api/sources/add') {
         const kind = body.kind === 'search' ? 'search' : 'subreddit';
         const value = String(body.value || '').trim().replace(/^\/?r\//i, '');
@@ -732,6 +786,19 @@ const server = createServer((req, res) => {
     return send(200, JSON.stringify({
       running,
       actions: PUBLIC_ACTIONS.map((key) => ({ key, label: ACTIONS[key].label }))
+    }));
+  }
+
+  /* Who can run, and who is currently selected to pay. No credential paths cross this line. */
+  if (url.pathname === '/api/operators') {
+    const operators = readOperators();
+    const sel = operators.find((o) => o.name === selectedOperator) || null;
+    return send(200, JSON.stringify({
+      operators,
+      selected: selectedOperator,
+      selectedRegistered: !!sel,
+      selectedShared: sel ? sel.shared : null,
+      selectedReady: sel ? sel.ready : null
     }));
   }
 
