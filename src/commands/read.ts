@@ -30,6 +30,16 @@ export async function read(subreddit: string | undefined, limit?: number): Promi
 
   try {
     await openSubreddit(s.page, name);
+
+    // A block page renders as a normal document, so collection would otherwise scrape an
+    // interstitial and count it as "0 threads" while hammering Reddit. `isBlocked` was imported
+    // but never called on this path (evaluation L4); check it before collecting.
+    if (await isBlocked(s.page)) {
+      record('login.fail', `block page while opening r/${name}`, { subreddit: name });
+      say.fail('Reddit served a block page. Open reddit.com by hand in that Chrome window once, then retry.');
+      return 1;
+    }
+
     say.step(`Collecting up to ${max} posts…`);
 
     const links = await collectPermalinks(s.page, max, sel.feedScope);

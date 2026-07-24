@@ -88,7 +88,8 @@ export async function runCertification(
       invalidated: [],
       resolution,
       certifiedAt: new Date().toISOString(),
-      model: config.llm.analyzeModel
+      model: config.llm.analyzeModel,
+      models: { analyze: config.llm.analyzeModel, draft: config.llm.draftModel }
     };
     recordCertification(c);
     trace('gate', 'argus.verdict', { verdict: c.verdict, rule: 'thread-resolved' }, { draftId: draft.id });
@@ -177,6 +178,9 @@ export async function runCertification(
     resolution,
     certifiedAt: new Date().toISOString(),
     model: config.llm.analyzeModel,
+    // Both models the verdict rests on — claims from analyze, contradictions from draft. The
+    // single `model` field above named only the first (evaluation, wrong-model finding).
+    models: { analyze: config.llm.analyzeModel, draft: config.llm.draftModel },
     // EB-40 — persist the set the verdict was actually computed against, so this record can be
     // replayed without inferring it. Evidence only; nothing reads it back into a decision.
     refutationRan: [...refutationRan]

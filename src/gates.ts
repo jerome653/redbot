@@ -20,6 +20,7 @@ import { policy } from './policy.js';
 import { isQuestionShaped, currentAgeHours } from './select.js';
 import { MIN_OPPORTUNITY_SCORE } from './opportunity.js';
 import type { HealthVerdict } from './health.js';
+import type { WindowVerdict } from './window.js';
 import type { ThreadState } from './reddit/thread-state.js';
 import type { Identity } from './browser.js';
 import type { Draft, Thread, OpportunityAssessment } from './types.js';
@@ -50,6 +51,15 @@ export interface GateInput {
   /** Which account we believe we are acting as. A mismatch is a hard stop. */
   expectedAccount?: string | null | undefined;
   health: HealthVerdict;
+  /**
+   * The timing verdict for the selected account — quiet hours and the per-account daily
+   * ceiling. Passed in (not computed here) so this function stays pure and browser-free. When
+   * present and refusing, it blocks. Absent means "no account selected", the single-profile
+   * case, which this gate does not police — the global daily cap still runs via `health`.
+   * Before this existed, `checkWindow` had exactly one caller (`auto`), so the interactive
+   * publish path enforced neither quiet hours nor the per-account ceiling (evaluation H7).
+   */
+  window?: WindowVerdict | null | undefined;
   /** Live page probe. null before the page has been read — blocks. */
   threadState?: ThreadState | null | undefined;
   /** Every draft on disk, for cross-run duplicate detection. */
@@ -150,7 +160,18 @@ export function evaluateGates(input: GateInput): GateResult {
   /* ---- 5. is anyone actually asking ---- */
   // DEFECT-12: triage scored a "[Guide]" post 72/90 despite GATE A putting a guide at 5.
   // Checked here too, not only in `select`, so the publish path cannot inherit a bad score.
-  if (input.thread) {
+  //
+  // A missing thread is a refusal, not a skip. Two gates below (question-shape, recency) are
+  // derived from the thread; if the thread record is gone, neither can be established, and
+  // every other unestablished fact in this function blocks. They used to vanish silently when
+  // `thread` was undefined, so a draft whose thread had been cleared skipped both (evaluation
+  // L2). Fail closed instead: no thread, no publish.
+  if (!input.thread) {
+    blocks.push({
+      gate: 'no-thread',
+      reason: 'the thread this draft answers is not on record — cannot check that it is still a live question'
+    });
+  } else {
     const shape = isQuestionShaped(input.thread);
     if (!shape.pass) {
       blocks.push({ gate: 'not-a-question', reason: shape.detail });
@@ -197,8 +218,12 @@ export function evaluateGates(input: GateInput): GateResult {
   const others = (input.allDrafts ?? []).filter(
     (d) => d.id !== input.draft.id && d.threadId === input.draft.threadId
   );
-  if (others.some((d) => d.status === 'published')) {
-    blocks.push({ gate: 'duplicate', reason: 'a draft for this thread has already been published in a previous run' });
+  // `approved` counts too, not only `published`: a draft flips to `approved` on disk in the
+  // instant before the submit click, and a comment that actually landed can be mis-recorded
+  // `failed` when confirmation misfires (evaluation H2). Treating a prior approved/published
+  // draft for the same thread as a duplicate closes the re-post window either way.
+  if (others.some((d) => d.status === 'published' || d.status === 'approved')) {
+    blocks.push({ gate: 'duplicate', reason: 'a draft for this thread has already been approved or published in a previous run' });
   }
 
   /* ---- account health ---- */
@@ -212,9 +237,39 @@ export function evaluateGates(input: GateInput): GateResult {
     for (const r of input.health.reasons) warnings.push(`health — ${r}`);
   }
 
+  /* ---- account timing: quiet hours and the per-account daily ceiling ---- */
+  if (input.window && !input.window.allowed) {
+    blocks.push({ gate: 'window', reason: input.window.detail });
+  }
+
+  /* ---- Argus certification, if this draft was fact-checked ---- */
+  // A REJECT is a hard block: the certify command's own contract is "a REJECT never reaches the
+  // approval prompt", but nothing enforced it — the verdict was written to certifications.jsonl
+  // and never read on the publish path (evaluation H6). ESCALATE and "never certified" are
+  // surfaced to the human rather than blocked: both are cases a person is meant to judge.
+  const cert = input.draft.certification;
+  if (cert?.verdict === 'REJECT') {
+    blocks.push({
+      gate: 'certification',
+      reason: `Argus rejected this draft on ${cert.at} (${cert.fatalContradictions} fatal contradiction(s)) — re-draft rather than publish`
+    });
+  } else if (cert?.verdict === 'ESCALATE') {
+    warnings.push('Argus escalated this draft — a person who knows the subject must confirm the facts before it goes out');
+  } else if (!cert) {
+    warnings.push('this draft has not been fact-checked — run `redbot certify` before publishing');
+  }
+
   /* ---- draft freshness: a draft written long ago describes a thread that has moved on ---- */
+  // Fail closed on an unparseable createdAt: `Number.isFinite(NaN)` is false, so the old guard
+  // SKIPPED the gate when the date could not be read — the one shape where "we can't tell how
+  // old this draft is" waved it through instead of refusing (evaluation L1).
   const draftAgeH = (now.getTime() - Date.parse(input.draft.createdAt)) / 3_600_000;
-  if (Number.isFinite(draftAgeH) && draftAgeH > 24) {
+  if (!Number.isFinite(draftAgeH)) {
+    blocks.push({
+      gate: 'stale-draft',
+      reason: `draft createdAt "${input.draft.createdAt}" is not a readable date — cannot establish the draft is fresh`
+    });
+  } else if (draftAgeH > 24) {
     blocks.push({
       gate: 'stale-draft',
       reason: `draft was written ${Math.round(draftAgeH)}h ago — the thread has moved since; re-draft it`

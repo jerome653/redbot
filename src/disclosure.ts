@@ -171,6 +171,15 @@ export function lintDraft(body: string): LintResult {
   const mentionsBrand = BRAND.test(body);
   const hasDisclosure = body.includes(config.brand.disclosureLine);
 
+  /**
+   * The sanctioned AI-provenance line is exempt from the assistant-voice / leakage checks: it is
+   * a deliberate label a person adds so a reply can comply where a subreddit requires one
+   * (evaluation M5). Everything else — "as an AI", model names, "generated with Claude" the model
+   * wrote itself — is still blocked. We scan a copy with the sanctioned line removed, so only
+   * that exact wording is spared; the length check still uses the real body.
+   */
+  const scan = body.split(config.aiDisclosureLine).join(' ');
+
   if (mentionsBrand) {
     if (config.brand.forbidMention) {
       issues.push(`names ${org} — generated replies must not mention the operator's employer at all`);
@@ -179,19 +188,19 @@ export function lintDraft(body: string): LintResult {
     }
   }
 
-  if (firstMatch(AGENT_LEAKAGE, body)) {
+  if (firstMatch(AGENT_LEAKAGE, scan)) {
     issues.push('assistant/agent text leaked into the draft — not a Reddit reply');
   }
-  if (firstMatch(ASSISTANT_VOICE, body)) {
+  if (firstMatch(ASSISTANT_VOICE, scan)) {
     issues.push('reply refers to itself as an AI or names the model');
   }
-  if (firstMatch(PROMPT_ECHO, body)) {
+  if (firstMatch(PROMPT_ECHO, scan)) {
     issues.push('prompt scaffolding echoed into the reply');
   }
-  if (firstMatch(INTERNAL_REFS, body)) {
+  if (firstMatch(INTERNAL_REFS, scan)) {
     issues.push('internal identifier, env var or data file named in the reply');
   }
-  if (firstMatch(INTERNAL_REASONING, body)) {
+  if (firstMatch(INTERNAL_REASONING, scan)) {
     issues.push('internal reasoning left in the reply');
   }
   /**
@@ -235,4 +244,14 @@ export function ensureDisclosure(body: string): string {
   if (!BRAND.test(body)) return body;
   if (body.includes(config.brand.disclosureLine)) return body;
   return `${body.trimEnd()}\n\n${config.brand.disclosureLine}`;
+}
+
+/**
+ * Append the one sanctioned AI-provenance line, for a person opting to label a reply where a
+ * subreddit requires it (evaluation M5). This exact wording is the only AI self-reference the
+ * linter permits; the model is never allowed to write its own.
+ */
+export function withAiDisclosure(body: string): string {
+  if (body.includes(config.aiDisclosureLine)) return body;
+  return `${body.trimEnd()}\n\n${config.aiDisclosureLine}`;
 }

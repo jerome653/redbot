@@ -299,3 +299,57 @@ test('Rule 8: the same claim certifies once refutation has actually run and foun
   const r = certify({ ...base, claims: [c], refutationRan: new Set(['c8']) });
   assert.equal(r.verdict, 'CERTIFIED');
 });
+
+/* ---- evaluation M6: a model-flagged-fatal contradiction must not outrank the evidence ---- */
+
+test('M6: a fatal contradiction on weaker evidence than the claim escalates, it does not reject', () => {
+  // The claim rests on primary documentation; the "fatal" contradiction rests on nothing the
+  // model could classify (unknown). Taking the model's `fatal:true` verbatim would let its
+  // say-so override primary documentation — the exact inversion Argus exists to prevent.
+  const c = claim({ id: 'c1', type: 'protocol-behaviour', evidenceClass: 'primary-documentation', confidence: 'high' });
+  const r = certify({
+    ...base,
+    claims: [c],
+    contradictions: [{
+      claimId: 'c1', kind: 'counterexample', statement: 'I think it might do something else',
+      evidenceClass: 'unknown', evidenceDetail: '(none)', fatal: true
+    }]
+  });
+  assert.equal(r.verdict, 'ESCALATE', 'weaker-evidence fatal must de-escalate to a human');
+  assert.ok(r.reasons.some((x) => x.rule === 'contested-contradiction'));
+  assert.ok(!r.reasons.some((x) => x.rule === 'fatal-contradiction'), 'it must not read as a hard reject');
+});
+
+test('M6: HRC-001 still rejects — an authoritative contradiction outranks a reasoned-inference claim', () => {
+  // Regression guard: the fix must not spare the case Rule 2 was built for. ERROR 1153 is
+  // primary/authoritative and outranks the reasoned-inference truncation claim it kills.
+  const c = claim({ id: 'c1', type: 'implementation-detail', evidenceClass: 'reasoned-inference', confidence: 'high' });
+  const r = certify({
+    ...base,
+    claims: [c],
+    contradictions: [{
+      claimId: 'c1', kind: 'contradictory-documentation',
+      statement: 'MySQL raises ERROR 1153 and aborts the import',
+      evidenceClass: 'primary-documentation', evidenceDetail: 'MySQL manual', fatal: true
+    }]
+  });
+  assert.equal(r.verdict, 'REJECT');
+  assert.ok(r.reasons.some((x) => x.rule === 'fatal-contradiction'));
+});
+
+test('epistemic exemption: a flatly-worded opinion is not an overconfidence issue', () => {
+  // Rules 3 and 6 already exempt opinion; the epistemic pass did not, so an asserted opinion on
+  // absent evidence was escalated as if it claimed a fact (evaluation, epistemic opinion exemption).
+  const opinion = claim({
+    id: 'c1', type: 'opinion', evidenceClass: 'unsupported', confidence: 'unknown',
+    sourceQuote: 'nginx is always the right choice and Apache never is'
+  });
+  assert.equal(findEpistemicIssues([opinion]).length, 0);
+
+  // A falsifiable claim with the same wording IS still flagged — the exemption is narrow.
+  const factual = claim({
+    id: 'c2', type: 'protocol-behaviour', evidenceClass: 'unsupported', confidence: 'unknown',
+    sourceQuote: 'the connection always drops instead of retrying'
+  });
+  assert.ok(findEpistemicIssues([factual]).length >= 1);
+});

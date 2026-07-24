@@ -810,10 +810,36 @@ const json = (res, code, body) => {
   res.end(JSON.stringify(body));
 };
 
+/**
+ * Request guard. This console runs commands (build, tests, report regeneration) and exposes a
+ * broad read surface, on GET, with no confirmation — so a cross-site `<img src=.../api/run?...>`
+ * or a DNS-rebinding attack could drive it from any page the operator has open (evaluation,
+ * operator-console GET finding). Two standard checks, neither of which the console's own
+ * same-origin requests trip:
+ *
+ *   - Host must be loopback (a rebinding attack arrives with the attacker's domain in Host).
+ *   - Fetch-metadata isolation: a modern browser tags every request with Sec-Fetch-Site, and a
+ *     cross-site `<img>`/`fetch`/navigation is `cross-site`/`same-site`. Only `same-origin` (the
+ *     console's own JS) and `none` (the operator typing the URL) are allowed. Absent header =
+ *     a non-browser client (curl) on loopback, allowed.
+ */
+function hostIsLocal(h) {
+  if (!h) return false;
+  const host = String(h).split(':')[0].toLowerCase().replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+function fetchSiteOk(req) {
+  const s = req.headers['sec-fetch-site'];
+  return s === undefined || s === 'same-origin' || s === 'none';
+}
+
 const server = createServer(async (req, res) => {
   const u = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const p = u.pathname;
   try {
+    if (!hostIsLocal(req.headers.host) || !fetchSiteOk(req)) {
+      return json(res, 403, { error: 'refused: this console only answers same-origin requests addressed to localhost' });
+    }
     if (p === '/' || p === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(readFileSync(join(HERE, 'index.html'), 'utf8'));

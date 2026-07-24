@@ -2,27 +2,62 @@
  * JSON persistence. Atomic write-and-rename so a kill mid-write cannot truncate a file —
  * the failure mode the Appilot CSV store had.
  */
-import { readFileSync, writeFileSync, existsSync, renameSync, appendFileSync } from 'node:fs';
+import {
+  readFileSync, writeFileSync, existsSync, renameSync, appendFileSync,
+  openSync, fsyncSync, closeSync
+} from 'node:fs';
 import { createHash } from 'node:crypto';
 import { paths, ensureData } from './config.js';
 import type {
   Thread, Draft, HistoryEntry, GapAnalysis, OpportunityAssessment
 } from './types.js';
 
-function readJson<T>(path: string, fallback: T): T {
+/** Per-process, monotonically increasing so two writers never share a temp filename. */
+let writeSeq = 0;
+
+/**
+ * Read a JSON file, or the fallback when it does not exist.
+ *
+ * A file that EXISTS but does not parse is NOT downgraded to the fallback. The old code caught
+ * the parse error, warned, and returned `[]` — then the next `saveDraft` did load→modify→write
+ * and overwrote the file with a one-element array, destroying every prior (including published)
+ * draft (evaluation M2). Instead the unreadable file is moved aside so nothing overwrites it,
+ * and the read fails loudly. A missing file is still just "empty".
+ *
+ * Exported so the read/write invariants are unit-testable against a scratch path.
+ */
+export function readJson<T>(path: string, fallback: T): T {
   if (!existsSync(path)) return fallback;
+  const raw = readFileSync(path, 'utf8');
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as T;
-  } catch {
-    console.warn(`warning: ${path} is unreadable, starting from empty`);
-    return fallback;
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    const aside = `${path}.corrupt-${Date.now()}`;
+    try { renameSync(path, aside); } catch { /* best effort; the throw below still protects data */ }
+    throw new Error(
+      `${path} is not readable JSON — moved it to ${aside} and stopped, rather than overwrite it ` +
+      `with empty data. (${e instanceof Error ? e.message : String(e)})`
+    );
   }
 }
 
-function writeJson(path: string, value: unknown): void {
+/**
+ * Write JSON atomically: a fresh unique temp file, flushed to disk, then renamed over the
+ * target. The temp name carries the pid and a per-process counter so a concurrent writer in
+ * another process (the `auto` loop running alongside an interactive `reply`) cannot land on the
+ * same `${path}.tmp` and corrupt each other's write (evaluation M1). The fsync before rename
+ * means a crash leaves either the old file or the whole new one, never a truncated file.
+ */
+export function writeJson(path: string, value: unknown): void {
   ensureData();
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8');
+  const tmp = `${path}.${process.pid}.${writeSeq++}.tmp`;
+  const fd = openSync(tmp, 'w');
+  try {
+    writeFileSync(fd, JSON.stringify(value, null, 2), 'utf8');
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, path);
 }
 

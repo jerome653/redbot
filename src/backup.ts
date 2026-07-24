@@ -72,10 +72,18 @@ export const BACKED_UP = [
  * This runs on the CONTENT of allowlisted files, as a second line of defence: the allowlist
  * says which files, this says the file must also not contain a secret. Both have to pass.
  */
+/**
+ * Each pattern requires an actual secret-shaped VALUE, not just a field name. The point is to
+ * catch a leaked credential without a benign mention permanently bricking backups: the append-
+ * only evidence logs record scraped Reddit prose, and a thread that merely discusses
+ * "access_token" or "reddit_session" would, under a name-only match, trip the scan on every
+ * future run and silently stop all backups from that point on (evaluation, backup token-DoS).
+ * A field name followed by a long token value is a real leak; the bare word is not.
+ */
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/sk-ant-[A-Za-z0-9_-]{16,}/, 'Anthropic API key'],
-  [/\breddit_session\b/, 'Reddit session cookie name'],
-  [/"?(?:access_token|refresh_token|id_token)"?\s*[:=]/i, 'OAuth token field'],
+  [/\breddit_session\b\s*[=:]\s*["']?[A-Za-z0-9._%+/-]{16,}/i, 'Reddit session cookie'],
+  [/"?(?:access_token|refresh_token|id_token)"?\s*[:=]\s*["']?[A-Za-z0-9._-]{20,}/i, 'OAuth token'],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'private key'],
   [/\bBearer\s+[A-Za-z0-9._-]{20,}/, 'bearer token']
 ];
@@ -106,7 +114,8 @@ function stamp(now: Date): string {
   return now.toISOString().replace(/[:.]/g, '-').replace('Z', 'Z');
 }
 
-function scan(text: string): string | null {
+/** Returns what secret the text looks like it contains, or null. Exported for testing. */
+export function scanForSecret(text: string): string | null {
   for (const [re, what] of SECRET_PATTERNS) if (re.test(text)) return what;
   return null;
 }
@@ -129,7 +138,7 @@ export function backupEvidence(now: Date = new Date()): BackupResult {
 
   // Scan everything BEFORE creating the destination, so a refusal leaves no partial snapshot.
   for (const name of present) {
-    const hit = scan(readFileSync(join(DATA, name), 'utf8'));
+    const hit = scanForSecret(readFileSync(join(DATA, name), 'utf8'));
     if (hit) {
       return {
         ok: false, dir, files: [], missing,

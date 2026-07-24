@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lintDraft, ensureDisclosure } from '../disclosure.js';
+import { lintDraft, ensureDisclosure, withAiDisclosure } from '../disclosure.js';
 import { config } from '../config.js';
 
 const GOOD = `Check whether object caching is actually connected before blaming the theme.
@@ -11,6 +11,19 @@ test('clean technical draft passes', () => {
   const r = lintDraft(GOOD);
   assert.equal(r.ok, true, r.issues.join('; '));
   assert.equal(r.mentionsBrand, false);
+});
+
+test('M5: the sanctioned AI-disclosure line passes the linter; arbitrary AI voice still blocks', () => {
+  // Where a subreddit requires an AI label, a person can add the one sanctioned line and the
+  // reply still lints clean. Any other AI self-reference remains blocked.
+  const labelled = withAiDisclosure(GOOD);
+  const r = lintDraft(labelled);
+  assert.equal(r.ok, true, `sanctioned AI label must pass: ${r.issues.join('; ')}`);
+  assert.ok(labelled.includes(config.aiDisclosureLine));
+
+  const rogue = lintDraft(`${GOOD}\n\nAs an AI language model, I generated this with Claude.`);
+  assert.equal(rogue.ok, false, 'unsanctioned AI self-reference must still be blocked');
+  assert.ok(rogue.issues.some((i) => /AI or names the model/i.test(i)), rogue.issues.join('; '));
 });
 
 test('a generated reply naming the employer is rejected outright', () => {

@@ -75,8 +75,22 @@ export function selectedAccount(): AccountRecord | null {
   return found;
 }
 
+/**
+ * The CDP endpoint redbot attaches to must be loopback. REDBOT_CDP can be set by the product
+ * console from a request body, so an attacker who could reach that endpoint could otherwise
+ * point redbot at a debugger they control and have every scraped thread fed to their own
+ * process (evaluation H5). A non-loopback value is refused, not silently attached to.
+ */
+export function assertLoopbackCdp(url: string): string {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]') return url;
+  } catch { /* fall through to the throw */ }
+  throw new Error(`REDBOT_CDP="${url}" is not a loopback address — refusing to attach to a non-local debugger.`);
+}
+
 function resolveEndpoint(): string {
-  if (process.env.REDBOT_CDP) return process.env.REDBOT_CDP;
+  if (process.env.REDBOT_CDP) return assertLoopbackCdp(process.env.REDBOT_CDP);
   const a = selectedAccount();
   if (a?.debugPort) return `http://127.0.0.1:${a.debugPort}`;
   return 'http://127.0.0.1:9222';
@@ -112,6 +126,15 @@ export const config = {
     /** if a human deliberately adds it during review, this line must accompany it */
     disclosureLine: 'Disclosure: I work on SGEN.'
   },
+
+  /**
+   * The one sanctioned AI-provenance disclosure. The linter blocks arbitrary "as an AI" /
+   * "generated with Claude" text by design, but that left an operator unable to comply where a
+   * subreddit REQUIRES an AI label (evaluation M5). This exact line is exempt from the
+   * assistant-voice checks — an opt-in a person adds during review, not something the model is
+   * allowed to invent — so labeling is possible without disabling a gate.
+   */
+  aiDisclosureLine: 'Disclosure: this reply was drafted with AI assistance and reviewed by a person before posting.',
 
   /**
    * 'cli' shells out to Claude Code (uses the operator's existing subscription, no key).

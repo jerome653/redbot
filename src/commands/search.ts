@@ -28,6 +28,15 @@ export async function search(query: string | undefined, limit?: number): Promise
 
   try {
     await runSearch(s.page, query);
+
+    // A block page renders as a normal document; collecting from it scrapes an interstitial and
+    // keeps hitting Reddit. `isBlocked` was imported but never called here (evaluation L4).
+    if (await isBlocked(s.page)) {
+      record('login.fail', `block page while searching "${query}"`, { query });
+      say.fail('Reddit served a block page. Open reddit.com by hand in that Chrome window once, then retry.');
+      return 1;
+    }
+
     say.step(`Collecting up to ${max} results…`);
 
     const links = await collectPermalinks(s.page, max, sel.searchScope);

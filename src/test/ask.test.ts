@@ -10,7 +10,49 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { choose, isInteractive, NoTerminalError } from '../ask.js';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { choose, isInteractive, NoTerminalError, takeConsoleApproval, approvalsDir } from '../ask.js';
+
+/* ---- console approval: the token the console writes and reply consumes (evaluation) ---- */
+
+const writeToken = (dataDir: string, draftId: string, over: Record<string, unknown> = {}) => {
+  const file = join(approvalsDir(dataDir), `${draftId}.json`);
+  writeFileSync(file, JSON.stringify({
+    draftId, decision: 'approved', note: 'looks right', at: new Date().toISOString(), ...over
+  }), 'utf8');
+  return file;
+};
+
+test('a fresh token is accepted once, then consumed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'redbot-appr-'));
+  writeToken(dir, 'd_1');
+  const first = takeConsoleApproval(dir, 'd_1');
+  assert.equal(first?.draftId, 'd_1');
+  assert.equal(takeConsoleApproval(dir, 'd_1'), null, 'a consumed token cannot approve again');
+});
+
+test('a token older than five minutes is refused', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'redbot-appr-'));
+  writeToken(dir, 'd_1', { at: new Date(Date.now() - 6 * 60_000).toISOString() });
+  assert.equal(takeConsoleApproval(dir, 'd_1'), null);
+});
+
+test('a token whose draftId does not match is refused, and does not approve a different draft', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'redbot-appr-'));
+  writeToken(dir, 'd_1', { draftId: 'd_OTHER' });
+  assert.equal(takeConsoleApproval(dir, 'd_1'), null);
+});
+
+test('the claimed token leaves nothing behind — no reusable file remains', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'redbot-appr-'));
+  const file = writeToken(dir, 'd_1');
+  takeConsoleApproval(dir, 'd_1');
+  assert.equal(existsSync(file), false, 'the original token file must be gone');
+  const leftovers = readdirSync(approvalsDir(dir));
+  assert.equal(leftovers.length, 0, `no claim/temp file may linger: ${leftovers.join(', ')}`);
+});
 
 test('choose() rejects a safe answer that is not one of the options', async () => {
   await assert.rejects(

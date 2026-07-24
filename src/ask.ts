@@ -48,7 +48,7 @@ export function isInteractive(): boolean {
  * The token is written by the local console into data/approvals/. It is not a credential
  * and grants nothing beyond publishing the single draft it names.
  * ------------------------------------------------------------------ */
-import { readFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, unlinkSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface ConsoleApproval {
@@ -76,15 +76,28 @@ export function takeConsoleApproval(dataDir: string, draftId: string): ConsoleAp
   const file = join(approvalsDir(dataDir), `${draftId}.json`);
   if (!existsSync(file)) return null;
 
+  /**
+   * CLAIM the token by renaming it before reading. `rename` is atomic on a local filesystem, so
+   * if two readers race, exactly one wins the rename and the other gets ENOENT and returns null.
+   * The previous read-then-unlink let both readers see the same token, so one approval could be
+   * consumed twice (evaluation, non-atomic take).
+   */
+  const claimed = `${file}.claim-${process.pid}-${Date.now()}`;
+  try {
+    renameSync(file, claimed);
+  } catch {
+    return null;   // someone else claimed it first, or it vanished
+  }
+
   let parsed: ConsoleApproval;
   try {
-    parsed = JSON.parse(readFileSync(file, 'utf8')) as ConsoleApproval;
+    parsed = JSON.parse(readFileSync(claimed, 'utf8')) as ConsoleApproval;
   } catch {
-    try { unlinkSync(file); } catch { /* a token we cannot read is a token we do not keep */ }
+    try { unlinkSync(claimed); } catch { /* a token we cannot read is a token we do not keep */ }
     return null;
   }
   // consumed whatever happens next — an approval is single-use even when it is rejected
-  try { unlinkSync(file); } catch { /* ignore */ }
+  try { unlinkSync(claimed); } catch { /* ignore */ }
 
   if (parsed.draftId !== draftId) return null;
   if (parsed.decision !== 'approved') return null;

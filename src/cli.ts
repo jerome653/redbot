@@ -23,6 +23,7 @@ import {
   healthCmd, metricsCmd, policyCmd, selectCmd, reviewCmd, reportCmd, insightsCmd
 } from './commands/status.js';
 import { say } from './log.js';
+import { pathToFileURL } from 'node:url';
 
 const USAGE = `
 redbot — Reddit engagement assistant
@@ -81,8 +82,27 @@ Environment:
   REDBOT_SEED                  replay a session's timings
 `;
 
-async function main(): Promise<number> {
-  const [cmd, ...rest] = process.argv.slice(2);
+/**
+ * The only flags that take a value in the `--flag value` (space-separated) form. Every other
+ * `--flag` is boolean.
+ *
+ * This set is load-bearing: without it the parser cannot tell `--quick d_target` (a boolean
+ * flag followed by a positional) from `--kind medium` (a value flag and its value), so it
+ * treated the token after ANY flag as consumed and silently dropped the positional. For
+ * `reply --quick d_target` that meant `d_target` vanished and `reply` published the latest
+ * pending draft instead of the one named — a human approving specific text, sent to the wrong
+ * comment. See the evaluation's H8.
+ */
+export const VALUE_FLAGS = new Set(['kind', 'sub', 'checkpoint', 'limit', 'every']);
+
+export interface ParsedArgs {
+  flags: Set<string>;
+  positional: string[];
+  flagValue: (name: string) => string | undefined;
+}
+
+/** Pure argument parser, exported so the value-flag boundary is unit-testable. */
+export function parseCliArgs(rest: string[]): ParsedArgs {
   const flags = new Set(rest.filter((a) => a.startsWith('--')));
   const args = rest.filter((a) => !a.startsWith('--'));
 
@@ -95,11 +115,23 @@ async function main(): Promise<number> {
     return next && !next.startsWith('--') ? next : undefined;
   };
 
-  // A flag's value must not also be read as a positional argument.
+  // A token is a flag's VALUE (and therefore not a positional) only when its predecessor is a
+  // value-taking flag written in space form (`--kind medium`). A boolean flag (`--quick`) and
+  // an inline value (`--kind=medium`) both consume nothing, so the next token stays positional.
   const positional = args.filter((a) => {
     const i = rest.indexOf(a);
-    return !(i > 0 && rest[i - 1]?.startsWith('--'));
+    if (i <= 0) return true;
+    const prev = rest[i - 1];
+    const consumes = !!prev && prev.startsWith('--') && !prev.includes('=') && VALUE_FLAGS.has(prev.slice(2));
+    return !consumes;
   });
+
+  return { flags, positional, flagValue };
+}
+
+async function main(): Promise<number> {
+  const [cmd, ...rest] = process.argv.slice(2);
+  const { flags, positional, flagValue } = parseCliArgs(rest);
 
   switch (cmd) {
     case 'login':   return login();
@@ -159,9 +191,19 @@ async function main(): Promise<number> {
   }
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch((e) => {
-    say.fail(e instanceof Error ? e.message : String(e));
-    process.exit(1);
-  });
+/**
+ * Run only when invoked as the program, never when imported (a unit test importing
+ * `parseCliArgs` must not trigger `main()` and its `process.exit`).
+ */
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((e) => {
+      say.fail(e instanceof Error ? e.message : String(e));
+      process.exit(1);
+    });
+}

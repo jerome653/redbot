@@ -97,6 +97,19 @@ export interface Draft {
   createdAt: string;
   model: string;
   status: 'pending' | 'approved' | 'rejected' | 'published' | 'failed';
+  /**
+   * The Argus verdict, persisted onto the draft by `redbot certify` so the publish gate can
+   * consult it. Before this existed the certification was written only to certifications.jsonl
+   * and the reports, and the publish path never read it — a REJECT could still be approved and
+   * posted (evaluation H6). A REJECT here is a hard publish block; ESCALATE and "never certified"
+   * are surfaced as warnings the human sees at the approval prompt.
+   */
+  certification?: {
+    verdict: 'CERTIFIED' | 'ESCALATE' | 'REJECT';
+    at: string;
+    claims: number;
+    fatalContradictions: number;
+  };
   publishedUrl?: string;
   /** Permalink of the posted comment itself — what the Part F checkpoints look at. */
   commentPermalink?: string;

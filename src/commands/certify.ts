@@ -7,7 +7,7 @@
  * ESCALATE reaches it carrying the specific question a person has to answer. Human review
  * remains mandatory in all three cases — Argus exists to improve that review, not to replace it.
  */
-import { loadDrafts, loadThreads } from '../store.js';
+import { loadDrafts, loadThreads, saveDraft } from '../store.js';
 import { runCertification } from '../argus/pipeline.js';
 import { reviewPackage, generateArgusReports } from '../argus/reports.js';
 import { record, say } from '../log.js';
@@ -39,6 +39,20 @@ export async function certifyCmd(draftIdArg?: string, opts?: { override?: boolea
     verbose: true,
     ...(opts?.override ? { override: true } : {})
   });
+
+  /**
+   * Persist the verdict onto the draft so the publish gate can consult it. Before this, the
+   * certification existed only in certifications.jsonl and the reports, and `redbot reply`
+   * never read it — a REJECT could still be approved and posted (evaluation H6). Written even
+   * on REJECT/ESCALATE: the gate needs to see exactly those.
+   */
+  target.certification = {
+    verdict: cert.verdict,
+    at: cert.certifiedAt,
+    claims: cert.claims.length,
+    fatalContradictions: cert.contradictions.filter((c) => c.fatal).length
+  };
+  saveDraft(target);
 
   const pkg = reviewPackage(cert, target, thread.title);
   generateArgusReports();

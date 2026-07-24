@@ -209,7 +209,15 @@ export interface Certification {
   invalidated: Array<{ claimId: string; becauseOf: string }>;
   resolution: ResolutionVerdict;
   certifiedAt: string;
+  /**
+   * Kept for backward compatibility and equal to the analyze model. It named only ONE model
+   * while two produce the evidence — claims come from the analyze model, contradictions from
+   * the draft model — so "which model called this fatal?" was answered wrong (evaluation,
+   * "certification names the wrong model"). Prefer `models` below, which records both.
+   */
   model: string;
+  /** Both models the verdict rests on: claim extraction vs contradiction refutation. */
+  models?: { analyze: string; draft: string };
   /**
    * Claim ids whose refutation call COMPLETED — whatever it found.
    *

@@ -15,10 +15,17 @@ data/**/IndexedDB/
 # Per-operator Claude credentials
 data/operators/
 
-# Collected content, drafts, and the activity log — local working state
+# Collected content, drafts, and the activity log — local working state.
+# The recursive globs matter: data/*.json does NOT match data/approvals/*.json (the single-use
+# publish-approval tokens) or any other nested working file (evaluation L6).
 data/*.json
 data/*.jsonl
 data/*.png
+data/**/*.json
+data/**/*.jsonl
+data/**/*.png
+# Console-written approval tokens and decision records — local, single-use, never committed.
+data/approvals/
 
 # Build output
 dist/

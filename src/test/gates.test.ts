@@ -213,3 +213,54 @@ test('every block names its gate and gives a reason', () => {
     assert.ok(b.reason.length > 10, `reason too thin: ${b.reason}`);
   }
 });
+
+/* ---- evaluation fixes: the publish path must fail closed on every unestablished fact ---- */
+
+test('L1: a draft whose createdAt cannot be parsed fails closed, it does not skip the gate', () => {
+  // Number.isFinite(Date.parse("not-a-date")) is false. The old guard skipped stale-draft in
+  // exactly that case — "we cannot tell how old this is" waved the draft through. Now it blocks.
+  assert.ok(gatesHit({ draft: draft({ createdAt: 'not-a-date' }) }).includes('stale-draft'));
+});
+
+test('L2: a missing thread record blocks, it does not silently drop the thread-derived gates', () => {
+  const gates = gatesHit({ thread: undefined });
+  assert.ok(gates.includes('no-thread'), `expected no-thread, got ${gates.join(',')}`);
+});
+
+test('L3: a prior APPROVED draft for the same thread is a duplicate, not only a published one', () => {
+  assert.ok(gatesHit({ allDrafts: [draft({ id: 'd_0', status: 'approved' })] }).includes('duplicate'));
+});
+
+test('H6: an Argus REJECT on the draft is a hard publish block', () => {
+  const rejected = draft({
+    certification: { verdict: 'REJECT', at: NOW.toISOString(), claims: 5, fatalContradictions: 1 }
+  });
+  assert.ok(gatesHit({ draft: rejected }).includes('certification'));
+});
+
+test('H6: CERTIFIED publishes clean; ESCALATE and un-certified warn but do not block', () => {
+  const certified = draft({
+    certification: { verdict: 'CERTIFIED', at: NOW.toISOString(), claims: 5, fatalContradictions: 0 }
+  });
+  assert.equal(evaluateGates(base({ draft: certified })).allow, true);
+
+  const escalated = draft({
+    certification: { verdict: 'ESCALATE', at: NOW.toISOString(), claims: 5, fatalContradictions: 0 }
+  });
+  const esc = evaluateGates(base({ draft: escalated }));
+  assert.equal(esc.allow, true);
+  assert.ok(esc.warnings.some((w) => /escalated/i.test(w)));
+
+  // base()'s default draft carries no certification: allowed, but warned.
+  const none = evaluateGates(base());
+  assert.equal(none.allow, true);
+  assert.ok(none.warnings.some((w) => /not been fact-checked/i.test(w)));
+});
+
+test('H7: a refusing account window blocks the interactive publish path', () => {
+  const refused = { allowed: false as const, rule: 'quiet-hours' as const, detail: 'docs-architect: quiet hours — it is 3:00 where this account lives.' };
+  assert.ok(gatesHit({ window: refused }).includes('window'));
+  // an allowing window does not block
+  const allowed = { allowed: true as const, detail: 'clear to act' };
+  assert.equal(evaluateGates(base({ window: allowed })).allow, true);
+});
