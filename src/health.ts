@@ -116,6 +116,27 @@ function sameUtcDay(a: Date, b: Date): boolean {
     && a.getUTCDate() === b.getUTCDate();
 }
 
+/**
+ * Whether two instants fall on the same calendar day. In the account's own timezone when one
+ * is given, UTC otherwise.
+ *
+ * The per-account daily ceiling and the account's quiet hours must agree on where "a day" ends.
+ * Quiet hours already run in the account's local zone (window.ts); the ceiling counted per UTC
+ * day, so around the account's local morning the two disagreed and the effective cap doubled
+ * (evaluation L5). Passing the account zone here makes "today" mean the same thing to both.
+ */
+export function sameLocalDay(a: Date, b: Date, zone?: string): boolean {
+  if (!zone) return sameUtcDay(a, b);
+  try {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit'
+    });
+    return fmt.format(a) === fmt.format(b);
+  } catch {
+    return sameUtcDay(a, b);   // an unreadable zone falls back to UTC rather than throwing
+  }
+}
+
 function num(v: unknown): number | null {
   const n = typeof v === 'string' ? Number(v.replace(/[, ]/g, '')) : typeof v === 'number' ? v : NaN;
   return Number.isFinite(n) ? n : null;
@@ -129,7 +150,9 @@ function num(v: unknown): number | null {
 export function counters(
   account: string | null,
   now: Date = new Date(),
-  sources?: { history?: HistoryEntry[]; observations?: Observation[] }
+  sources?: { history?: HistoryEntry[]; observations?: Observation[] },
+  /** The account's IANA timezone, so "today" for the daily counts matches its quiet hours. */
+  zone?: string
 ): HealthCounters {
   const history = sources?.history ?? loadHistory();
   const obs = sources?.observations ?? loadObservations();
@@ -140,7 +163,7 @@ export function counters(
   const h = mine(history);
   const o = mine(obs);
 
-  const today = (ts: string) => sameUtcDay(new Date(ts), now);
+  const today = (ts: string) => sameLocalDay(new Date(ts), now, zone);
   const within = (ts: string, ms: number) => now.getTime() - new Date(ts).getTime() <= ms;
 
   const publishes = h.filter((e) => e.kind === 'publish.ok');

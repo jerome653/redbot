@@ -14,10 +14,21 @@
  * Deterministic: the same claim set always yields the same verdict.
  */
 import type {
-  Claim, Contradiction, EpistemicIssue, Verdict, VerdictReason, ResolutionVerdict
+  Claim, Contradiction, EpistemicIssue, Verdict, VerdictReason, ResolutionVerdict, EvidenceClass
 } from './types.js';
 import { CANNOT_STATE_AS_FACT, NO_PROVENANCE, AUTHORITATIVE, FALSIFIABLE_TYPES } from './types.js';
 import { propagateFailure, validateGraph, type GraphIssue } from './graph.js';
+
+/**
+ * How much a piece of evidence is worth, as a rank rather than a name: authoritative (2),
+ * non-authoritative but stated (1), no provenance at all (0). Used to decide whether a
+ * contradiction actually outranks the claim it attacks.
+ */
+export function evidenceRank(ec: EvidenceClass): 0 | 1 | 2 {
+  if (AUTHORITATIVE.has(ec)) return 2;
+  if (NO_PROVENANCE.has(ec)) return 0;
+  return 1;
+}
 
 export interface CertifyInput {
   claims: Claim[];
@@ -78,9 +89,31 @@ export function certify(input: CertifyInput): CertifyResult {
    * Rule 2 — a surviving fatal contradiction
    * OBSERVED FAILURE: HRC-001. "the row inserts empty or truncated instead of throwing an
    * error" is contradicted by MySQL ERROR 1153, which aborts the import.
+   *
+   * `fatal` is a raw model boolean (extract.ts). Taken verbatim it lets a contradiction whose
+   * OWN evidence coerced to `unknown` reject a claim backed by primary documentation — the
+   * model's say-so overriding the evidence, which is the exact inversion Argus exists to stop
+   * (evaluation M6). So a model-flagged-fatal contradiction only stays fatal when its evidence
+   * is at least as strong as the claim's; otherwise it de-escalates to ESCALATE, where a person
+   * weighs it. HRC-001 is unaffected: ERROR 1153 is primary/authoritative and outranks the
+   * reasoned-inference claim it kills.
    * ---------------------------------------------------------------- */
-  const fatal = contradictions.filter((c) => c.fatal);
-  for (const c of fatal) {
+  const claimById = new Map(claims.map((c) => [c.id, c]));
+  const trueFatal: Contradiction[] = [];
+  for (const c of contradictions) {
+    if (!c.fatal) continue;
+    const claim = claimById.get(c.claimId);
+    if (claim && evidenceRank(c.evidenceClass) < evidenceRank(claim.evidenceClass)) {
+      escalate.push({
+        rule: 'contested-contradiction',
+        claimId: c.claimId,
+        detail:
+          `${c.kind}: ${c.statement} [${c.evidenceClass}] — flagged fatal, but its evidence ` +
+          `is weaker than the claim's (${claim.evidenceClass}); a person must judge which is right`
+      });
+      continue;
+    }
+    trueFatal.push(c);
     reject.push({
       rule: 'fatal-contradiction',
       claimId: c.claimId,
@@ -202,7 +235,7 @@ export function certify(input: CertifyInput): CertifyResult {
    * Phase 6 — propagate failure downstream. No partial salvage.
    * ---------------------------------------------------------------- */
   const failedIds = new Set<string>([
-    ...fatal.map((c) => c.claimId),
+    ...trueFatal.map((c) => c.claimId),
     ...unsupported.filter((c) => c.type !== 'opinion' && c.type !== 'speculation').map((c) => c.id)
   ]);
   const invalidated = propagateFailure(claims, failedIds);

@@ -340,7 +340,10 @@ function runAction(key, opts) {
      */
     const env = { ...process.env };
     if (opts && opts.account) env.REDBOT_ACCOUNT = String(opts.account);
-    if (opts && opts.cdp) env.REDBOT_CDP = String(opts.cdp);
+    // H5: the CDP endpoint is NOT taken from the request. The selected account already resolves
+    // its own debug port from accounts.json (config.ts); letting the browser body set REDBOT_CDP
+    // would let a caller point redbot at a debugger they control and harvest every scraped
+    // thread. config.ts additionally refuses any non-loopback REDBOT_CDP as defence in depth.
 
     const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), ...args], {
       cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe']
@@ -503,8 +506,22 @@ function setStatus(draftId, status, note) {
 
 /* ---- publishing: the one action that reaches the outside world ---- */
 function publish(body) {
-  const { draftId, confirm, reason } = body || {};
+  const { confirm, reason } = body || {};
+  const draftId = String((body && body.draftId) || '');
   if (!draftId) return Promise.resolve({ ok: false, error: 'no draft named' });
+  /**
+   * H4: draftId is interpolated into a file path below, so an unvalidated value like
+   * "../accounts" would write data/accounts.json (breaking every browser command) and
+   * "../../package" would hit package.json. Allow only a safe id shape — no slashes, no dots,
+   * so no path traversal — and require it to name a draft that actually exists.
+   */
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(draftId)) {
+    return Promise.resolve({ ok: false, error: 'that is not a valid draft id' });
+  }
+  const drafts = arr(readJson(join(DATA, 'drafts.json'), []), 'drafts');
+  if (!drafts.some((d) => d.id === draftId)) {
+    return Promise.resolve({ ok: false, error: `no draft "${draftId}" on record` });
+  }
   /* fail closed: anything other than the exact word is a refusal, never an approval */
   if (confirm !== 'SEND') return Promise.resolve({ ok: false, error: 'not confirmed — type SEND exactly' });
   /* The decision is recorded first, and separately. If the send then fails, the fact that a
@@ -522,6 +539,33 @@ function publish(body) {
     .then((r) => ({ ...r, recorded: true }));
 }
 
+/* ------------------------------------------------------------------ *
+ * Request guard — this console binds loopback, but "on localhost" is not the same as "safe".
+ *
+ * Any web page the operator has open can send requests to http://localhost:7902, and a
+ * DNS-rebinding attack can make an attacker domain resolve to 127.0.0.1. Since the endpoints
+ * here drive a signed-in Chrome, spend model credits, rewrite config and publish, that mattered
+ * (evaluation H3). Two checks close it, both standard for a localhost service:
+ *
+ *   - Host must be loopback. A rebinding attack arrives with the attacker's domain in Host.
+ *   - A mutating POST must be application/json AND (if it carries an Origin) a loopback Origin.
+ *     A cross-site page can send a "simple" form/text POST with no preflight, but it cannot set
+ *     content-type: application/json without a preflight the browser will then block, nor forge
+ *     a loopback Origin. The console's own fetches already send application/json + same origin.
+ * ------------------------------------------------------------------ */
+function hostIsLocal(h) {
+  if (!h) return false;
+  const host = String(h).split(':')[0].toLowerCase().replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+function originIsLocal(o) {
+  if (!o) return true;                 // no Origin header (curl, same-origin GET) is allowed
+  try {
+    const host = new URL(o).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch { return false; }
+}
+
 /* ------------------------------------------------------------------ */
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
@@ -532,7 +576,20 @@ const server = createServer((req, res) => {
     res.end(body);
   };
 
+  // Refuse anything whose Host is not loopback (anti DNS-rebinding), for every method.
+  if (!hostIsLocal(req.headers.host)) {
+    return send(403, JSON.stringify({ error: 'refused: this console only answers requests addressed to localhost' }));
+  }
+
   if (req.method === 'POST') {
+    // A mutating request must look like it came from the console, not a cross-site page.
+    if (!String(req.headers['content-type'] || '').includes('application/json')) {
+      return send(415, JSON.stringify({ error: 'refused: POST requires content-type application/json' }));
+    }
+    if (!originIsLocal(req.headers.origin)) {
+      return send(403, JSON.stringify({ error: 'refused: cross-origin request' }));
+    }
+
     let raw = '';
     req.on('data', (c) => { raw += c; if (raw.length > 1e6) req.destroy(); });
     req.on('end', async () => {

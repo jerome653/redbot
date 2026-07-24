@@ -32,6 +32,18 @@ interface Check {
   detail: string;
 }
 
+/**
+ * The ACTIVE rules in a .gitignore — non-blank lines that are not comments.
+ *
+ * The secret-protection check used to substring-match the whole file, including its comment
+ * header, which happens to quote `data/chrome-profile/Default/Cookies`. So deleting the real
+ * ignore rule still "passed" because the comment about it survived (evaluation M6). Matching
+ * only active rules means a pattern has to actually be in force, not merely mentioned.
+ */
+export function gitignoreActivePatterns(text: string): string[] {
+  return text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith('#'));
+}
+
 /** Newest mtime under a directory tree, recursively. */
 function newestMtime(dir: string, ext: string): number {
   let newest = 0;
@@ -108,8 +120,10 @@ export async function doctor(): Promise<number> {
     add('secret protection', 'FAIL', 'no .gitignore — Chrome profiles and session cookies are committable');
   } else {
     const text = readFileSync(gitignore, 'utf8');
+    const active = gitignoreActivePatterns(text);
     const required = ['data/chrome-profile', 'data/operators', 'data/*.json', 'data/*.jsonl'];
-    const missing = required.filter((r) => !text.includes(r));
+    // Match against active rules only — a pattern that appears solely in a comment does not count.
+    const missing = required.filter((r) => !active.some((line) => line.includes(r)));
     add(
       'secret protection',
       missing.length ? 'FAIL' : 'PASS',

@@ -212,8 +212,34 @@ async function completeViaApi(opts: CompleteOpts): Promise<string> {
   throw lastError ?? new LlmError('exhausted retries');
 }
 
+/**
+ * True once we have warned that a determinism request cannot be honoured on the CLI provider.
+ * One warning per process is enough; a per-call warning would bury the pipeline output.
+ */
+let warnedNonDeterministic = false;
+
 /* ------------------------------------------------------------------ */
 export async function complete(opts: CompleteOpts): Promise<string> {
+  /**
+   * The Claude Code CLI (`claude -p`) exposes no temperature control, so a caller asking for
+   * `temperature: 0` — Argus does, to make a certification pass reproducible — silently gets the
+   * CLI's own sampling instead. The value was dropped without a word (evaluation M4), so a run
+   * that BELIEVED it was deterministic was not. We cannot make the subscription CLI
+   * deterministic; we can refuse to imply it is. Say so once, and point at the provider that can.
+   */
+  if (
+    config.llm.provider !== 'api' &&
+    typeof opts.temperature === 'number' &&
+    opts.temperature === 0 &&
+    !warnedNonDeterministic
+  ) {
+    warnedNonDeterministic = true;
+    say.warn(
+      'A deterministic (temperature 0) pass was requested, but the Claude Code CLI provider ' +
+      'has no temperature control — this pass is NOT reproducible. Use REDBOT_LLM=api with ' +
+      'ANTHROPIC_API_KEY for a deterministic run.'
+    );
+  }
   return config.llm.provider === 'api' ? completeViaApi(opts) : completeViaCli(opts);
 }
 

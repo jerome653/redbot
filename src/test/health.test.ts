@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { counters, assess, type Observation } from '../health.js';
+import { counters, assess, sameLocalDay, type Observation } from '../health.js';
 import { policy } from '../policy.js';
 import type { HistoryEntry, HistoryKind } from '../types.js';
 
@@ -16,6 +16,32 @@ const h = (kind: HistoryKind, minutesAgo: number, data?: Record<string, unknown>
   account: ACC,
   summary: `${kind} ${minutesAgo}m ago`,
   ...(data ? { data } : {})
+});
+
+/* ---- L5: the daily ceiling and quiet hours must agree on where a day ends ---- */
+
+test('sameLocalDay: two instants that are one UTC day but the same Manila day count as one day', () => {
+  // 2026-07-23T18:00Z is 2026-07-24 02:00 in Manila (UTC+8); 2026-07-23T20:00Z is 2026-07-24
+  // 04:00 Manila. Same UTC date (the 23rd) — but also the same Manila date (the 24th).
+  const a = new Date('2026-07-23T18:00:00Z');
+  const b = new Date('2026-07-23T20:00:00Z');
+  assert.equal(sameLocalDay(a, b, 'Asia/Manila'), true);
+});
+
+test('sameLocalDay: the same UTC day can be two different Manila days', () => {
+  // 2026-07-23T10:00Z is 18:00 on the 23rd in Manila; 2026-07-23T17:00Z is 01:00 on the 24th.
+  // Same UTC date, DIFFERENT Manila date — the case the old UTC-only count got wrong, letting
+  // replies from the account's previous local evening not count against today's ceiling.
+  const a = new Date('2026-07-23T10:00:00Z');
+  const b = new Date('2026-07-23T17:00:00Z');
+  assert.equal(sameLocalDay(a, b, 'Asia/Manila'), false);
+  assert.equal(sameLocalDay(a, b), true, 'without a zone it is still the same UTC day');
+});
+
+test('sameLocalDay: an unreadable zone falls back to UTC rather than throwing', () => {
+  const a = new Date('2026-07-23T10:00:00Z');
+  const b = new Date('2026-07-23T17:00:00Z');
+  assert.equal(sameLocalDay(a, b, 'Nowhere/Nothing'), true);
 });
 
 const o = (

@@ -35,7 +35,9 @@ import {
   recordReview, retentionRatio, REJECT_REASONS, EDIT_REASONS, APPROVE_REASONS, type Decision
 } from '../review.js';
 import { record, say, setAccount } from '../log.js';
-import { config, DATA } from '../config.js';
+import { config, DATA, selectedAccount } from '../config.js';
+import { checkWindow } from '../window.js';
+import { counters } from '../health.js';
 import type { Draft } from '../types.js';
 
 /**
@@ -117,13 +119,38 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     const verdict = health(identity.username);
     say.step(`Health : ${verdict.state}${verdict.resumeAt ? ` (resumes ${verdict.resumeAt})` : ''}`);
 
+    /**
+     * The account we INTEND to act as (REDBOT_ACCOUNT), which is not the same fact as whoever
+     * the browser happens to be signed in as. The identity gate compares the two — but it was
+     * fed `identity.username` as the expected value, so it compared the browser against itself
+     * and could never fire (evaluation, "wrong-account tautology"). config validated
+     * REDBOT_ACCOUNT at load, so this does not throw here.
+     */
+    const intended = selectedAccount();
+    const expectedAccount = intended?.handle ?? identity.username;
+
+    /**
+     * Quiet hours and the per-account daily ceiling, enforced on THIS path for the first time.
+     * `checkWindow` previously had one caller — `auto` — so an interactive publish ignored both
+     * (evaluation H7). Skipped when no account is selected (single-profile): there is no
+     * configured window to enforce, and the global daily cap still runs via `health`.
+     */
+    const windowVerdict = intended
+      ? checkWindow({
+          account: intended,
+          repliesToday: counters(intended.handle, new Date(), undefined, intended.timezone).repliesToday
+        })
+      : null;
+    if (windowVerdict) say.step(`Window : ${windowVerdict.detail}`);
+
     /* ---------- 2. gates, before anyone is asked ---------- */
     const pre = evaluateGates({
       draft: target,
       thread,
       assessment,
       identity,
-      expectedAccount: identity.username,
+      expectedAccount,
+      window: windowVerdict,
       health: verdict,
       threadState: state,
       allDrafts: drafts
@@ -278,7 +305,16 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       });
       record('review', `review recorded for ${target.id}`, { draftId: target.id, decision: 'edited', reasonCode: code });
     } else {
-      const { code, note } = await askReason('approved', APPROVE_REASONS);
+      /**
+       * Approval reason. A console approval has ALREADY been made by a person and carries its
+       * own note; asking again here calls `choose`/`ask`, which throw NoTerminalError on the
+       * console's non-interactive stdin — so the whole publish died after the single-use token
+       * had already been consumed, and nothing was ever posted (evaluation H1). Use the token's
+       * note on that path; only prompt when a human is actually at the terminal.
+       */
+      const { code, note } = preApproved
+        ? { code: preApproved.reasonCode ?? 'console', note: preApproved.note ?? '' }
+        : await askReason('approved', APPROVE_REASONS);
       recordReview({
         ...snapshot, decision: 'approved', reasonCode: code, note,
         reviewSeconds, totalSeconds: secondsSince(shownAt)
@@ -298,7 +334,8 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       thread,
       assessment,
       identity: identity2,
-      expectedAccount: identity.username,
+      expectedAccount,
+      window: windowVerdict,
       health: verdict2,
       threadState: state2,
       allDrafts: loadDrafts()

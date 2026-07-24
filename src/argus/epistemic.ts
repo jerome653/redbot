@@ -89,6 +89,13 @@ export function findEpistemicIssues(claims: Claim[]): EpistemicIssue[] {
   const issues: EpistemicIssue[] = [];
 
   for (const claim of claims) {
+    // Opinion and explicit speculation do not present themselves as fact, so "the language is
+    // more certain than the evidence" does not apply to them — the same exemption Rules 3 and 6
+    // already make in certify.ts. Without it, a flatly-worded opinion ("nginx is always the
+    // right choice") was escalated for asserting more than its (absent) evidence carries, a
+    // calibration complaint about a preference (evaluation, epistemic opinion exemption).
+    if (claim.type === 'opinion' || claim.type === 'speculation') continue;
+
     const language = certaintyOf(claim.sourceQuote || claim.text);
     const supported = supportedCertainty(claim);
 
