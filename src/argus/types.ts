@@ -226,4 +226,10 @@ export interface Certification {
    * "refutation ran for nothing". No gate and no rule consumes this; it is evidence only.
    */
   refutationRan?: string[];
+  /**
+   * Phase 10 — what human-authored reference material had to say about the claims it has
+   * standing over. Optional: certifications written before 2026-07-24 have none, and
+   * `undefined` means "the phase did not run", never "nothing was found".
+   */
+  citations?: import('./citations.js').CitationReport;
 }

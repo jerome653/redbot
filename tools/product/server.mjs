@@ -235,6 +235,32 @@ function buildState() {
 
     review,
 
+    /**
+     * The fact-checker's own record, read from the log rather than described.
+     *
+     * The guide panel explains what the check does; these are what it has actually done. They
+     * are computed here so the explanation can never drift from the evidence — a guide that
+     * says "nothing has passed yet" while the log says otherwise would be worse than no guide.
+     */
+    argus: (() => {
+      const byVerdict = { REJECT: 0, ESCALATE: 0, CERTIFIED: 0 };
+      for (const c of certs) if (c.verdict in byVerdict) byVerdict[c.verdict]++;
+      const ruleCounts = {};
+      for (const c of certs) for (const r of c.reasons || []) ruleCounts[r.rule] = (ruleCounts[r.rule] || 0) + 1;
+      const repeated = [...certsByDraft.values()].filter((l) => l.length > 1);
+      return {
+        runs: certs.length,
+        draftsChecked: certsByDraft.size,
+        byVerdict,
+        everCertified: byVerdict.CERTIFIED > 0,
+        topReasons: Object.entries(ruleCounts).sort((a, b) => b[1] - a[1]).slice(0, 5)
+          .map(([rule, n]) => ({ rule, n })),
+        /** Drafts checked more than once — the only place a stability claim can come from. */
+        draftsCheckedTwice: repeated.length,
+        claimSpread: repeated.map((l) => l.map((c) => (c.claims || []).length))
+      };
+    })(),
+
     discovery: {
       threadsCollected: threads.length,
       assessed: assessments.length,

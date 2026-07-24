@@ -32,7 +32,9 @@ redbot — Reddit engagement assistant
     redbot session [--kind short|medium] [--sub <name>]
                                  one human-shaped browsing session (reads only)
     redbot read <subreddit>      collect threads from a subreddit
-    redbot search "<query>"      search Reddit and collect results
+    redbot search "<query>"      search Reddit and PREVIEW the results — collects nothing
+    redbot search --commit <n,n|all>
+                                 collect only the ones you picked from that preview
 
   Deciding
     redbot opportunity [--force] [--limit N]
@@ -104,7 +106,7 @@ async function main(): Promise<number> {
   switch (cmd) {
     case 'login':   return login();
     case 'read':    return read(positional[0]);
-    case 'search':  return search(positional[0]);
+    case 'search':  return search(positional[0], undefined, flagValue('commit'));
     case 'draft':   return draft(positional[0]);
     case 'reply':   return reply(positional[0], { quick: flags.has('--quick') });
     case 'history': return history(positional[0]);

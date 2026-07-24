@@ -45,10 +45,37 @@ function toInt(raw: string | null | undefined): number | null {
  * 2026-07-22 — an unscoped search for "elementor slow loading" returned "Dog breeds",
  * "Tile Up daily puzzle" and other feed items alongside the real results.
  */
-export async function collectPermalinks(
+/**
+ * The listing entries themselves — permalink plus the title as it appears in the list.
+ *
+ * `collectPermalinks` returns URLs, which is all `read` needs. `search` needs enough to show
+ * a person what it found BEFORE opening anything, so the same crawl also keeps the link text.
+ * Titles on a Reddit listing are the link text; when a layout change empties it the entry is
+ * kept with a null title rather than dropped — a candidate you cannot preview is still a
+ * candidate, and silently losing it would misreport what the search returned.
+ */
+export interface Listing {
+  url: string;
+  title: string | null;
+}
+
+export async function collectListings(
   page: Page,
   max: number,
   scope?: readonly string[]
+): Promise<Listing[]> {
+  const urls = await collectPermalinks(page, max, scope, (href, text) => titles.set(href, text));
+  return urls.map((url) => ({ url, title: titles.get(url) ?? null }));
+}
+
+/** Populated as a side effect of the crawl above; keyed by absolute permalink. */
+const titles = new Map<string, string | null>();
+
+export async function collectPermalinks(
+  page: Page,
+  max: number,
+  scope?: readonly string[],
+  onLink?: (href: string, text: string | null) => void
 ): Promise<string[]> {
   const found = new Set<string>();
   let idleRounds = 0;
@@ -77,7 +104,13 @@ export async function collectPermalinks(
       for (const link of links) {
         const href = await link.getAttribute('href').catch(() => null);
         if (href && href.includes('/comments/')) {
-          found.add(href.startsWith('http') ? href : config.redditBase + href);
+          const abs = href.startsWith('http') ? href : config.redditBase + href;
+          if (onLink && !found.has(abs)) {
+            const text = await link.innerText().catch(() => null);
+            const label = text?.trim() || (await link.getAttribute('aria-label').catch(() => null))?.trim() || null;
+            onLink(abs, label);
+          }
+          found.add(abs);
         }
         if (found.size >= max) break;
       }

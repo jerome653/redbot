@@ -156,3 +156,71 @@ Evidence collection. Corpus growth. Human adjudication. Retrieval. Replay experi
 Documentation.
 
 The engine is frozen so that everything measured against it stays comparable.
+
+---
+
+## Recorded exceptions
+
+Every change to a frozen surface is listed here with who authorised it, what it touched, and
+the evidence that the baseline still holds. An exception that is not written down is a
+violation.
+
+### EX-01 · 2026-07-24 · Phase 10 citation check — `certify.ts` Rules 9/10/11
+
+**Authorised by** Jerome, as item 3 of his stated priority order ("Argus checks citations
+against the KB — code adjudicates, model proposes"). Operator direction, not a model's opinion
+that something could be better.
+
+**Frozen surface touched** — `src/argus/certify.ts` (three rules added after Rule 8, before
+Rule 7's graph pass), `src/argus/types.ts` (one optional evidence-only field, `citations`),
+`src/competence.ts` (refactor only, see EX-02), `src/policy.ts` (two new limits, both marked
+`provisional`).
+
+**Not touched** — no existing rule changed, no rule reordered, no threshold altered, no
+extraction or refutation prompt edited.
+
+**Why it does not perturb the baseline.** The new rules fire only on claims inside a corpus's
+declared jurisdiction. The only configured corpus is the SGEN KB, whose jurisdiction is claims
+about SGEN, and `config.brand.forbidMention` means a compliant draft contains none. Measured:
+
+| | before | after |
+|---|---|---|
+| `qa/benchmark/run.mjs` | 4/4 pass | **4/4 pass** |
+| unit tests | 207 | **229** (22 new across this session, 0 changed) |
+| claims in the whole certification log | 216 | 216 |
+| …of those, inside any corpus's jurisdiction | — | **0** |
+
+That last row is the one that matters. Replaying Phase 10 over **all 216 claims in every
+certification ever written**, not one fired: no `uncited`, no `covered`, no `unavailable`.
+The check is silent on the entire production corpus — exactly the intended shape. DEFECT-15's
+lesson was that a flag true 97 % of the time is not a filter; this is the opposite failure mode,
+chosen deliberately. It also means the new rules could not have perturbed the benchmark even in
+principle.
+
+**The honest caveat, recorded rather than buried.** Rules 9/10/11 are *preventive*. Unlike
+Rules 1-8 they cite no production failure of their own, because none has occurred — no draft
+has ever made a claim about SGEN. What is measured is the condition that makes the failure
+possible: redbot has zero retrieval of any kind, so every factual claim in every draft comes
+from model memory, which is exactly the provenance of HRC-001's false `ERROR 1153` claim.
+
+**One measurement changed the design mid-build**, and it is the reason the rule set has three
+parts instead of one. The claim *"SGEN supports installing WordPress plugins"* — which is
+false — matched `kb-can-i-install-a-plugin` at 0.60 term coverage, a card that asserts the
+opposite. Term overlap finds cards **about** a subject; it cannot tell agreement from
+contradiction. So a match is reported as `covered` and escalates to a person, never as
+`supported`, and never certifies. A citation layer that hands a false claim a reference is
+HRC-001 with a footnote attached.
+
+### EX-02 · 2026-07-24 · Domain profile — `competence.ts`
+
+**Authorised by** Jerome, item 4 ("un-hardcode the WordPress domain — keep the 58-thread
+corpus, it is the only production evidence and the benchmark derives from it").
+
+The area vocabulary, competing-platform list, anchor area and `minAreas` moved from compiled
+source into `src/domain.ts`, overridable by `data/domain.json`. **Behaviour is unchanged and
+that was verified against the corpus itself, not asserted:** all 58 collected threads were
+scored through the pre-move tables and the post-move profile, and `areas` and `inScope` were
+identical on every one (36 in scope, both). `src/test/domain.test.ts` freezes the pre-move
+pattern tables verbatim and asserts the built-in profile still equals them source-for-source,
+so a future edit that drifts the vocabulary fails a test instead of quietly re-defining what
+the corpus measures.

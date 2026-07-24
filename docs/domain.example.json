@@ -1,0 +1,79 @@
+{
+  "_doc": "A domain profile — what redbot claims to know. Copy to data/domain.json to use it. If data/domain.json is absent, the built-in WordPress profile in src/domain.ts loads unchanged, so deleting this file is always safe. A malformed profile is an ERROR, never a quiet fallback: a person who wrote a profile and silently got WordPress behaviour would have no way to tell.",
+
+  "_warning": "The 58-thread corpus in data/threads.json was collected and scored under the WordPress profile, and the benchmark derives from it. Switching profiles does not invalidate the threads, but every score, assessment and competence verdict computed under the old profile now describes a different question. Re-run `opportunity` before trusting anything downstream.",
+
+  "_fields": {
+    "name": "short identifier, used in output and in the trace",
+    "expertise": "human sentences fed to the drafting prompt — what we can genuinely help with",
+    "areas": "vocabulary per declared area, as regex sources (compiled case-insensitive). Grouped so one generic word does not put a thread in scope on its own.",
+    "anchorArea": "the area whose presence makes generic infrastructure vocabulary count as ours. Set null if the profile has no centre.",
+    "otherPlatforms": "platforms that are emphatically somebody else's problem",
+    "minAreas": "how many distinct declared areas a thread must touch. 2 is the built-in value, and it was raised from 1 after a CSS-in-JS thread scored in-scope on the single word 'cache'."
+  },
+
+  "name": "shopify",
+
+  "expertise": [
+    "Shopify themes, sections and Liquid",
+    "checkout, payments and order flow",
+    "app conflicts and theme performance"
+  ],
+
+  "areas": {
+    "shopify": [
+      "\\bshopify\\b",
+      "\\bliquid\\b",
+      "\\bshopify ?plus\\b",
+      "\\bdawn theme\\b",
+      "\\bshopify ?cli\\b",
+      "\\bmetafields?\\b"
+    ],
+    "themesSections": [
+      "\\bsections?\\b(?![- ](?:508|301))",
+      "\\btheme editor\\b",
+      "\\bsnippets?\\b",
+      "\\btheme app extension\\b"
+    ],
+    "checkout": [
+      "\\bcheckout\\b",
+      "\\bcart\\b",
+      "\\bshopify ?payments\\b",
+      "\\bstripe\\b",
+      "\\bpaypal\\b",
+      "\\bdiscount codes?\\b"
+    ],
+    "performance": [
+      "\\bcach(?:e|ing)\\b",
+      "\\bcore web vitals\\b",
+      "\\bpage ?speed\\b",
+      "\\bcdn\\b",
+      "\\blazy ?load"
+    ],
+    "apps": [
+      "\\bapps?\\b(?![- ]store review)",
+      "\\bapp conflict\\b",
+      "\\bscript ?tag\\b",
+      "\\bwebhooks?\\b"
+    ]
+  },
+
+  "anchorArea": "shopify",
+
+  "otherPlatforms": [
+    "\\bwordpress\\b",
+    "\\bwoocommerce\\b",
+    "\\bmagento\\b",
+    "\\bbigcommerce\\b",
+    "\\bwix\\b",
+    "\\bsquarespace\\b",
+    "\\bwebflow\\b",
+    "\\bnext\\.?js\\b",
+    "\\breact\\b",
+    "\\blaravel\\b"
+  ],
+
+  "minAreas": 2,
+
+  "_note": "Two rules the WordPress profile learned the hard way, and any new profile will re-learn unless it copies them. FIRST: ordinary English words that happen to be technical terms cost false positives — 'theme tokens', 'the best compromise', 'rendering order' and a bare 'cache' each scored an unrelated thread as in-scope. Prefer compound forms and negative lookaheads over bare nouns. SECOND: every non-anchor area here is really 'Shopify checkout', 'Shopify performance'; read alone, that vocabulary matches any e-commerce question, which is why anchorArea exists."
+}

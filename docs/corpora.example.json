@@ -1,0 +1,35 @@
+{
+  "_doc": "Ground-truth corpora for the Argus Phase 10 citation check. Copy to data/corpora.json to replace the built-in set in src/corpus.ts. Absent = the built-in set (the SGEN knowledge base). Lives in docs/ because data/*.json is gitignored, and that rule keeps live session cookies out of the repository.",
+
+  "_principle": "A corpus does NOT ground drafting and does not vouch for claims outside what it covers. It has a jurisdiction — the claims it is entitled to rule on — and it is silent everywhere else. Silence is recorded as silence, never as approval.",
+
+  "_why_so_narrow": "Measured 2026-07-24 against the real SGEN KB (3,544 cards): 17 mention WordPress and every one of them says 'SGEN does not do that'; 2 mention mysql; updraft, elementor, woocommerce and jquery score zero. redbot answers WordPress questions, so ruling on WordPress claims with this corpus would flag ~100% of them — and a flag that is almost always true is not a filter (DEFECT-15). What it CAN rule on is claims about SGEN itself, and a fabricated product capability asserted in a public subreddit is unretractable. Replayed over all 216 claims in every certification ever written, this configuration fired zero times. That is correct, not broken.",
+
+  "_fields": {
+    "id": "stable identifier, cited in verdict reasons",
+    "label": "how to name it in operator-facing prose — it appears in review packages",
+    "path": "path to the JSON file; relative paths resolve from the repo root. The corpus may live outside this repository.",
+    "cardsAt": "dotted path to the array of cards inside that JSON; empty string means the file IS the array",
+    "fields": "which card properties carry the id, the question and the body",
+    "require": "field/value pairs a card must match to be usable at all",
+    "jurisdiction": "claim-text regex sources that put a claim inside this corpus's authority. A claim matching none of these is not ruled on."
+  },
+
+  "corpora": [
+    {
+      "id": "sgen-kb",
+      "label": "the SGEN knowledge base",
+      "path": "../../Knowledge/10-Knowledge-Base/_KB-CANONICAL.json",
+      "cardsAt": "cards",
+      "fields": { "id": "kb_id", "question": "question", "content": "content" },
+      "require": { "status": "published-live", "classification": "PUBLIC" },
+      "jurisdiction": ["\\bsgen\\b"],
+      "note": "Human-authored support cards about the SGEN product. `require` excludes the 56 INTERNAL cards on purpose: a citation check that reads internal material can surface it in a review package that gets pasted somewhere. It also excludes source-only cards, leaving 3,414 of 3,544."
+    }
+  ],
+
+  "_two_rules_that_are_not_negotiable": [
+    "HUMAN-AUTHORED ONLY. Never point a corpus at model output — feeding Argus's own refutations back as ground truth is a model writing its own answer key, which is HRC-001 one level up.",
+    "A MATCH IS NOT AGREEMENT. Retrieval is deterministic term overlap, so it finds cards ABOUT a subject and cannot tell one that confirms a claim from one that refutes it. Measured 2026-07-24: the false claim 'SGEN supports installing WordPress plugins' matched kb-can-i-install-a-plugin at 0.60 coverage — the card that says the opposite. That outcome is reported as `covered` and escalates to a person with the cards attached; it never certifies."
+  ]
+}
