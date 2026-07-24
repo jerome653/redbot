@@ -24,6 +24,7 @@ import { say } from '../log.js';
 import { detectResolution } from './resolution.js';
 import { extractClaims, findContradictions } from './extract.js';
 import { findEpistemicIssues } from './epistemic.js';
+import { checkCitations } from './citations.js';
 import { certify } from './certify.js';
 import { FALSIFIABLE_TYPES } from './types.js';
 import type { Certification } from './types.js';
@@ -156,6 +157,22 @@ export async function runCertification(
   const epistemic = findEpistemicIssues(claims);
   if (epistemic.length) log(`Epistemic  : ${epistemic.length} claim(s) assert more than the evidence carries`);
 
+  /* ---- Phase 10, deterministic, no model call ---- */
+  const citations = checkCitations(claims);
+  const ruled = citations.findings.length;
+  log(ruled
+    ? `Citations  : ${ruled} claim-ruling(s) — ` +
+      `${citations.findings.filter((f) => f.status === 'covered').length} covered (read them), ` +
+      `${citations.findings.filter((f) => f.status === 'uncited').length} uncited, ` +
+      `${citations.findings.filter((f) => f.status === 'unavailable').length} unavailable`
+    : `Citations  : no corpus has standing over any of these ${claims.length} claim(s) — ` +
+      `this draft is NOT grounded in reference material`);
+  trace('gate', 'argus.citations', {
+    ruled,
+    outOfJurisdiction: citations.outOfJurisdiction.length,
+    corpora: citations.corporaSummary
+  }, { draftId: draft.id });
+
   /* ---- Phases 6 + 12, deterministic ---- */
   const result = certify({
     claims,
@@ -163,6 +180,7 @@ export async function runCertification(
     epistemic,
     resolution,
     refutationRan,
+    citations,
     ...(opts.override ? { humanOverride: true } : {})
   });
 
@@ -183,7 +201,8 @@ export async function runCertification(
     models: { analyze: config.llm.analyzeModel, draft: config.llm.draftModel },
     // EB-40 — persist the set the verdict was actually computed against, so this record can be
     // replayed without inferring it. Evidence only; nothing reads it back into a decision.
-    refutationRan: [...refutationRan]
+    refutationRan: [...refutationRan],
+    citations
   };
 
   recordCertification(certification);

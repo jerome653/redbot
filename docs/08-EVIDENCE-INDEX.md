@@ -119,6 +119,27 @@ pending task.
 
 ---
 
+## Added 2026-07-24 — Phase 16 (determinism) and Phase 10 (citations)
+
+| # | Observation | Why it matters | Where |
+|---|---|---|---|
+| E-60 | Two runs of a **byte-identical build** on a **byte-identical draft** aligned at **6.3 %** — 1 of 16 claims matched at the pre-registered threshold | Claim extraction is a sampler, not a parser | `PHASE-16-02-DETERMINISM.md` |
+| E-61 | Evidence class preserved on **0** aligned claims; the one matched pair moved community-knowledge → framework-documentation and medium → high | Self-declared provenance does not survive re-measurement | `PHASE-16-02` |
+| E-62 | Verdict rule `unrefuted-falsifiable-claim` fired in one run and not the other, same input | A rule's participation is a function of the sample | `PHASE-16-02` |
+| E-63 | Phase 7 resolution detection **byte-identical across 4 runs, 2 builds, 2 days** | The deterministic layers hold; the inputs to them do not | `PHASE-16-02` |
+| E-64 | The build that produced R1/R2 **is not in git**; `src/argus/prompts.ts` (frozen) differs at `07bd842` with no recorded exception | A cited experiment is unreproducible, and nothing detected the frozen-surface change | `PHASE-16-03-BUILD-REPRODUCIBILITY.md` |
+| E-65 | Corpus is **16 of 16 REJECT**; Argus has never returned CERTIFIED | Verdict agreement across runs carries ~no information | `PHASE-16-04-VERDICT-AGREEMENT.md` |
+| E-66 | SGEN KB coverage of the WordPress claim space is ~0 (17 WordPress cards, all "SGEN does not do that"; 0 for updraft/elementor/woocommerce/jquery) | Grounding drafts in the KB would flag ~100 % of claims — DEFECT-15's shape | `../ARGUS.md` Phase 10 |
+| E-67 | The false claim *"SGEN supports installing WordPress plugins"* matched the card that **contradicts** it, at 0.60 term coverage | Term overlap cannot tell agreement from contradiction; `covered` ≠ `supported` | `../ENGINE-FREEZE.md` EX-01 |
+| E-68 | Domain profile refactor: 58/58 corpus threads score identically to the pre-move hardcoded tables (36 in scope, both) | The vocabulary moved to data without moving what the corpus measures | `../ENGINE-FREEZE.md` EX-02 |
+
+| # | Still not known | | |
+|---|---|---|---|
+| N-18 | Whether extraction variance can flip a **verdict** | Every certification is deep inside REJECT; no draft has ever been near a decision boundary | a draft near the line |
+| N-19 | Argus's false-positive rate | 0 CERTIFIED outcomes; a truth layer that rejects sound replies leaves no trace | one CERTIFIED draft, judged by a person |
+
+---
+
 ## The shape of the evidence
 
 - **31 proven observations**, of which 26 are defects, failures, or negative results.

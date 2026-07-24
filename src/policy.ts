@@ -128,6 +128,27 @@ export const policy = {
   maxThreadAgeHoursToPublish: L(
     72, 'hours', 'declared',
     'a reply on a 4-day-old thread is not read; it is a footprint'
+  ),
+
+  /* ---------------- citation check (Argus Phase 10) ---------------- */
+
+  /**
+   * When a corpus card counts as holding material on a claim. Both conditions apply.
+   *
+   * `provisional`, not `declared`, and the distinction is the point: there is no labelled set
+   * of claim/card pairs to tune against, so these two numbers were chosen to be conservative
+   * and have never been measured for precision or recall. Loosening them widens what gets
+   * escalated to a person; tightening them widens what gets rejected as invented. Neither
+   * direction is currently defensible from evidence, so neither number may be quoted as a
+   * finding until the pilot produces adjudicated cases.
+   */
+  citationMinTerms: L(
+    3, 'distinct claim terms', 'provisional',
+    'two shared words between a claim and a card is a coincidence; not measured'
+  ),
+  citationMinCoverage: L(
+    0.5, 'fraction of claim terms', 'provisional',
+    'a card matching under half a claim is about something adjacent; not measured'
   )
 } as const;
 

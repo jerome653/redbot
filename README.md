@@ -154,11 +154,25 @@ node dist/cli.js history            # what happened, and when
 `REDBOT_ACCOUNT` names an entry in `data/accounts.json` and decides which browser and which
 profile every command uses. An unknown name is an error, never a fallback to the first entry.
 
-Search instead of browsing:
+Search instead of browsing. **Two steps: look, then pick.**
 
 ```powershell
-node dist/cli.js search "elementor slow"
+node dist/cli.js search "elementor slow"        # PREVIEW — reads the listing, collects nothing
+node dist/cli.js search --commit 1,4,7          # collect only the ones you picked
+node dist/cli.js search --commit all            # or take the lot
 ```
+
+The preview opens no threads. It reads the search listing, then annotates each result with the
+checks that are already mechanical — the announcement-tag / question-shape test and the
+vocabulary test — and marks which raised no objection. Those read the **title only** and say so
+on every note: a real help request with no question mark gets flagged, and overruling that is
+the point of the step.
+
+Until 2026-07-24 a single `search` opened all fifteen results and wrote all fifteen into
+`threads.json`. That is how three of the seven drafts pending after Phase 2 ended up aimed at
+threads seven and eight years old (DEFECT-11) — nothing between "the search returned it" and
+"it is in the corpus" was a decision anyone made. It also spent fifteen page loads, against a
+measured ceiling of 9.5/min, on results a person would have rejected at a glance.
 
 At the approval step you get three choices: **a** approve and post · **e** edit first ·
 **r** reject and do nothing. `r` is the safe answer — an unclear response never resolves to
@@ -199,11 +213,35 @@ There is no voting. redbot cannot upvote or downvote anything.
 Plain files on your machine. Nothing goes anywhere except Reddit and Claude.
 
 ```
-data/threads.json     threads it collected
-data/analysis.json    scores and reasons
-data/drafts.json      drafts and your decisions
-data/history.jsonl    one line for everything that happened
+data/threads.json           threads it collected
+data/analysis.json          scores and reasons
+data/drafts.json            drafts and your decisions
+data/history.jsonl          one line for everything that happened
+data/search-candidates.json the last search preview, waiting for you to pick from it
 ```
+
+Two files are configuration you may write, and neither has to exist:
+
+```
+data/domain.json      what subject redbot claims to know — the areas, their vocabulary,
+                      and which platforms are somebody else's problem. Absent = the
+                      built-in WordPress profile, unchanged.
+data/corpora.json     which human-authored reference material may rule on which claims.
+                      Absent = the built-in set.
+```
+
+`domain.json` replaces what used to be two hardcoded tables that had to agree by hand — the
+expertise list the drafting prompt reads, and the vocabulary the mechanical scope check reads.
+A malformed profile is an error, never a quiet fallback to the built-in one.
+
+A worked example is at **`docs/domain.example.json`** (a Shopify profile). It lives in `docs/`
+rather than `data/` because `data/*.json` is gitignored — that rule is what keeps live session
+cookies out of the repository and is not worth weakening for a sample file. Copy it to
+`data/domain.json` to use it.
+
+> Switching profiles does not invalidate `data/threads.json`, but every score and competence
+> verdict computed under the old profile now answers a different question. Re-run
+> `redbot opportunity` before trusting anything downstream.
 
 Your Reddit login lives in the Chrome profile. Your Claude login lives in your operator
 folder. redbot stores no passwords and no keys.

@@ -499,6 +499,18 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
   border-left:3px solid var(--ember);font-size:.87rem;line-height:1.7;color:var(--ink-2);
 }
 .g-rule b{color:var(--ink)}
+.g-dim{color:var(--ink-3,var(--ink-2));opacity:.78}
+/* Live figures inside the guide. Grid so the numbers line up without a table, which would
+   collapse badly at phone width. */
+.g-stat{
+  display:grid;grid-template-columns:auto 1fr;gap:.3rem .9rem;
+  margin:.2rem 0 .8rem;padding:.8rem 1rem;
+  border-radius:10px;border:1px solid var(--edge-2);
+  font-size:.87rem;line-height:1.6;color:var(--ink-2);max-width:56ch;
+}
+.g-stat b{color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+.g-stat .bad{color:var(--ember)}
+@media (max-width:420px){.g-stat{grid-template-columns:1fr;gap:.1rem .9rem}.g-stat b{margin-top:.4rem}}
 
 .toast{
   position:fixed;bottom:1.4rem;left:50%;transform:translateX(-50%) translateY(160%);
@@ -508,6 +520,43 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
   z-index:60;box-shadow:var(--shadow);
 }
 .toast.show{transform:translateX(-50%) translateY(0)}
+
+/* ------------------------------------------------------------------
+   Readability floor on phones. LAST in the sheet on purpose.
+
+   MEASURED 2026-07-24, responsive sweep at 360/390/430/768/1024/1280/1920: no overflow and no
+   horizontal scroll at any width — but 22 elements rendered between 10.08px and 10.96px. They
+   are the uppercase monospace captions sitting under the big numbers: "waiting for you",
+   "brand new", "weeks 1-2", "a comment that works". On a desktop at arm's length that reads
+   as deliberate density. On a phone it is under what a person actually reads, and those
+   captions are what tell you what the number above them MEANS.
+
+   The first attempt at this was placed near the top of the sheet and changed nothing — a
+   media query adds no specificity, so `.egs .tagline` (two classes, declared 300 lines later)
+   kept winning. Re-measuring is what caught it; the file looked correct. Hence: last in the
+   sheet, and matching the same compound selectors rather than bare class names.
+
+   Scoped to phone widths, so the desktop layout this was designed for is untouched.
+   ------------------------------------------------------------------ */
+@media (max-width:560px){
+  .p em,
+  .cstats>span,
+  .runline .t,
+  .collect-h .hint,
+  .src-n,
+  .whead .st,
+  .egs .tagline,
+  .p span,          /* the caption under each headline number on Today */
+  .stack-h span,    /* "Waiting for you" and its count */
+  .bar-t span,      /* "100 needed" under the karma bar */
+  .wtoday h4,       /* the "today" heading on each account card */
+  .pulse .lbl,
+  .g-flow span,
+  .tag, .lbl, .hint, .st, .tagline{
+    font-size:.72rem;
+    letter-spacing:.06em;   /* uppercase mono needs less tracking once it is bigger */
+  }
+}
 </style>
 </head>
 <body>
@@ -562,6 +611,29 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
       <p>Their question on the left, in their own words. What redbot made of it on the right.</p>
       <p>The verdict comes <b>before</b> the reply on purpose. Reading a well-written reply first makes you judge whether it <i>sounds</i> right instead of whether it <i>is</i> right — that is exactly how a confident, fluent, completely wrong reply nearly got sent.</p>
       <p><b>Do not send</b> means something in the reply was shown to be false. <b>Needs a look</b> means the check could not settle it. <b>Holds up</b> means nothing could be disproved — you still decide.</p>
+    </div>
+
+    <div class="g-sec" data-g="argus">
+      <h3>Argus — the part that tries to prove the reply wrong</h3>
+      <p>Argus is the fact-checker. Everything before it is trying to write something good; Argus is the only step trying to show that what was written is <b>false</b>. It is where <b>Do not send</b>, <b>Needs a look</b> and <b>Holds up</b> come from.</p>
+
+      <p><b>Why it exists.</b> One reply got all the way to the end of the queue: well written, specific, careful, and it said something about databases that is simply not true. Every other check passed it, because every other check can only measure how the writing reads. Nothing was measuring whether it was right. Argus is the answer to that one reply.</p>
+
+      <p><b>What it actually does.</b> It never judges the reply as a piece of writing. It pulls the reply apart into individual statements — one fact each, no "and" — and then puts every statement through the same questions:</p>
+      <p><b>Has this already been solved?</b> If the person who asked has said they fixed it, the check stops there. No amount of quality makes a reply to a finished conversation worth sending.</p>
+      <p><b>Where did this come from?</b> Every statement has to say what backs it: documentation, the actual code, something observed happening, or common practice. A statement that cannot say where it came from does not go out.</p>
+      <p><b>Can it be disproved?</b> Each statement is attacked on purpose — the question asked is "show me this is wrong", never "is this okay". A statement nobody tried to disprove is one that marked its own homework.</p>
+      <p><b>Does the wording match the evidence?</b> A guess written in the voice of a fact fails here, even when the guess turns out to be right. This deliberately disagrees with the writing check, which rewards sounding sure.</p>
+      <p><b>Does anything rest on a broken piece?</b> If one statement falls, everything built on top of it falls with it. There is no keeping the good half of a broken argument.</p>
+      <p><b>Do we have written material on this?</b> Where we keep our own reference material on a subject — anything about our own product — a statement has to line up with it. A statement about our own product that no card covers is one we made up. <span class="g-dim">This finds cards on the same subject; it cannot tell a card that agrees from one that disagrees, so it hands them to you to read rather than deciding.</span></p>
+
+      <div class="g-rule"><b>The model writes; the rules decide.</b> A model is used to break the reply into statements and to attack them, because that needs language. Every yes-or-no after that is plain code following fixed rules — so the thing being checked never gets a vote on whether it passed.</div>
+
+      <p><b>What it cannot do.</b> It cannot tell you a reply is true. Everything it checks is a shape it can see in the words: where a statement claims to come from, how sure it sounds, whether an attack found something. A statement can be well-sourced, carefully worded, unrefuted — and wrong. <b>The last check is you.</b></p>
+
+      <p><b>Its record so far</b> <span class="g-dim">— read from the log, not written here:</span></p>
+      <div class="g-stat" id="g-argus">…</div>
+      <p class="g-dim">And a known wobble worth your suspicion: run the same reply through twice and it does not always find the same number of statements. The final answer has been the same every time so far — but every reply so far got the same answer anyway, so that agreement proves very little.</p>
     </div>
 
     <div class="g-sec" data-g="discovery">
@@ -1474,6 +1546,27 @@ $('#pulseChip').onclick=()=>{
   toast(p.problems.length?p.problems.join(' · '):'Everything is connected');
 };
 
+/* The fact-checker's record, read from the run log. Written as sentences rather than a rate:
+   with this few runs a percentage would imply a population that does not exist. */
+function argusRecord(){
+  const box=$('#g-argus'); if(!box) return;
+  const a=S.argus;
+  if(!a||!a.runs){ box.innerHTML='<b>0</b><span>replies checked. Nothing to report yet.</span>'; return; }
+
+  const rows=[
+    [String(a.runs), `${a.runs===1?'check has':'checks have'} been run, over ${a.draftsChecked} ${a.draftsChecked===1?'reply':'different replies'}`],
+    [String(a.byVerdict.REJECT), 'came back <b>Do not send</b>', a.byVerdict.REJECT===a.runs&&a.runs>0]
+  ];
+  if(a.byVerdict.ESCALATE) rows.push([String(a.byVerdict.ESCALATE),'came back <b>Needs a look</b>']);
+  rows.push([String(a.byVerdict.CERTIFIED), a.everCertified
+    ? 'came back <b>Holds up</b>'
+    : 'have ever come back <b>Holds up</b> — so how often it clears a sound reply is <b>unknown</b>', !a.everCertified]);
+  if(a.draftsCheckedTwice) rows.push([String(a.draftsCheckedTwice),'reply has been checked more than once — the only place a claim about consistency could come from']);
+
+  box.innerHTML=rows.map(([n,text,warn])=>
+    `<b class="${warn?'bad':''}">${n}</b><span>${text}</span>`).join('');
+}
+
 async function load(){
   const res=await fetch('/api/state');
   S=await res.json();
@@ -1492,6 +1585,7 @@ async function load(){
   $('#banner').innerHTML=S.pulse.published===0
     ? '<b>Nothing has been sent yet.</b> Threads, scores and replies below are real output from live runs. Results is empty because there are no results.'
     : `<b>${S.pulse.published} sent.</b> Every figure is read fresh from the run records.`;
+  argusRecord();
   pulse();go(CUR);
   let seen=false; try{seen=localStorage.getItem('redbot.seenGuide')==='1'}catch{}
   if(!seen)guide(true);

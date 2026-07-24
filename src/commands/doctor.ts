@@ -21,6 +21,7 @@ import { loadDrafts, loadThreads, loadGaps, loadAssessments } from '../store.js'
 import { loadObservations } from '../health.js';
 import { loadReviews, loadRegrets } from '../review.js';
 import { loadTrace } from '../trace.js';
+import { corpora } from '../corpus.js';
 import { say } from '../log.js';
 import { hoursSinceLastBackup, listSnapshots } from '../backup.js';
 
@@ -220,6 +221,29 @@ export async function doctor(): Promise<number> {
       ? `${standaloneDue.length} publish-time check(s) and ${regretDue.length} 24h regret check(s) outstanding — run \`redbot regret\``
       : 'nothing published, nothing to stand behind yet'
   );
+
+  /* ----------------------------------------------------------------
+   * Reference corpora (Argus Phase 10)
+   *
+   * The citation check fails closed: a corpus that cannot be read escalates every claim in
+   * its jurisdiction rather than passing it. That is the right behaviour and it is also
+   * invisible — the run still completes, the verdict is still produced, and nothing says the
+   * check did not actually happen. The corpora live OUTSIDE this repository (the SGEN KB is
+   * a sibling checkout), so a moved folder is the expected way for this to break.
+   * ---------------------------------------------------------------- */
+  const corpusList = corpora();
+  if (!corpusList.length) {
+    add('reference corpora', 'WARN', 'none configured — no claim can be checked against written material');
+  } else {
+    const broken = corpusList.filter((c) => !c.cards);
+    add(
+      'reference corpora',
+      broken.length ? 'WARN' : 'PASS',
+      broken.length
+        ? `${broken.map((c) => `${c.config.id} ${c.unavailable}`).join('; ')} — claims in its jurisdiction will escalate, unchecked`
+        : corpusList.map((c) => `${c.config.id}: ${c.cards!.length} cards`).join(' · ')
+    );
+  }
 
   /* ---- measurement debt ---- */
   const prov = limitsByProvenance();

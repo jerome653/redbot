@@ -18,6 +18,7 @@ import type {
 } from './types.js';
 import { CANNOT_STATE_AS_FACT, NO_PROVENANCE, AUTHORITATIVE, FALSIFIABLE_TYPES } from './types.js';
 import { propagateFailure, validateGraph, type GraphIssue } from './graph.js';
+import type { CitationReport } from './citations.js';
 
 /**
  * How much a piece of evidence is worth, as a rank rather than a name: authoritative (2),
@@ -42,6 +43,11 @@ export interface CertifyInput {
    * contradictions", which is only correct when every refutation succeeded — see Rule 8.
    */
   refutationRan?: ReadonlySet<string>;
+  /**
+   * Phase 10 output. Absent means the citation check did not run — Rules 9 and 10 then say
+   * nothing at all, rather than treating an absent report as a clean one.
+   */
+  citations?: CitationReport;
 }
 
 export interface CertifyResult {
@@ -217,6 +223,84 @@ export function certify(input: CertifyInput): CertifyResult {
         `"${c.text}" asserts ${c.type} and was never successfully attacked — ` +
         `its provenance (${c.evidenceClass}) is self-declared and unchecked`
     });
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Rule 9 — a claim inside a corpus's jurisdiction that no card supports
+   *
+   * ADDED 2026-07-24 under a recorded freeze exception (see ENGINE-FREEZE.md). Unlike Rules
+   * 1-8 this rule is **preventive**: it has never fired on real input, and that is stated
+   * rather than dressed up as an observation, because a rule that cites a failure it did not
+   * have is exactly the kind of borrowed authority the freeze exists to stop.
+   *
+   * What IS measured, 2026-07-24: redbot has no retrieval of any kind — grepped, zero
+   * embeddings, zero vector store, zero corpus lookup. `draftPrompt` receives the thread,
+   * eight comments, the gap analysis and six hardcoded expertise strings. **Every factual
+   * claim in every draft comes from model memory**, which is the exact provenance of the
+   * false ERROR 1153 claim in HRC-001.
+   *
+   * Nothing can be done about that in general — no corpus covers WordPress. But there is one
+   * claim class where reference material exists and the cost of inventing an answer is high:
+   * assertions about SGEN itself, published under a pseudonymous account in a subreddit. A
+   * fabricated product capability there is unretractable. So where a human-authored corpus
+   * has standing, a claim it cannot support does not go out.
+   *
+   * This rule is silent for every claim no corpus has jurisdiction over — which, given a
+   * WordPress pipeline and an SGEN-only corpus, is expected to be nearly all of them. That is
+   * the design, not a shortfall: a check that fires on everything is DEFECT-15.
+   * ---------------------------------------------------------------- */
+  if (input.citations) {
+    for (const f of input.citations.findings) {
+      if (f.status === 'uncited') {
+        reject.push({
+          rule: 'uncited-claim-in-jurisdiction',
+          claimId: f.claimId,
+          detail: f.detail
+        });
+      }
+    }
+
+    /* -------------------------------------------------------------- *
+     * Rule 11 — reference material exists on the subject, so a person reads it
+     *
+     * MEASURED 2026-07-24: the false claim "SGEN supports installing WordPress plugins"
+     * matched `kb-can-i-install-a-plugin` at 0.60 term coverage — a card that says the exact
+     * opposite. Term overlap locates cards ABOUT a subject; it cannot tell agreement from
+     * contradiction. So a covered claim is escalated with its cards attached, never certified
+     * on the strength of the match. Automating the comparison would put a model back in the
+     * adjudicating seat, which is the one thing Argus is built not to do.
+     *
+     * This does mean every claim about SGEN reaches a human. That is intended: `brand.org`
+     * is set with `forbidMention`, so a compliant draft contains none, and one that does is
+     * worth stopping on.
+     * -------------------------------------------------------------- */
+    for (const f of input.citations.findings) {
+      if (f.status === 'covered') {
+        escalate.push({
+          rule: 'covered-claim-needs-reading',
+          claimId: f.claimId,
+          detail: f.detail
+        });
+      }
+    }
+
+    /* -------------------------------------------------------------- *
+     * Rule 10 — the corpus that should have ruled could not be read
+     *
+     * Fails closed, and escalates rather than rejects: an unreadable corpus says nothing
+     * about the claim, so the only honest outcome is that a person has to look. Treating a
+     * missing file as a pass would make the whole check evaporate the moment the checkout
+     * moves — which is precisely when nobody would notice.
+     * -------------------------------------------------------------- */
+    for (const f of input.citations.findings) {
+      if (f.status === 'unavailable') {
+        escalate.push({
+          rule: 'corpus-unavailable',
+          claimId: f.claimId,
+          detail: f.detail
+        });
+      }
+    }
   }
 
   /* ---------------------------------------------------------------- *

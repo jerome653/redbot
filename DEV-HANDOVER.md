@@ -9,11 +9,15 @@ what is scaffolding, where the traps are, and what I would do first.
 ## The one number that matters
 
 **Zero replies have ever been published.** Not one. Every certification run on real input —
-17 of them — returned REJECT. Both accounts sit near zero karma.
+**16 of them, counted from `data/certifications.jsonl` on 2026-07-24** — returned REJECT.
+Argus has never returned CERTIFIED, so its false-positive rate is unknown and currently
+unmeasurable. Both accounts sit near zero karma.
 
 Read every claim in this repository against that fact. The engine is well tested; it is not
-proven. 194 passing tests say the code does what its source says. They say nothing about
+proven. 229 passing tests say the code does what its source says. They say nothing about
 whether a published reply would help anybody, because none exists.
+
+*(An earlier version of this line said 17. The log says 16. Counted, not remembered.)*
 
 ---
 
@@ -23,7 +27,10 @@ whether a published reply would help anybody, because none exists.
 |---|---|---|
 | Collect · score · gap analysis · draft | **Real, exercised** | 58 threads, 24 assessed, 12 drafts on disk |
 | Argus fact-checking | **Real, exercised** | 17 certifications; caught a false MySQL claim a human review missed |
-| Safety linter, 20 publish gates | **Real, tested** | 194 tests, fuzz suites pass |
+| Safety linter, 20 publish gates | **Real, tested** | 229 tests, fuzz suites pass |
+| Domain profile (`data/domain.json`) | **Real, new 2026-07-24** | vocabulary out of source; 58/58 corpus threads score identically to the hardcoded tables |
+| Argus Phase 10 citation check | **Wired, never fired on real input** | no draft has yet made a claim inside a corpus's jurisdiction |
+| Search preview → commit | **Real, new 2026-07-24** | listing read without opening threads; picks are explicit |
 | Account resolution (`REDBOT_ACCOUNT`) | **Real, new 2026-07-24** | resolves port + profile from `accounts.json` |
 | Quiet hours + daily ceiling | **Real, new** | `src/window.ts`, 12 tests, fails closed |
 | Product console | **Real** | 25/25 interface checks |
@@ -50,8 +57,18 @@ to open a browser yourself.
 
 **3. `certifications.jsonl` records are samples, not properties.** The same draft certified
 five times produced claim counts of 0, 0, 12, 12 and 16 on a byte-identical build. The verdict
-was stable; nothing below it was. Do not build a feature that treats a single claim count as a
-fact about a draft. See `docs/RQ-03-SAME-DRAFT-TRIPLE.md` and the Phase 16 work.
+was stable; nothing below it was — **two runs of an identical build on an identical draft
+aligned at 6.3 %**, and evidence class was preserved on 0 of the aligned claims. Do not build a
+feature that treats a single claim count, or a claim id, as a fact about a draft. See
+`docs/PHASE-16-02-DETERMINISM.md` (and `docs/RQ-03-SAME-DRAFT-TRIPLE.md` for the earlier,
+falsified version of the question).
+
+**3b. The build that produced that measurement is not in git.** Only one commit exists and
+`dist/` is untracked; `src/argus/prompts.ts` — a frozen file — differs between the Phase-16
+fingerprint and `07bd842`, with no recorded exception. Nothing detected it; it surfaced only
+when a later experiment needed the old build back. `doctor`'s build check verifies *freshness*,
+not *identity*. Commit a `dist/` hash manifest with any run you intend to cite.
+See `docs/PHASE-16-03-BUILD-REPRODUCIBILITY.md`.
 
 **4. Model self-assessment as an input has failed four times.** `fillable` came back true 97%
 of the time. `alreadyAnswered` missed an explicit `UPDATE:` resolution. `headroom` disagreed

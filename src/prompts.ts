@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { domain } from './domain.js';
 import type { Thread } from './types.js';
 
 function trim(s: string | null, n: number): string {
@@ -6,7 +7,13 @@ function trim(s: string | null, n: number): string {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
-const EXPERTISE = config.expertise.map((e) => `  - ${e}`).join('\n');
+/**
+ * The declared areas, from the active domain profile. This list and the mechanical
+ * competence check in `competence.ts` now read the SAME source — they used to be two
+ * hardcoded tables that had to be kept in agreement by hand, which is how a competence
+ * list can quietly drift from what the drafting prompt claims.
+ */
+const EXPERTISE = domain.expertise.map((e) => `  - ${e}`).join('\n');
 
 /*
  * `analyzeBatchPrompt` — the Phase-1 batched triage prompt — was DELETED 2026-07-23 (D-01).

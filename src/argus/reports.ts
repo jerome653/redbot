@@ -36,6 +36,79 @@ const strength = (c: Claim): string =>
     : 'non-authoritative';
 
 /* ------------------------------------------------------------------ *
+ * Phase 10 — what reference material had to say
+ *
+ * The default outcome here is "nothing", and that is printed loudly rather than omitted. A
+ * section that simply disappears when no corpus had standing reads as a clean bill of health;
+ * the honest reading is that every claim in the draft came out of model memory, unchecked
+ * against anything, which is the provenance of HRC-001's false claim.
+ * ------------------------------------------------------------------ */
+
+function citationSection(cert: Certification): string {
+  const c = cert.citations;
+  if (!c) return '';
+
+  const covered = c.findings.filter((f) => f.status === 'covered');
+  const uncited = c.findings.filter((f) => f.status === 'uncited');
+  const broken = c.findings.filter((f) => f.status === 'unavailable');
+
+  const lines: string[] = [
+    `\n## 6b. Reference material — ${c.findings.length} of ${cert.claims.length} claim(s) ruled on\n`
+  ];
+
+  if (!c.findings.length) {
+    lines.push(
+      `**No corpus had standing over any claim in this draft.** Nothing here was checked ` +
+      `against human-authored reference material — every claim above rests on the model's ` +
+      `own memory and on the refutation pass alone. Read this as an absence of evidence, ` +
+      `not as evidence of correctness.\n`
+    );
+  }
+
+  if (uncited.length) {
+    lines.push(`### Uncited, inside a corpus that covers the subject\n`);
+    for (const f of uncited) {
+      const claim = cert.claims.find((x) => x.id === f.claimId);
+      lines.push(`- \`${f.claimId}\` ${esc(claim?.text ?? '')}\n  - ${esc(f.detail)}`);
+    }
+    lines.push('');
+  }
+
+  if (covered.length) {
+    lines.push(
+      `### Material exists on the subject — read it against the claim\n\n` +
+      `A match here is **shared vocabulary, not agreement.** Measured 2026-07-24: a false ` +
+      `claim matched the very card that contradicts it. These cards are for you to read; ` +
+      `nothing has compared them to the claim.\n`
+    );
+    for (const f of covered) {
+      const claim = cert.claims.find((x) => x.id === f.claimId);
+      lines.push(`- \`${f.claimId}\` ${esc(claim?.text ?? '')}`);
+      for (const h of f.hits) {
+        lines.push(`  - \`${h.cardId}\` — ${esc(h.question)} _(${Math.round(h.coverage * 100)}% of the claim's terms)_`);
+      }
+    }
+    lines.push('');
+  }
+
+  if (broken.length) {
+    lines.push(`### Could not be read\n`);
+    for (const f of broken) lines.push(`- \`${f.claimId}\` — ${esc(f.detail)}`);
+    lines.push('');
+  }
+
+  if (c.corporaSummary.length) {
+    lines.push(
+      `_Corpora: ${c.corporaSummary.map((s) =>
+        `${s.id} (${s.cards === null ? 'unavailable' : `${s.cards} cards`}${s.modified ? `, ${s.modified.slice(0, 10)}` : ''})`
+      ).join(' · ')}._\n`
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/* ------------------------------------------------------------------ *
  * Phase 9 — the operator review package
  * ------------------------------------------------------------------ */
 
@@ -110,6 +183,7 @@ ${esc(c.statement)}
 *Evidence:* ${c.evidenceClass} — ${esc(c.evidenceDetail)}`).join('\n\n')
   : '_No contradiction survived the refutation pass._'}
 
+${citationSection(cert)}
 ---
 
 ## 7. The draft, last

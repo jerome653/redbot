@@ -122,7 +122,14 @@ export type HistoryKind =
   /** an attempted sign-in that Reddit refused — feeds the health state machine */
   | 'login.fail'
   | 'read'
+  /** a committed collection — threads entered the corpus */
   | 'search'
+  /**
+   * A look that collected nothing. Separate from `search` on purpose: history feeds the
+   * health state machine and the reliability metrics, and counting a preview as a collection
+   * would inflate both with runs that never touched a thread.
+   */
+  | 'search.preview'
   /**
    * RETIRED 2026-07-23 (D-01) — no code emits this any more. The member survives so the 7
    * `analyze` lines already in history.jsonl still parse. Removing it would not delete the

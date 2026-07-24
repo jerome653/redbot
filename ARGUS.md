@@ -96,6 +96,53 @@ Scored independently, three of four read as plausible and the average passes. Wh
 D fail with it — and the reviewer is told *"D is dead because A is false"*, not handed four
 separate complaints.
 
+## Phase 10 — the citation check, and why it is so narrow
+
+Added 2026-07-24 under a recorded freeze exception (EX-01 in `ENGINE-FREEZE.md`).
+
+Every other phase measures a property readable inside the draft. This one looks outward — at
+human-authored reference material — and it is deliberately scoped to almost nothing.
+
+A corpus has a **jurisdiction**: the claims it is entitled to rule on. It is silent everywhere
+else, and that silence is recorded as silence, never as approval. The only configured corpus is
+the SGEN knowledge base, whose jurisdiction is claims about SGEN.
+
+The measurement that set the scope, taken against the real KB (3,544 cards):
+
+| | |
+|---|---|
+| cards mentioning WordPress | 17 — every one of them *"SGEN does not do that"* |
+| cards mentioning mysql | 2 |
+| updraft · elementor · woocommerce · jquery | **0** |
+
+redbot answers WordPress questions. The KB's coverage of that claim space is effectively zero,
+so a "no supporting source" flag over WordPress claims would be true ~100 % of the time — which
+is DEFECT-15 again: *a flag that is almost always true is not a filter.* What the KB **can** rule
+on is claims about SGEN, and a fabricated product capability asserted under a pseudonymous
+account in a public subreddit is unretractable.
+
+Three outcomes, and the middle one is the important one:
+
+| | |
+|---|---|
+| `uncited` | the corpus covers the subject and holds nothing on the claim → **REJECT** |
+| `covered` | material exists on the subject → **ESCALATE**, cards attached |
+| `unavailable` | the corpus could not be read → **ESCALATE**, fails closed |
+
+**`covered` is not `supported`, and the distinction cost a design change mid-build.** Measured
+2026-07-24: the false claim *"SGEN supports installing WordPress plugins"* matched
+`kb-can-i-install-a-plugin` at 0.60 term coverage — the card that says the exact opposite. Term
+overlap finds cards **about** a subject; it cannot tell agreement from contradiction. Handing a
+false claim a citation is HRC-001 with a footnote attached, so a match escalates to a person
+with the cards attached and never certifies on its own.
+
+No model call happens in this phase. Retrieval is term overlap; code decides. Both thresholds
+live in `policy.ts` marked **provisional** — chosen to be conservative, never measured for
+precision or recall, not quotable as findings.
+
+The corpus set is pluggable (`src/corpus.ts`, overridable via `data/corpora.json`), so a real
+WordPress ground-truth corpus drops in without touching the rules.
+
 ## Phase 9 — the review package shows the draft last
 
 Reading a fluent paragraph primes you to check whether it *sounds* right instead of whether it

@@ -104,15 +104,19 @@ function resolveProfileDir(): string {
 export const config = {
   redditBase: 'https://www.reddit.com',
 
-  /** What we can genuinely help with. Used to rank threads — no brand involved. */
-  expertise: [
-    'WordPress core, themes and plugin conflicts',
-    'site performance, caching and database load',
-    'hosting, deployment and migrations',
-    'security cleanup after a compromise',
-    'WooCommerce and scaling an e-commerce build',
-    'page builders and why they misbehave'
-  ],
+  /*
+   * `expertise` MOVED to the domain profile (`src/domain.ts`, overridable by
+   * `data/domain.json`) on 2026-07-24.
+   *
+   * It lived here as six hardcoded strings while `competence.ts` held a second, separate
+   * hardcoded table of the vocabulary for those same areas. Two tables that must agree, kept
+   * in agreement by hand, is a defect waiting to happen — and the competence check exists
+   * only because the model over-claims against the expertise list, so a drift between them is
+   * invisible until a reply goes out about somebody else's stack.
+   *
+   * Read `domain.expertise`. It is not re-exported here on purpose: `domain.ts` imports DATA
+   * from this file, so a back-import would make the cycle real.
+   */
 
   /**
    * Brand policy. redbot writes replies that help; it does not advertise.
