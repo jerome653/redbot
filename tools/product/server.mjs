@@ -19,7 +19,7 @@
  */
 import { createServer } from 'node:http';
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, appendFileSync, mkdirSync } from 'node:fs';
-import { join, dirname, extname } from 'node:path';
+import { join, dirname, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
@@ -366,7 +366,25 @@ function runAction(key, opts) {
      */
     const env = { ...process.env };
     if (opts && opts.account) env.REDBOT_ACCOUNT = String(opts.account);
-    if (opts && opts.cdp) env.REDBOT_CDP = String(opts.cdp);
+    /**
+     * H5 (audit, 2026-07-24): the raw `cdp` field from the request was copied into REDBOT_CDP
+     * and redbot then connected over CDP to it — an attacker-chosen endpoint would receive
+     * every scraped thread and feed it into the model prompts (SSRF). A CDP endpoint is only
+     * ever a loopback address on a debug port we already know from accounts.json.
+     */
+    if (opts && opts.cdp) {
+      const cdp = validateCdp(String(opts.cdp));
+      if (!cdp) return resolve({ ok: false, error: 'refused: cdp endpoint is not a known local debug port' });
+      env.REDBOT_CDP = cdp;
+    }
+    /**
+     * Bill the run to the operator the console picked, overriding whatever the server's shell
+     * inherited. Only ever a name already in operators.json (the select endpoint validates it),
+     * so the browser is choosing among pre-authorised local identities, not naming a new one.
+     * If nothing is selected, the child's config.ts fails closed with its "No Claude operator
+     * set" error — which is the correct outcome, not a silent fallback.
+     */
+    if (selectedOperator) env.REDBOT_OPERATOR = selectedOperator;
 
     const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), ...args], {
       cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe']
@@ -398,6 +416,53 @@ function runAction(key, opts) {
  * password, and an account nobody signed into is not really yours.
  * ------------------------------------------------------------------ */
 const accountsPath = join(DATA, 'accounts.json');
+const operatorsPath = join(DATA, 'operators', 'operators.json');
+
+/* ------------------------------------------------------------------ *
+ * Operators — whose Claude login pays for a run.
+ *
+ * The rule (config.ts): the console must NEVER invent a billing identity from a web request.
+ * So the picker offers only names already written into operators.json by someone with
+ * filesystem access — the same trust model as the account picker. Selecting one just chooses
+ * among pre-authorised local identities; it cannot create one, and the raw credential PATHS
+ * are never sent to the browser (data/operators/ holds credentials and is never served).
+ *
+ * `selectedOperator` starts as whatever REDBOT_OPERATOR the server was launched with, so a
+ * shell that already named an operator keeps working with no click. A picked operator
+ * overrides it for every run the console triggers.
+ * ------------------------------------------------------------------ */
+let selectedOperator = process.env.REDBOT_OPERATOR || null;
+
+/**
+ * A CDP endpoint is acceptable only if it is a loopback host on a debug port that some account
+ * in accounts.json actually declares. Returns the normalised URL, or null to refuse. (H5)
+ */
+function validateCdp(raw) {
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  const loopback = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !loopback.has(u.hostname)) return null;
+  const file = readJson(accountsPath, null);
+  const ports = new Set((file && file.accounts || []).map((a) => String(a.debugPort)));
+  if (!ports.has(String(u.port))) return null;
+  return `${u.protocol}//${u.hostname}:${u.port}`;
+}
+
+function readOperators() {
+  const all = readJson(operatorsPath, null);
+  if (!all || typeof all !== 'object') return [];
+  const dedicatedRoot = join(DATA, 'operators').split('\\').join('/');
+  return Object.entries(all)
+    .filter(([, r]) => r && typeof r.configDir === 'string' && r.configDir)
+    .map(([name, r]) => ({
+      name,
+      // shared = not a dedicated data/operators/<name>/ folder → bills a login someone else owns
+      shared: !r.configDir.split('\\').join('/').startsWith(dedicatedRoot),
+      ready: existsSync(r.configDir),
+      note: r.note || ''
+      // NOTE: configDir is deliberately NOT included — it is a filesystem path and never leaves the machine.
+    }));
+}
 
 function chromeBinary() {
   const candidates = [
@@ -531,25 +596,70 @@ function setStatus(draftId, status, note) {
 function publish(body) {
   const { draftId, confirm, reason } = body || {};
   if (!draftId) return Promise.resolve({ ok: false, error: 'no draft named' });
+  /**
+   * H4 (audit, 2026-07-24): draftId was interpolated straight into a file path, so
+   * {"draftId":"../accounts","confirm":"SEND"} overwrote data/accounts.json. A draft id is a
+   * flat token — validate its SHAPE and never let it carry a path. basename() is belt to the
+   * regex's braces.
+   */
+  const id = basename(String(draftId));
+  if (id !== String(draftId) || !/^[A-Za-z0-9_.-]{3,80}$/.test(id)) {
+    return Promise.resolve({ ok: false, error: 'invalid draft id' });
+  }
+  /* Only a real, known draft may be named — the id must exist in drafts.json. */
+  const known = arr(readJson(join(DATA, 'drafts.json'), []), 'drafts').some((d) => d.id === id);
+  if (!known) return Promise.resolve({ ok: false, error: `no such draft: ${id}` });
   /* fail closed: anything other than the exact word is a refusal, never an approval */
   if (confirm !== 'SEND') return Promise.resolve({ ok: false, error: 'not confirmed — type SEND exactly' });
   /* The decision is recorded first, and separately. If the send then fails, the fact that a
      person approved it must still be on the record. */
   appendFileSync(join(DATA, 'decisions.jsonl'),
-    JSON.stringify({ ts: new Date().toISOString(), draftId, decision: 'approved', reason: reason || '', via: 'console' }) + '\n', 'utf8');
+    JSON.stringify({ ts: new Date().toISOString(), draftId: id, decision: 'approved', reason: reason || '', via: 'console' }) + '\n', 'utf8');
 
   /* One draft, five minutes, consumed on read — see takeConsoleApproval in src/ask.ts */
   const dir = join(DATA, 'approvals');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${draftId}.json`),
-    JSON.stringify({ draftId, decision: 'approved', note: reason || '', at: new Date().toISOString() }, null, 2), 'utf8');
+  writeFileSync(join(dir, `${id}.json`),
+    JSON.stringify({ draftId: id, decision: 'approved', note: reason || '', at: new Date().toISOString() }, null, 2), 'utf8');
 
-  return runAction('__reply', { draftId, account: body.account })
+  return runAction('__reply', { draftId: id, account: body.account })
     .then((r) => ({ ...r, recorded: true }));
 }
 
 /* ------------------------------------------------------------------ */
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+
+/**
+ * H3 (audit, 2026-07-24): every mutating POST parsed its body and acted with NO auth, Origin,
+ * or Host check while bound to loopback. Any web page the operator had open could drive
+ * /api/run (spends model credits, drives the signed-in Chrome), and DNS-rebinding could read
+ * accounts.json and every draft. This is the guard that closes it, cheaply:
+ *
+ *   - Host must be a loopback authority on our port — a rebound domain sends its own Host,
+ *     so this defeats DNS-rebinding.
+ *   - If Origin is present it must be same-origin — a cross-site fetch from evil.com carries
+ *     Origin: http://evil.com and is refused (CSRF).
+ *   - Content-Type must be application/json — a simple cross-site form POST cannot set that
+ *     without a CORS preflight, so this alone blocks the classic no-Origin CSRF form.
+ *
+ * A localhost tool does not need sessions or tokens for this; it needs to not act on requests
+ * that did not originate from its own page.
+ */
+function sameOrigin(req) {
+  const hosts = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`]);
+  const host = String(req.headers.host || '');
+  if (!hosts.has(host)) return false;
+  const origin = req.headers.origin;
+  if (origin) {
+    try {
+      const o = new URL(origin);
+      if (!hosts.has(o.host) || (o.protocol !== 'http:' && o.protocol !== 'https:')) return false;
+    } catch { return false; }
+  }
+  const ct = String(req.headers['content-type'] || '');
+  if (!ct.includes('application/json')) return false;
+  return true;
+}
 
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -559,6 +669,9 @@ const server = createServer((req, res) => {
   };
 
   if (req.method === 'POST') {
+    if (!sameOrigin(req)) {
+      return send(403, JSON.stringify({ error: 'refused: this endpoint only accepts JSON requests from the console itself' }));
+    }
     let raw = '';
     req.on('data', (c) => { raw += c; if (raw.length > 1e6) req.destroy(); });
     req.on('end', async () => {
@@ -583,6 +696,23 @@ const server = createServer((req, res) => {
       if (url.pathname === '/api/auto/stop') {
         const r = autoStop();
         return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
+      if (url.pathname === '/api/operator/select') {
+        const name = typeof body.name === 'string' ? body.name : null;
+        // Empty/null clears the pick → runs fall back to the server's shell env, or fail closed.
+        if (!name) {
+          selectedOperator = process.env.REDBOT_OPERATOR || null;
+          return send(200, JSON.stringify({ ok: true, selected: selectedOperator }));
+        }
+        // The browser can only choose among registered operators; it cannot create one.
+        if (!readOperators().some((o) => o.name === name)) {
+          return send(400, JSON.stringify({
+            ok: false,
+            error: `"${name}" is not a registered operator. Add one at a terminal: redbot operators add ${String(name).replace(/[^a-z0-9._-]/gi, '')}`
+          }));
+        }
+        selectedOperator = name;
+        return send(200, JSON.stringify({ ok: true, selected: selectedOperator }));
       }
       if (url.pathname === '/api/sources/add') {
         const kind = body.kind === 'search' ? 'search' : 'subreddit';
@@ -677,6 +807,21 @@ const server = createServer((req, res) => {
       actions: PUBLIC_ACTIONS.map((key) => ({ key, label: ACTIONS[key].label }))
     }));
   }
+
+  /* Who can run, and who is currently selected to pay. No credential paths cross this line. */
+  if (url.pathname === '/api/operators') {
+    const operators = readOperators();
+    const sel = operators.find((o) => o.name === selectedOperator) || null;
+    return send(200, JSON.stringify({
+      operators,
+      selected: selectedOperator,
+      // If a name was selected/inherited but is not registered, say so rather than imply it pays.
+      selectedRegistered: !!sel,
+      selectedShared: sel ? sel.shared : null,
+      selectedReady: sel ? sel.ready : null
+    }));
+  }
+
 
   if (url.pathname === '/api/state') {
     try { return send(200, JSON.stringify(buildState())); }

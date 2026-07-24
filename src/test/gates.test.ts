@@ -213,3 +213,44 @@ test('every block names its gate and gives a reason', () => {
     assert.ok(b.reason.length > 10, `reason too thin: ${b.reason}`);
   }
 });
+
+/* ---- H6: the Argus verdict gates the post (2026-07-24) ---- */
+
+test('a REJECT certification blocks publishing', () => {
+  assert.ok(gatesHit({ certification: { verdict: 'REJECT', at: NOW.toISOString() } }).includes('certification'));
+});
+
+test('no certification on record blocks publishing — certify first', () => {
+  assert.ok(gatesHit({ certification: null }).includes('uncertified'));
+});
+
+test('ESCALATE proceeds to the human, does not hard-block', () => {
+  // ESCALATE means a person must resolve it — and the person is at the approval prompt.
+  assert.ok(!gatesHit({ certification: { verdict: 'ESCALATE', at: NOW.toISOString() } }).includes('certification'));
+});
+
+test('CERTIFIED proceeds', () => {
+  assert.ok(!gatesHit({ certification: { verdict: 'CERTIFIED', at: NOW.toISOString() } }).includes('certification'));
+});
+
+test('an omitted certification leaves the gate inert (back-compat)', () => {
+  assert.ok(!gatesHit({}).some((g) => g === 'certification' || g === 'uncertified'));
+});
+
+/* ---- H7: the posting window is enforced on the path that posts (2026-07-24) ---- */
+
+test('a closed window (quiet hours / ceiling) blocks publishing', () => {
+  assert.ok(gatesHit({
+    window: { allowed: false, rule: 'quiet-hours', detail: 'docs-architect: quiet hours' }
+  }).includes('window'));
+});
+
+test('an open window does not block', () => {
+  assert.ok(!gatesHit({
+    window: { allowed: true, detail: 'docs-architect: clear to act' }
+  }).includes('window'));
+});
+
+test('an omitted window leaves the gate inert (back-compat)', () => {
+  assert.ok(!gatesHit({}).includes('window'));
+});

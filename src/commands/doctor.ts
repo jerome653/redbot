@@ -13,6 +13,7 @@
  * Exit code is 1 if any check FAILs, so this can gate a run.
  */
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { ROOT, DATA, paths, config, claudeConfigDir, OperatorAuthError } from '../config.js';
 import { isBrowserUp } from '../browser.js';
@@ -104,18 +105,41 @@ export async function doctor(): Promise<number> {
   }
 
   /* ---- secrets: the DEFECT-01 guard ---- */
-  const gitignore = join(ROOT, '.gitignore');
-  if (!existsSync(gitignore)) {
-    add('secret protection', 'FAIL', 'no .gitignore — Chrome profiles and session cookies are committable');
-  } else {
-    const text = readFileSync(gitignore, 'utf8');
-    const required = ['data/chrome-profile', 'data/operators', 'data/*.json', 'data/*.jsonl'];
-    const missing = required.filter((r) => !text.includes(r));
-    add(
-      'secret protection',
-      missing.length ? 'FAIL' : 'PASS',
-      missing.length ? `.gitignore is missing: ${missing.join(', ')}` : `all ${required.length} required patterns present`
-    );
+  /**
+   * M6 (audit, 2026-07-24): this used to test whether the .gitignore TEXT contained certain
+   * strings — which the file's own comment header already satisfies, so deleting the real rule
+   * still reported PASS while live session cookies became committable. The only honest check is
+   * whether git ACTUALLY ignores the credential paths, so ask git.
+   */
+  {
+    const probes = [
+      join('data', 'chrome-profile', 'Default', 'Cookies'),
+      join('data', 'operators', 'operators.json'),
+      join('data', 'drafts.json'),
+      join('data', 'history.jsonl')
+    ];
+    const notIgnored: string[] = [];
+    let gitUsable = true;
+    for (const p of probes) {
+      try {
+        // exit 0 = ignored. `-q` suppresses output; we only read the exit code.
+        execFileSync('git', ['check-ignore', '-q', '--', p], { cwd: ROOT, stdio: 'ignore' });
+      } catch (e) {
+        const status = (e as { status?: number }).status;
+        if (status === 1) notIgnored.push(p);         // definitively NOT ignored
+        else { gitUsable = false; break; }            // not a repo / git missing → cannot verify
+      }
+    }
+    if (!gitUsable) {
+      add('secret protection', 'WARN',
+        'could not verify with `git check-ignore` (not a git repo, or git unavailable) — confirm by hand that data/ is ignored');
+    } else {
+      add('secret protection',
+        notIgnored.length ? 'FAIL' : 'PASS',
+        notIgnored.length
+          ? `git does NOT ignore: ${notIgnored.join(', ')} — session cookies / credentials are committable`
+          : `verified via git check-ignore — ${probes.length} credential paths are ignored`);
+    }
   }
 
   /* ---- evidence backup (EB-28 / D-04) ---- */

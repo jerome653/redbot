@@ -32,7 +32,30 @@ async function typeHuman(page: Page, text: string): Promise<void> {
   }
 }
 
-export async function publishComment(page: Page, permalink: string, body: string): Promise<PublishResult> {
+/**
+ * Normalise text the way a human comparing two strings would — case-fold, drop markdown
+ * punctuation, collapse whitespace. The rendered DOM is NOT the source: `**bold**` renders as
+ * `bold`, links lose their `(url)`, backticks vanish, and a disclosure line is appended. An
+ * exact match on raw source therefore never finds the landed comment (H2), which flipped every
+ * real success to `failed` and let the duplicate gate re-post it. Comparison happens on this
+ * normalised form on both sides.
+ */
+function normText(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[*_`~#>\[\]()]/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export async function publishComment(
+  page: Page,
+  permalink: string,
+  body: string,
+  author?: string
+): Promise<PublishResult> {
   try {
     await page.goto(permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await pause();
@@ -62,29 +85,44 @@ export async function publishComment(page: Page, permalink: string, body: string
     await submit.click();
     await sleep(3500);
 
-    // Confirm by looking for our own text back on the page.
-    const probe = body.slice(0, 60);
-    const landed = await page
-      .locator(`text=${JSON.stringify(probe)}`)
-      .first()
-      .isVisible({ timeout: 8000 })
-      .catch(() => false);
+    /**
+     * Confirm the comment landed by finding OUR node — matched on author (when we know the
+     * username) and on a normalised fragment of the body, never on an exact source-text match.
+     * A distinctive slice from the MIDDLE of the reply is used as the fragment: the opening is
+     * often a generic greeting shared with other comments, and the end may carry the appended
+     * disclosure. Absent attributes are reported as absent, never guessed from the thread URL.
+     */
+    // A distinctive slice from the MIDDLE of the reply: the opening is often a generic greeting
+    // shared with other comments, and the end may carry the appended disclosure.
+    const needle = normText(body).slice(20, 90).trim() || normText(body).slice(0, 60);
+    const ours = await page.evaluate(
+      ({ needle, author }: { needle: string; author: string | null }) => {
+        // Same normalisation as normText() in post.ts; a test asserts the two stay in step.
+        const normalise = (s: string): string => s
+          .toLowerCase()
+          .replace(/[*_`~#>\[\]()]/g, ' ')
+          .replace(/https?:\/\/\S+/g, ' ')
+          .replace(/[^a-z0-9\s]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const nodes = Array.from(document.querySelectorAll('shreddit-comment')) as HTMLElement[];
+        const mine = author
+          ? nodes.filter((n) => (n.getAttribute('author') || '').toLowerCase() === author.toLowerCase())
+          : nodes;
+        const pool = mine.length ? mine : nodes;
+        const hit = pool.find((n) => needle && normalise(n.innerText).includes(needle));
+        if (!hit) return null;
+        return {
+          permalink: hit.getAttribute('permalink'),
+          id: hit.getAttribute('thingid') ?? hit.getAttribute('thing-id') ?? hit.getAttribute('id')
+        };
+      },
+      { needle, author: author ?? null }
+    ).catch(() => null);
 
-    if (!landed) {
-      return { ok: false, error: 'submitted but the comment was not found on the page afterwards' };
+    if (!ours) {
+      return { ok: false, error: 'submitted but our comment could not be located on the page afterwards' };
     }
-
-    // Identify our own node so later checkpoints can look at this comment specifically.
-    // Absent attributes are reported as absent — never guessed from the thread URL.
-    const ours = await page.evaluate((needle: string) => {
-      const nodes = Array.from(document.querySelectorAll('shreddit-comment'));
-      const hit = nodes.find((n) => (n as HTMLElement).innerText.includes(needle));
-      if (!hit) return null;
-      return {
-        permalink: hit.getAttribute('permalink'),
-        id: hit.getAttribute('thingid') ?? hit.getAttribute('thing-id') ?? hit.getAttribute('id')
-      };
-    }, probe).catch(() => null);
 
     const abs = ours?.permalink
       ? (ours.permalink.startsWith('http') ? ours.permalink : config.redditBase + ours.permalink)

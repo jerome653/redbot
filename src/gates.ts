@@ -23,6 +23,8 @@ import type { HealthVerdict } from './health.js';
 import type { ThreadState } from './reddit/thread-state.js';
 import type { Identity } from './browser.js';
 import type { Draft, Thread, OpportunityAssessment } from './types.js';
+import type { Verdict } from './argus/types.js';
+import type { WindowVerdict } from './window.js';
 
 export interface GateBlock {
   gate: string;
@@ -60,6 +62,19 @@ export interface GateInput {
    * under, rather than blocked by a rule that post-dates them.
    */
   requireContribution?: boolean | undefined;
+  /**
+   * The latest Argus verdict for this draft (H6). Passed in rather than loaded, so the gate
+   * stays pure and testable.
+   *   undefined — not supplied; the certification gate does not run (tests, non-publish callers)
+   *   null      — supplied, and there is NO certification on record → block, certify first
+   *   {verdict} — block on REJECT; ESCALATE/CERTIFIED proceed to the human, who still decides
+   */
+  certification?: { verdict: Verdict; at: string } | null | undefined;
+  /**
+   * The posting-window verdict for the acting account (H7): quiet hours + daily ceiling.
+   * Passed in, computed by the caller with checkWindow(). undefined skips the gate.
+   */
+  window?: WindowVerdict | undefined;
   now?: Date | undefined;
 }
 
@@ -210,6 +225,42 @@ export function evaluateGates(input: GateInput): GateResult {
     });
   } else if (input.health.state === 'Caution') {
     for (const r of input.health.reasons) warnings.push(`health — ${r}`);
+  }
+
+  /* ---- certification: the fact-checker's verdict actually gates the post now (H6) ---- */
+  /**
+   * OBSERVED FAILURE (audit H6, 2026-07-24): the publish gate never consulted Argus. A draft
+   * Argus had REJECTed sat at status `pending` and the next run re-selected and could publish
+   * it — certification was decorative with respect to posting. The verdict is now a gate.
+   *
+   * It blocks a REJECT and requires that SOME certification exists. It does NOT require
+   * CERTIFIED: Argus has never returned CERTIFIED (its bar is near-unreachable, audit M3), so
+   * requiring it would make every reply unpublishable forever. ESCALATE means "a human must
+   * resolve this" — and the human is right here at the approval prompt, which is the whole
+   * point of the tool. So ESCALATE proceeds to a person; only a REJECT is a hard stop.
+   */
+  if (input.certification !== undefined) {
+    if (input.certification === null) {
+      blocks.push({
+        gate: 'uncertified',
+        reason: 'no Argus certification on record — run `redbot certify` before publishing'
+      });
+    } else if (input.certification.verdict === 'REJECT') {
+      blocks.push({
+        gate: 'certification',
+        reason: 'Argus returned REJECT for this draft — a reply it found unsupported must not be posted'
+      });
+    }
+  }
+
+  /* ---- posting window: quiet hours + daily ceiling, on the path that actually posts (H7) ---- */
+  /**
+   * OBSERVED FAILURE (audit H7, 2026-07-24): checkWindow was called only by the `auto` loop,
+   * which never publishes. The interactive `reply` path — the one that CAN post — never checked
+   * it, so an account's quiet hours and daily ceiling were unenforced exactly where it mattered.
+   */
+  if (input.window && !input.window.allowed) {
+    blocks.push({ gate: 'window', reason: input.window.detail });
   }
 
   /* ---- draft freshness: a draft written long ago describes a thread that has moved on ---- */

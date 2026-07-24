@@ -27,7 +27,9 @@ import { autoBackup } from '../backup.js';
 import { publishComment } from '../reddit/post.js';
 import { lintDraft, ensureDisclosure } from '../disclosure.js';
 import { evaluateGates } from '../gates.js';
-import { health } from '../health.js';
+import { health, counters } from '../health.js';
+import { checkWindow } from '../window.js';
+import { loadCertifications } from '../argus/pipeline.js';
 import { viewThread } from '../behavior.js';
 import { makeRng, sessionSeed } from '../rand.js';
 import { ask, choose, takeConsoleApproval } from '../ask.js';
@@ -35,7 +37,7 @@ import {
   recordReview, retentionRatio, REJECT_REASONS, EDIT_REASONS, APPROVE_REASONS, type Decision
 } from '../review.js';
 import { record, say, setAccount } from '../log.js';
-import { config, DATA } from '../config.js';
+import { config, DATA, selectedAccount } from '../config.js';
 import type { Draft } from '../types.js';
 
 /**
@@ -117,6 +119,18 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     const verdict = health(identity.username);
     say.step(`Health : ${verdict.state}${verdict.resumeAt ? ` (resumes ${verdict.resumeAt})` : ''}`);
 
+    /* Facts the two new gates need, computed once. The window (H7) uses the SELECTED account's
+     * quiet hours/ceiling; the certification (H6) is the latest Argus verdict for this draft. */
+    const account = selectedAccount();
+    const windowVerdict = checkWindow({
+      account,
+      repliesToday: account ? counters(account.handle).repliesToday : 0
+    });
+    const certsForDraft = loadCertifications().filter((c) => c.draftId === target.id);
+    const latestCert = certsForDraft[certsForDraft.length - 1];
+    const certification = latestCert ? { verdict: latestCert.verdict, at: latestCert.certifiedAt } : null;
+    say.step(`Argus  : ${latestCert ? latestCert.verdict : 'not certified'} · Window: ${windowVerdict.allowed ? 'clear' : windowVerdict.rule}`);
+
     /* ---------- 2. gates, before anyone is asked ---------- */
     const pre = evaluateGates({
       draft: target,
@@ -126,7 +140,9 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       expectedAccount: identity.username,
       health: verdict,
       threadState: state,
-      allDrafts: drafts
+      allDrafts: drafts,
+      certification,
+      window: windowVerdict
     });
 
     if (!pre.allow) {
@@ -278,7 +294,19 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       });
       record('review', `review recorded for ${target.id}`, { draftId: target.id, decision: 'edited', reasonCode: code });
     } else {
-      const { code, note } = await askReason('approved', APPROVE_REASONS);
+      /**
+       * H1 (2026-07-24): a console-approved publish consumed its single-use token at line ~214,
+       * then fell through to here and called askReason → an interactive prompt. On the console's
+       * spawned child (stdio:'ignore') that throws, so the token was burned and nothing published
+       * — the headline terminal-free approval could not complete even once.
+       *
+       * A console approval already carries the operator's decision, and optionally their note, so
+       * there is nothing left to ask. Record it as 'as-written' (they approved the generated text)
+       * with the console-supplied note, and never touch stdin. The interactive path is unchanged.
+       */
+      const { code, note } = preApproved
+        ? { code: 'as-written', note: preApproved.note ?? '' }
+        : await askReason('approved', APPROVE_REASONS);
       recordReview({
         ...snapshot, decision: 'approved', reasonCode: code, note,
         reviewSeconds, totalSeconds: secondsSince(shownAt)
@@ -301,7 +329,11 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       expectedAccount: identity.username,
       health: verdict2,
       threadState: state2,
-      allDrafts: loadDrafts()
+      allDrafts: loadDrafts(),
+      certification,
+      // Re-check the window at submit time — quiet hours can begin, or the ceiling be reached,
+      // during a long review.
+      window: checkWindow({ account, repliesToday: account ? counters(account.handle).repliesToday : 0 })
     });
 
     if (!final.allow) {
@@ -327,7 +359,7 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       draftId: target.id, permalink: target.permalink, body: target.body
     });
 
-    const result = await publishComment(s.page, target.permalink, target.body);
+    const result = await publishComment(s.page, target.permalink, target.body, identity2.username ?? identity.username ?? undefined);
 
     if (result.ok) {
       target.status = 'published';
