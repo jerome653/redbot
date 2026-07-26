@@ -59,6 +59,28 @@ Full reasoning and the experiment log: `WHY-NO-ANDROID.md`.
 
 Step 5 is the whole point. Nothing reaches Reddit without you saying yes.
 
+### The queue
+
+Every action is a **job** — read, search, draft, certify, vote, save, follow, post, publish.
+Jobs live in an append-only log per account, survive a restart, retry with a back-off, can
+run at a time you choose or after another job finishes, and are recovered if the process
+running them dies.
+
+```powershell
+node dist/cli.js job add read  --account docs-architect --sub WordPress
+node dist/cli.js job add draft --account docs-architect --at 2026-07-28T09:00:00Z
+node dist/cli.js job list      --account docs-architect
+node dist/cli.js work          --account docs-architect --every 30
+```
+
+**The scheduler cannot publish.** `publish` and `reply` jobs are refused before it even looks
+up a runner; they reach `waiting` and stop there until a person acts. A test registers a
+publish runner that *would* complete the job and asserts it is never invoked — if that test
+ever fails, redbot has become capable of unattended publishing and the change that did it
+should be reverted, not accommodated.
+
+`waiting` is not stuck. It means the machine did everything it is allowed to do.
+
 ---
 
 ## Setup — about ten minutes, once
@@ -74,6 +96,19 @@ Step 5 is the whole point. Nothing reaches Reddit without you saying yes.
 
 A Chrome window opens. **Go to reddit.com and sign in.** Leave it open — redbot works inside
 it, in its own tab, and never touches your normal browser.
+
+Three things that cost an hour if you don't know them, all confirmed on 2026-07-27:
+
+- **It must be a headed Chrome.** Reddit answers a headless browser with a block page, served
+  as HTTP 200 with the block in the body — so a naive status check reads it as success. If
+  `redbot login` says it got a block page, check the user-agent at
+  `http://127.0.0.1:<port>/json/version`; if it contains `HeadlessChrome`, that is not the
+  browser you want.
+- **The port may already be taken** by an unrelated Chrome. Don't attach to it and don't kill
+  it — start yours on a free port and point redbot at it with
+  `REDBOT_CDP=http://127.0.0.1:9224`, which needs no change to `accounts.json`.
+- **Cookies live at `<profile>/Default/Network/Cookies`**, not `Default/Cookies`. Checking the
+  wrong path reads as "no session" on a profile that is signed in perfectly well.
 
 ### 2. Sign in to Claude as yourself
 
@@ -266,18 +301,33 @@ through. redbot never retries a post on its own, because that's how one comment 
 
 ## Honest limits
 
-- One account. More would work the same way — another Chrome on another port — but that
-  isn't built, and shouldn't be until this proves useful.
 - Reddit changes its site sometimes, which can break reading. Everything it looks for lives
-  in one file, `src/reddit/selectors.ts`, so it's a small fix.
+  in one file, `src/reddit/selectors.ts`, so it's a small fix. Groups in that file are marked
+  where they have been confirmed against a live page and where they have not.
 - Scoring takes a few minutes because it asks Claude in batches.
-- It reads and replies. It does not create posts, send messages, or vote.
+- **Downvote, follow/unfollow and creating a post are written but never executed.** Their
+  selectors have not resolved against a live page, so treat them as unproven.
+- **The certification engine has never returned `CERTIFIED`.** 16 runs, 16 REJECT. Its
+  false-positive rate is therefore unknown — a truth layer that rejects sound replies would
+  leave no trace, and nothing here would catch it.
 
 ---
 
 ## State of it
 
-See `STATUS.md`. Short version: **reading and scoring real threads is proven working** — a
-live run collected 25 threads from r/WordPress and found 10 worth answering. Drafting and
-posting are built and unit-tested but haven't been run for real yet; that needs your Claude
-login and a decision to post something.
+See `STATUS.md` for detail, and the **[Operator's Manual](https://claude.ai/code/artifact/12fdc9a0-f813-477e-b8da-f206f5805f22)**
+for the whole machine end to end with every capability marked verified / written / blocked.
+
+Short version, as of 2026-07-27:
+
+| | |
+|---|---|
+| Reading, scoring, gap analysis, drafting | **verified against live Reddit** |
+| Upvote · save · unsave | **verified** — executed as `docs-architect`, confirmed by reading the page back |
+| Downvote · follow · create post | written, never executed |
+| **Publishing a reply** | **never completed, not once** |
+| Certifications | 16 runs, **16 REJECT**, 0 CERTIFIED |
+| Suite | 328 tests · benchmark 4/4 · doctor 12 pass / 4 warn / 0 fail |
+
+The engagement path works. The contribution path — the reason the project exists — has never
+run to completion. Everything else is scaffolding around that one number.
