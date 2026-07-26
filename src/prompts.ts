@@ -1,6 +1,7 @@
 import { config } from './config.js';
 import { domain } from './domain.js';
 import type { Thread } from './types.js';
+import type { ReferenceHit } from './corpus.js';
 
 function trim(s: string | null, n: number): string {
   if (!s) return '(none)';
@@ -112,7 +113,20 @@ export function draftPrompt(
   thread: Thread,
   reason: string,
   angle: string,
-  gap?: { question: string; covered: string[]; gaps: Array<{ kind: string; what: string }> }
+  gap?: { question: string; covered: string[]; gaps: Array<{ kind: string; what: string }> },
+  /**
+   * Quoted primary documentation on the subjects this thread touches, retrieved deterministically
+   * by `findReference`. Optional, and usually empty: the corpus is narrow on purpose and most
+   * threads touch nothing it holds.
+   *
+   * WHY THIS EXISTS. Measured 2026-07-24: redbot had zero retrieval of any kind, so every
+   * factual claim in every draft came out of model memory — which is exactly the provenance of
+   * HRC-001's false `ERROR 1153` claim, and shows up in the certification log as 117
+   * fatal-contradictions and 101 overconfident-language findings across 16 drafts. Adding a
+   * check downstream of that (Argus) catches the symptom; this is the first thing upstream of
+   * it that changes the input.
+   */
+  reference?: ReferenceHit[]
 ): string {
   const topComments = thread.comments
     .slice(0, 8)
@@ -129,6 +143,23 @@ ${gap.gaps.length ? gap.gaps.map((g) => `  - [${g.kind}] ${g.what}`).join('\n') 
 
 What the asker actually needs: ${gap.question}
 `
+    : '';
+
+  /**
+   * The reference block is worded to stop two opposite failures. It must not be read as
+   * permission to assert everything it contains — the cards answer their own questions, not
+   * necessarily this thread's. And it must not be treated as the limit of what may be said,
+   * or every reply becomes a quotation. So: ground what you can, mark what you cannot.
+   */
+  const referenceBlock = reference?.length
+    ? `
+
+REFERENCE MATERIAL — human-authored primary documentation, quoted
+These were retrieved because they mention things this thread mentions. They are NOT tailored to
+this thread and may not answer it. Use them to get the checkable facts right, quote a specific
+setting or return value where it helps, and say plainly when they do not cover the case.
+
+${reference.map((r, i) => `  [${i + 1}] ${r.cardId} — ${r.question}\n      ${trim(r.content, 700)}`).join('\n\n')}`
     : '';
 
   return `Write a draft Reddit reply that a real person will read, edit, and post under
@@ -162,6 +193,10 @@ HARD RULES — not style preferences
 4. **No engagement bait.** No "hope this helps", no "let me know if you need anything else".
    If you genuinely need one piece of information, ask for that one thing.
 5. **Plain formatting.** Code in fenced blocks. No emoji. No bold-everything.
+6. **Do not state a checkable fact you cannot ground.** If a claim about how software behaves
+   is not in the reference material below and not in the thread, either leave it out or write
+   it as the check you would run: "I'd confirm X, because if it is Y then Z". A reply that is
+   confidently wrong costs the person who posts it more than a reply that is usefully unsure.${referenceBlock}
 
 MAKE THE CASE, OR DECLINE
 Before the reply, state three things. If you cannot state all three honestly, set

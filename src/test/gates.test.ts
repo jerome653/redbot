@@ -153,8 +153,42 @@ test('the opportunity floor holds', () => {
   assert.ok(gatesHit({ assessment: assessment({ score: 20 }) }).includes('priority'));
 });
 
+test('a draft written for another account is not sent from this one', () => {
+  // The browser is docs-architect and that matches expectedAccount, so the existing identity
+  // check is satisfied — this is the case only the draft-level check can see.
+  const foreign = draft({ account: 'jrum_sgen' });
+  assert.ok(gatesHit({ draft: foreign }).includes('identity'));
+
+  const own = draft({ account: 'docs-architect' });
+  assert.equal(evaluateGates(base({ draft: own })).allow, true);
+
+  // Drafts written before the field existed carry no account and must not be blocked by it.
+  assert.equal(evaluateGates(base({ draft: draft() })).allow, true);
+});
+
 test('an old thread is not worth a reply', () => {
   assert.ok(gatesHit({ thread: thread({ ageMinutes: 96 * 60 }) }).includes('stale-thread'));
+});
+
+/**
+ * Thread age is judged against the `now` handed in, never the wall clock.
+ *
+ * Until 2026-07-27 `currentAgeHours` read `Date.now()` and `evaluateGates` did not pass its own
+ * `now` down, so this whole suite expired: the fixture thread was collected 2026-07-23T18:00Z
+ * and every "is allowed" assertion here went red once real time passed the 72h ceiling
+ * (`thread is 77h old`). The gates file documents itself as pure; this pins that claim so the
+ * suite cannot rot into red again on a calendar boundary.
+ */
+test('thread age is measured against the injected now, not the wall clock', () => {
+  const collected = thread();   // ageMinutes 120, collectedAt NOW
+
+  // an hour after collection the thread is 3h old — nowhere near the ceiling
+  const fresh = evaluateGates(base({ thread: collected, now: new Date(NOW.getTime() + 3_600_000) }));
+  assert.equal(fresh.allow, true, `blocked by ${JSON.stringify(fresh.blocks)}`);
+
+  // a hundred hours after collection the same thread is past it, from the same inputs
+  const stale = evaluateGates(base({ thread: collected, now: new Date(NOW.getTime() + 100 * 3_600_000) }));
+  assert.ok(stale.blocks.map((b) => b.gate).includes('stale-thread'));
 });
 
 test('a draft written yesterday is re-drafted, not posted', () => {

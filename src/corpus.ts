@@ -65,6 +65,41 @@ export interface CorpusConfig {
    * none of these is not ruled on — silence, not approval.
    */
   jurisdiction: string[];
+  /**
+   * Whether this corpus has standing to ADJUDICATE, i.e. whether Argus Rules 9/10/11 may rule
+   * on its jurisdiction. Defaults to true. A corpus with `rules: false` is still retrieved
+   * from — it can inform drafting — it simply cannot reject anything.
+   *
+   * MEASURED 2026-07-27, replaying `wordpress-primary` over all 216 logged claims: 194 out of
+   * jurisdiction, 6 `covered`, **16 `uncited`**. Rule 9 turns `uncited` into a REJECT, so those
+   * 16 were read by hand. About five are correct kills of the HRC-001 class ("Exceeding
+   * max_allowed_packet triggers the truncation condition" — the manual says the server raises
+   * ER_NET_PACKET_TOO_LARGE and closes the connection). The other eleven are **true** claims
+   * that simply clear no card at the 0.5 term-coverage bar: "WordPress Customize section
+   * includes an Additional CSS text area", "the wp_mail_failed action hook is triggered when
+   * wp_mail() fails".
+   *
+   * A gate that rejects more true claims than false ones is not a gate, and this pipeline has
+   * published nothing — tightening it further is the opposite of the problem. So the corpus
+   * ships without standing and earns it later, on evidence, once its coverage is wide enough
+   * that `uncited` means "we hold the reference material and it does not say this" rather than
+   * "we happen not to have that card". Flipping this to true touches a frozen surface's
+   * behaviour and needs a recorded exception in ENGINE-FREEZE.md.
+   */
+  rules?: boolean;
+  /**
+   * Whether this corpus may be read FROM when drafting a public reply. Defaults to false —
+   * opting in is explicit, because the cost of the wrong corpus here is a reply that drifts
+   * toward whatever the corpus is about.
+   *
+   * The SGEN KB is deliberately not a drafting source. Its own header records why: it holds 17
+   * cards mentioning WordPress and every one says SGEN does not do that thing, so retrieving
+   * from it while answering a WordPress question surfaces weakly-related product cards and
+   * steers the reply toward the product — the exact signal `config.brand.forbidMention` exists
+   * to suppress. It keeps full standing to ADJUDICATE claims about SGEN; that is a different
+   * job and it is good at it.
+   */
+  draftable?: boolean;
   note?: string;
 }
 
@@ -87,6 +122,50 @@ export const BUILT_IN_CORPORA: CorpusConfig[] = [
     note:
       'Human-authored support cards about the SGEN product. Jurisdiction is claims about ' +
       'SGEN only — it knows nothing about WordPress and does not pretend to.'
+  },
+  /**
+   * Primary documentation for the handful of WordPress and MySQL subjects redbot actually
+   * argues about.
+   *
+   * **Jurisdiction is derived from the cards, not from the domain.** That distinction is the
+   * whole design. Rule 9 turns `uncited` into a REJECT, so a corpus that claimed WordPress
+   * generally would put nearly every claim in jurisdiction, hold nothing on most of them, and
+   * reject them — DEFECT-15 inverted, and a tighter handbrake on a pipeline that has published
+   * nothing. So each pattern below names a subject this corpus holds a card on, and the corpus
+   * is silent everywhere else.
+   *
+   * Scope was measured, not guessed: across all 216 claims in `data/certifications.jsonl` the
+   * recurring technical subjects are max_allowed_packet (9), wp_options (6), admin-ajax.php (4),
+   * wp_mail (3), wp-cli (3), WP_DEBUG/WP_DEBUG_LOG. Two of these cards state facts that Argus
+   * derived adversarially during HRC-001 and a human reviewer missed — that error 1153 is
+   * raised rather than the row silently truncated, and that Additional CSS is keyed on the
+   * theme slug — but they are held here on the authority of the published sources they quote,
+   * never on Argus's. Model output as ground truth is HRC-001 one level up.
+   *
+   * `src/test/corpus-jurisdiction.test.ts` fails if any pattern here matches no card.
+   */
+  {
+    id: 'wordpress-primary',
+    label: 'WordPress and MySQL primary documentation',
+    path: 'ground-truth/corpora/wordpress-primary.json',
+    cardsAt: 'cards',
+    fields: { id: 'id', question: 'question', content: 'content' },
+    require: { verified: 'primary' },
+    // Retrieval only, for now. See `rules` on CorpusConfig for the measurement behind this.
+    rules: false,
+    // …but it IS the corpus drafting reads from. That is the whole point of adding it.
+    draftable: true,
+    jurisdiction: [
+      'max_allowed_packet',
+      'er_net_packet_too_large|\\berror\\s*1153\\b',
+      '\\bwp_debug\\b',
+      '\\bwp_mail\\b',
+      'custom_css|additional css',
+      '\\bmysqldump\\b'
+    ],
+    note:
+      'Quoted primary documentation (dev.mysql.com, developer.wordpress.org). Rules only on ' +
+      'the subjects it holds cards for; silent on the rest of WordPress.'
   }
 ];
 
@@ -266,7 +345,167 @@ export function findSupport(claimText: string, c: LoadedCorpus, limit = 3): Supp
     .slice(0, limit);
 }
 
-/** Corpora whose jurisdiction covers this claim. Empty means nobody rules on it. */
+/* ------------------------------------------------------------------ *
+ * Reference lookup — retrieval for DRAFTING, not for adjudication
+ * ------------------------------------------------------------------ */
+
+export interface ReferenceHit {
+  corpusId: string;
+  cardId: string;
+  question: string;
+  content: string;
+  /** Which of the subject's terms this card contains, so the choice is explainable. */
+  matched: string[];
+  /** Summed rarity of the matched terms. Reported so a weak match is visible as weak. */
+  score: number;
+  /** The matched terms that carried the score, rarest first — the reason this card is here. */
+  distinctive: string[];
+}
+
+/**
+ * How much a shared term counts for, by how rare it is across the drafting corpora.
+ *
+ * MEASURED 2026-07-27, and the reason this exists. Ranking by raw count of shared terms put
+ * four SGEN customer-support cards (GMB reviews, billing) at the top for the HRC-001 thread
+ * "Custom CSS missing after Updraft restore", matching on *after*, *site*, *way*, *back*,
+ * *something*. The eight primary-documentation cards that actually cover the subject did not
+ * appear at all, and 56 of 58 collected threads "found a source" — a signal true 97% of the
+ * time, which is DEFECT-15 exactly.
+ *
+ * Rarity fixes it mechanically rather than by extending the stoplist, which would have been a
+ * hand-tuned list drifting out of date the moment the corpus changed. A term in most cards
+ * scores near zero; `max_allowed_packet`, appearing in two cards out of eight, dominates.
+ * Standard inverse document frequency, computed from the loaded cards, cached with them.
+ */
+let idfCache: Map<string, number> | null = null;
+
+function idf(): Map<string, number> {
+  if (idfCache) return idfCache;
+  const df = new Map<string, number>();
+  let n = 0;
+  for (const c of draftingCorpora()) {
+    for (const card of c.cards ?? []) {
+      n++;
+      for (const t of new Set(terms(card.haystack))) df.set(t, (df.get(t) ?? 0) + 1);
+    }
+  }
+  const map = new Map<string, number>();
+  for (const [t, d] of df) map.set(t, Math.log((n + 1) / (d + 1)));
+  idfCache = map;
+  return map;
+}
+
+/**
+ * Minimum summed rarity before a card is worth showing.
+ *
+ * Chosen against the real 58-thread corpus so that "nothing relevant" stays empty — the
+ * honest, common outcome for a narrow corpus — rather than always returning the four
+ * least-bad cards. Recorded here as provisional: it is calibrated, not derived.
+ */
+export const REFERENCE_MIN_SCORE = 2.0;
+
+/**
+ * Cards worth putting in front of the drafter for a given subject.
+ *
+ * Deliberately NOT `findSupport`. That function answers "does this card vouch for this claim?"
+ * and is tuned for a one-sentence claim: three shared terms and half the claim's vocabulary.
+ * A thread title plus body plus eight comments runs to hundreds of terms, so a coverage ratio
+ * over it is meaningless — every card would score near zero and retrieval would return nothing.
+ *
+ * This answers the weaker, different question: "is this card ABOUT something the thread is
+ * about?" It ranks by how many of the subject's terms a card contains. The weaker question is
+ * the honest one for drafting, because the cards are handed over as reference material a human
+ * wrote — never as support for a claim, which is a judgement `findSupport` exists to make and
+ * this one deliberately does not.
+ *
+ * Deterministic: term overlap, stable tie-break, no model call, no embedding. Same inputs, same
+ * cards, every run.
+ */
+export function findReference(subject: string, limit = 4): ReferenceHit[] {
+  const want = terms(subject);
+  if (!want.length) return [];
+  const weight = idf();
+
+  const hits: ReferenceHit[] = [];
+  for (const c of draftingCorpora()) {
+    /**
+     * The corpus only opens if the SUBJECT is inside its jurisdiction.
+     *
+     * MEASURED 2026-07-27. Rarity weighting alone still fired on 41 of 58 threads, and the
+     * matches were nonsense: "Podcast Plugin Recommendation" pulled the max_allowed_packet
+     * card on *able, allow, want*. Inverse document frequency over eight cards cannot measure
+     * how common a word is in English — "able" appears in one card of eight and therefore
+     * scores as rare.
+     *
+     * The fix is the one competence.ts already arrived at from the other direction: generic
+     * vocabulary only counts when an anchor is present. The anchors are already written down
+     * and already tested — they are the corpus's jurisdiction patterns, and
+     * corpus-standing.test.ts proves each of them matches a real card. A thread that never
+     * mentions max_allowed_packet, wp_mail, wp_debug, custom_css/Additional CSS, mysqldump or
+     * error 1153 gets nothing, which for a corpus this narrow is the correct answer almost
+     * every time.
+     */
+    if (!c.jurisdiction.some((re) => re.test(subject))) continue;
+
+    for (const card of c.cards ?? []) {
+      const matched = want.filter((t) => card.haystack.includes(t));
+      // Two terms is the floor: one shared word between a card and a thread is a coincidence.
+      if (matched.length < 2) continue;
+
+      const scored = matched
+        .map((t) => ({ t, w: weight.get(t) ?? 0 }))
+        .sort((a, b) => b.w - a.w || a.t.localeCompare(b.t));
+      const score = scored.reduce((sum, s) => sum + s.w, 0);
+      // Below the floor the card is only sharing common English with the thread. Returning it
+      // anyway is what made retrieval fire on 56 of 58 threads.
+      if (score < REFERENCE_MIN_SCORE) continue;
+
+      hits.push({
+        corpusId: c.config.id,
+        cardId: card.id,
+        question: card.question,
+        content: card.content,
+        matched,
+        score,
+        distinctive: scored.filter((s) => s.w > 0).slice(0, 5).map((s) => s.t)
+      });
+    }
+  }
+
+  return hits
+    .sort((a, b) => b.score - a.score || a.cardId.localeCompare(b.cardId))
+    .slice(0, limit);
+}
+
+/**
+ * Corpora whose jurisdiction covers this claim AND which have standing to rule on it. Empty
+ * means nobody rules on it.
+ *
+ * `rules === false` is excluded here rather than inside Argus on purpose: standing is a
+ * property of the corpus, and certify.ts is a frozen surface. A retrieval-only corpus is
+ * invisible to Phases 9/10/11 and cannot reject, escalate, or certify anything.
+ */
 export function claimsJurisdiction(claimText: string): LoadedCorpus[] {
-  return corpora().filter((c) => c.jurisdiction.some((re) => re.test(claimText)));
+  return corpora().filter(
+    (c) => c.config.rules !== false && c.jurisdiction.some((re) => re.test(claimText))
+  );
+}
+
+/**
+ * Every corpus that can be READ FROM, whether or not it may rule. This is the seam drafting
+ * uses: a corpus with no adjudicating standing can still put a quoted primary source in front
+ * of the drafter, which is the point of having one at all.
+ *
+ * ENGINE-FREEZE.md lists retrieval explicitly under "What is NOT frozen".
+ */
+export function retrievalCorpora(): LoadedCorpus[] {
+  return corpora().filter((c) => c.cards !== null);
+}
+
+/**
+ * The corpora a public reply may be drafted from. Opt-in via `draftable`, so adding a corpus
+ * for adjudication never silently starts steering what redbot writes.
+ */
+export function draftingCorpora(): LoadedCorpus[] {
+  return retrievalCorpora().filter((c) => c.config.draftable === true);
 }

@@ -149,6 +149,26 @@ export const policy = {
   citationMinCoverage: L(
     0.5, 'fraction of claim terms', 'provisional',
     'a card matching under half a claim is about something adjacent; not measured'
+  ),
+
+  /* ---------------- claim budget (craft gate) ---------------- */
+
+  /**
+   * How many unhedged assertions about software behaviour one reply may make.
+   *
+   * `provisional`. Four is a judgement, not a measurement: no labelled set exists relating
+   * assertion count to whether a reply was correct, and one will not exist until published
+   * replies have outcomes. What IS measured is the condition it responds to — 101
+   * `overconfident-language` and 117 `fatal-contradiction` findings across the 16
+   * certifications on record, produced by a prompt that already asks for hedging in writing.
+   *
+   * The number is a ceiling on how much unverified certainty one reply puts in public, and
+   * therefore on how much a human reviewer has to independently check. It is not a claim that
+   * five assertions are wrong and four are right.
+   */
+  unhedgedClaimBudget: L(
+    4, 'unhedged behavioural assertions per reply', 'provisional',
+    'each unhedged claim is a separate thing the reviewer must verify alone; not measured'
   )
 } as const;
 

@@ -211,6 +211,47 @@ contradiction. So a match is reported as `covered` and escalates to a person, ne
 `supported`, and never certifies. A citation layer that hands a false claim a reference is
 HRC-001 with a footnote attached.
 
+### EX-03 · 2026-07-27 · Claim budget — one new limit in `policy.ts`
+
+**Authorised by** Jerome, as P0.2 of the approved "Appilot parity + release the handbrake"
+plan ("cut the claim surface mechanically, not by prompt"). Operator direction.
+
+**Frozen surface touched** — `src/policy.ts` only, one added limit `unhedgedClaimBudget`,
+marked `provisional`. **No existing limit changed, no threshold altered, no rule added,
+reordered or reworded, no Argus module touched.**
+
+**Why it does not perturb the baseline.** The limit is read by exactly one new pure module
+(`src/claims.ts`) through the craft gate, which is not a frozen surface. Measured:
+
+| | before | after |
+|---|---|---|
+| `qa/benchmark/run.mjs` | 4/4 pass | **4/4 pass** |
+| unit tests | 296 | **303** (7 new, 0 changed) |
+| drafts on disk failing the craft gate | 0 of 12 | **0 of 12** |
+| drafts raising the new warning | — | **0 of 12** |
+
+**The finding that changed the design mid-build, recorded rather than buried.** It was
+specified as a gate — warn at the budget, block at double it. Two measurements retired the
+block before it shipped:
+
+1. Across all 12 real drafts the highest unhedged count is **2**, against a budget of 4. The
+   block could not fire on anything that exists.
+2. HRC-001's false sentence — *"Big single-row values like that are the ones most likely to
+   get silently truncated during a SQL import"* — is **hedged**. The budget scores it as
+   careful writing, because it is careful writing; it is simply wrong. **A certainty budget
+   cannot catch a truth failure**, and this one would not have caught the only real failure on
+   record.
+
+So it reports and never blocks. A `provisional` number with no evidence relating assertion
+count to correctness does not get to refuse a publish, least of all on a pipeline whose defect
+is that it has published nothing. Its value is that reviewer load becomes visible now, and
+that there is something to correlate against outcomes once replies have any.
+
+Building it also exposed a defect in its own first draft: the storage pattern matched `is
+stored` but not `are`/`aren't stored`, so it missed *"Custom CSS and Additional CSS aren't
+stored the same way"* — a sentence from the very draft it was written for. Frozen as a
+regression test in `src/test/claims.test.ts`.
+
 ### EX-02 · 2026-07-24 · Domain profile — `competence.ts`
 
 **Authorised by** Jerome, item 4 ("un-hardcode the WordPress domain — keep the 58-thread

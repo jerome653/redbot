@@ -119,6 +119,15 @@ main{overflow-y:auto;overflow-x:hidden}
 .vb.CERTIFIED,.vb.correct,.vb.true,.vb.approved,.vb.yes{background:var(--ok-wash);color:var(--ok);border:1px solid color-mix(in srgb,var(--ok) 45%,transparent)}
 .vb.ESCALATE,.vb.pending,.vb.partial{background:var(--warn-wash);color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 45%,transparent)}
 .vb.unlabelled,.vb.none,.vb.null{background:var(--panel-3);color:var(--dim);border:1px solid var(--line-2)}
+/* Job states. `waiting` is deliberately the same wash as ESCALATE — both mean a person has to
+   act, and reading them as the same colour is correct. `cancelled` is grey, not red: an
+   operator's decision is not a fault. */
+.vb.completed{background:var(--ok-wash);color:var(--ok);border:1px solid color-mix(in srgb,var(--ok) 45%,transparent)}
+.vb.failed{background:var(--bad-wash);color:var(--bad);border:1px solid color-mix(in srgb,var(--bad) 45%,transparent)}
+.vb.waiting,.vb.scheduled{background:var(--warn-wash);color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 45%,transparent)}
+.vb.running{background:var(--panel-4);color:var(--fg);border:1px solid var(--faint)}
+.vb.cancelled{background:var(--panel-3);color:var(--dim);border:1px solid var(--line-2)}
+.btn.on{background:var(--panel-4);border-color:var(--faint);font-weight:500}
 .tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--panel)}
 table{border-collapse:collapse;width:100%;font:12.5px/1.5 var(--mono)}
 th{text-align:left;font:10px/1 var(--mono);color:var(--faint);text-transform:uppercase;letter-spacing:.09em;padding:10px 13px;border-bottom:1px solid var(--line);white-space:nowrap;background:var(--panel-2);position:sticky;top:0;z-index:1}
@@ -383,6 +392,7 @@ const PAGES=[
   {id:'dashboard',label:'Dashboard',icon:'dashboard',grp:'Overview',sub:'system state',kbd:'g d'},
   {id:'timeline',label:'Timeline',icon:'timeline',grp:'Overview',sub:'every certification, chronological'},
   {id:'queue',label:'Queue',icon:'queue',grp:'Overview',sub:'what has been certified, what has not'},
+  {id:'jobs',label:'Jobs',icon:'queue',grp:'Overview',sub:'the work queue for one account',kbd:'g j'},
   {id:'certifications',label:'Certifications',icon:'cert',grp:'Evidence',sub:'full certification records',kbd:'g c'},
   {id:'groundtruth',label:'Ground Truth',icon:'truth',grp:'Evidence',sub:'the human-labelled corpus'},
   {id:'reports',label:'Reports',icon:'report',grp:'Evidence',sub:'generated evidence reports',kbd:'g r'},
@@ -805,11 +815,14 @@ R.queue=async root=>{
     if(!rows.length)return;
     root.append(sec(title,`${rows.length}`));
     const tw=el('div','tw'),t=el('table');
-    t.innerHTML=`<thead><tr><th>draft</th><th>status</th><th>size</th>${pending?'<th>command</th>':'<th>verdict</th><th>claims</th><th>fatal</th>'}</tr></thead>`;
+    t.innerHTML=`<thead><tr><th>draft</th><th>account</th><th>status</th><th>size</th>${pending?'<th>command</th>':'<th>verdict</th><th>claims</th><th>fatal</th>'}</tr></thead>`;
     const tb=el('tbody');
     rows.forEach(r=>{
       const tr=el('tr');
-      let cells=`<td class="mono">${esc(r.id)}</td><td class="tiny">${esc(r.status)}</td><td class="n tiny">${r.bodyChars} ch</td>`;
+      // "unassigned" is shown as its own state, not blank: a draft with no owner is a fact
+      // about older evidence, and a blank cell reads as a rendering gap.
+      const acct=r.account?`<span class="mono tiny">${esc(r.account)}</span>`:'<span class="fnt tiny">unassigned</span>';
+      let cells=`<td class="mono">${esc(r.id)}</td><td>${acct}</td><td class="tiny">${esc(r.status)}</td><td class="n tiny">${r.bodyChars} ch</td>`;
       if(pending){
         cells+=`<td><span class="cli" style="user-select:all">${esc(r.command)}</span></td>`;
       }else{
@@ -827,6 +840,170 @@ R.queue=async root=>{
 };
 
 /* ---------- run history ---------- */
+/* ================================================================== *
+ * JOBS — one account's work queue
+ *
+ * Every value shown here is folded from data/accounts/<handle>/jobs.jsonl by the server.
+ * Nothing is computed a second way and nothing is inferred: a job with no detail shows no
+ * detail rather than a guess at why it is where it is.
+ *
+ * Queueing a job is a POST. Publishing is NOT here and must not arrive here — a publish job
+ * can be queued, but it stops at "waiting" and the send still needs the approval token and a
+ * person, which is the product console's job.
+ * ================================================================== */
+const JOB_STATES=['pending','scheduled','running','waiting','completed','cancelled','failed'];
+
+/** Which account the Jobs page is looking at. Persisted so a reload does not lose the choice. */
+const curAccount=()=>CFG.account||'';
+
+async function jobPost(body){
+  const r=await fetch('/api/job',{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  return r.json();
+}
+
+R.jobs=async root=>{
+  root.innerHTML='<div class="note">Loading…</div>';
+  const acc=await api('/api/accounts');
+  root.textContent='';
+
+  if(!acc.available||!acc.accounts.length){
+    root.append(sec('Jobs',''),html('div','note',
+      '<strong>No data available.</strong> data/accounts.json holds no accounts, so there is no queue to show.'));
+    return;
+  }
+
+  // Default to the first configured account only for DISPLAY. Nothing acts on a guess: every
+  // mutation below sends the handle explicitly, and the CLI refuses without one.
+  if(!curAccount()||!acc.accounts.some(a=>a.handle===curAccount())){
+    CFG.account=acc.accounts[0].handle;saveCfg();
+  }
+
+  /* ---- account switcher ---- */
+  const bar=el('div','row');
+  acc.accounts.forEach(a=>{
+    const b=el('button','btn'+(a.handle===curAccount()?' on':''));
+    b.innerHTML=`<strong>${esc(a.handle)}</strong> <span class="tiny">${esc(a.role||'')}</span>`;
+    b.onclick=()=>{CFG.account=a.handle;saveCfg();const r=ensurePage('jobs');r.dataset.loaded='';r.textContent='';R.jobs(r);r.dataset.loaded='1'};
+    bar.append(b);
+  });
+  root.append(sec('Account',''),bar);
+
+  const me=acc.accounts.find(a=>a.handle===curAccount());
+  if(me){
+    const q=me.quietHours?`quiet ${me.quietHours[0]}:00–${me.quietHours[1]}:00`:'no quiet hours set';
+    root.append(html('div','note',
+      `<code>${esc(me.handle)}</code> · ${esc(me.timezone||'no timezone')} · ${esc(q)} · `+
+      `daily ceiling ${me.dailyCeiling??'—'} · CDP port ${me.debugPort??'—'} · profile <code>${esc(me.profileDir||'—')}</code>`));
+  }
+
+  /* ---- the queue ---- */
+  const data=await api('/api/jobs?account='+encodeURIComponent(curAccount()));
+  if(!data.available){
+    root.append(html('div','note','<strong>No data available.</strong> '+esc(data.reason||'')));
+    return;
+  }
+
+  const c=data.counts||{};
+  const g=el('div','grid c4');
+  g.append(metric('Pending',c.pending||0,'eligible to run',c.pending?'warnv':'zero'),
+    metric('Scheduled',c.scheduled||0,'waiting for their time'),
+    metric('Waiting',c.waiting||0,'blocked on a person',c.waiting?'warnv':'zero'),
+    metric('Completed',c.completed||0,'finished',c.completed?'good':'zero'),
+    metric('Failed',c.failed||0,'ended in an error',c.failed?'bad':'good'));
+  root.append(sec('Queue',curAccount()),g);
+
+  if(c.waiting){
+    root.append(html('div','note',
+      '<strong>“Waiting” is not stuck.</strong> A job in this state has done everything a machine may do '+
+      'and is blocked on a person. Publishing is approved in the product console, where the draft, its '+
+      'certification and the SEND confirmation live together.'));
+  }
+
+  if(!data.jobs.length){
+    root.append(html('div','note','<strong>No jobs yet.</strong> Queue one below, or run <code>redbot job add</code>.'));
+  }else{
+    const tw=el('div','tw'),t=el('table');
+    t.innerHTML='<thead><tr><th>state</th><th>kind</th><th>id</th><th>when</th><th>tries</th><th>detail</th><th></th></tr></thead>';
+    const tb=el('tbody');
+    // Newest first — an operator reads a queue from the top, and the log is oldest-first.
+    [...data.jobs].reverse().forEach(j=>{
+      const tr=el('tr');
+      const when=j.state==='scheduled'&&j.runAt?esc(j.runAt):(j.finishedAt?ago(j.finishedAt):ago(j.createdAt));
+      tr.innerHTML=`<td><span class="vb ${esc(j.state)}">${esc(j.state)}</span></td>`+
+        `<td class="tiny">${esc(j.kind)}</td>`+
+        `<td class="mono tiny">${esc(j.id)}</td>`+
+        `<td class="tiny">${when}</td>`+
+        `<td class="n tiny">${j.attempts||0}</td>`+
+        `<td class="tiny">${esc(j.detail||'')}</td>`;
+      const act=el('td');
+      if(!['completed','cancelled','failed'].includes(j.state)){
+        const x=el('button','btn tiny','Cancel');
+        x.onclick=async()=>{
+          x.disabled=true;x.textContent='…';
+          const r=await jobPost({op:'cancel',account:curAccount(),id:j.id});
+          termSys(r.ok?`cancelled ${j.id}`:`cancel refused: ${r.error||r.err||'unknown'}`);
+          const rt=ensurePage('jobs');rt.dataset.loaded='';rt.textContent='';R.jobs(rt);rt.dataset.loaded='1';
+        };
+        act.append(x);
+      }
+      tr.append(act);tb.append(tr);
+    });
+    t.append(tb);tw.append(t);root.append(tw);
+  }
+
+  /* ---- queue a job ---- */
+  root.append(sec('Queue a job',''));
+  const form=el('div','card');form.style.padding='14px';
+  form.innerHTML=
+    '<div class="row" style="gap:8px;flex-wrap:wrap">'+
+    '<select id="jkind" class="btn">'+
+      ['read','search','opportunity','draft','certify','vote','save','follow','post','reply-comment','publish']
+        .map(k=>`<option value="${k}">${k}</option>`).join('')+
+    '</select>'+
+    '<input id="jarg1" class="btn" placeholder="subreddit / query / permalink" style="min-width:230px">'+
+    '<input id="jarg2" class="btn" placeholder="title / draftId / direction" style="min-width:180px">'+
+    '<input id="jat" class="btn" placeholder="run at (ISO, optional)" style="min-width:190px">'+
+    '<button id="jadd" class="btn">Queue</button>'+
+    '<button id="jwork" class="btn">Run one pass</button>'+
+    '</div>'+
+    '<div class="note" style="margin-top:10px">The fields map to what the kind needs — '+
+    '<code>read</code> takes a subreddit, <code>vote</code> takes a permalink and a direction, '+
+    '<code>post</code> takes a subreddit and a title. A wrong field fails the job with the reason, '+
+    'it does not guess. <strong>Running a pass never publishes.</strong></div>';
+  root.append(form);
+
+  $('#jadd').onclick=async()=>{
+    const kind=$('#jkind').value,a1=$('#jarg1').value.trim(),a2=$('#jarg2').value.trim(),at=$('#jat').value.trim();
+    const body={op:'add',kind,account:curAccount()};
+    if(at)body.at=at;
+    // Field meaning follows the kind, so the operator does not have to learn flag names.
+    if(kind==='read')body.sub=a1;
+    else if(kind==='search'){body.query=a1;if(a2)body.commit=a2}
+    else if(kind==='vote'){body.permalink=a1;body.direction=a2||'up'}
+    else if(kind==='save')body.permalink=a1;
+    else if(kind==='follow')body.target=a1;
+    else if(kind==='post'){body.subreddit=a1;body.title=a2}
+    else if(kind==='reply-comment'){body.permalink=a1;body.comment=a2}
+    else if(kind==='certify'||kind==='publish')body.draft=a1||a2;
+    else if(kind==='draft')body.thread=a1;
+    const r=await jobPost(body);
+    termSys(r.ok?`queued: ${r.cli||kind}`:`refused: ${r.error||r.err||'unknown'}`);
+    if(r.out)termWrite(esc(r.out));
+    const rt=ensurePage('jobs');rt.dataset.loaded='';rt.textContent='';R.jobs(rt);rt.dataset.loaded='1';
+  };
+  $('#jwork').onclick=async()=>{
+    termOpen();termSys(`running one pass for ${curAccount()}…`);
+    const r=await jobPost({op:'work',account:curAccount()});
+    termWrite(esc(r.out||r.err||''));
+    termSys(r.ok?'pass finished — nothing was published':'pass failed');
+    const rt=ensurePage('jobs');rt.dataset.loaded='';rt.textContent='';R.jobs(rt);rt.dataset.loaded='1';
+  };
+};
+
 R.runhistory=async root=>{
   root.innerHTML='<div class="note">Loading…</div>';
   const h=await api('/api/run-history');root.textContent='';
@@ -1513,7 +1690,7 @@ R.settings=async root=>{
   const kb=el('div','card-b');
   // `g v` reaches an engineering surface, so it is listed only when those are shown —
   // a shortcut printed here that silently does nothing is worse than one not printed.
-  [['Ctrl K','command palette'],['/','search everything'],['g d','dashboard'],['g c','certifications'],
+  [['Ctrl K','command palette'],['/','search everything'],['g d','dashboard'],['g j','jobs'],['g c','certifications'],
    ...(CFG.devMode?[['g v','validation']]:[]),['g r','reports'],['Esc','close dialogs'],['`','toggle terminal']]
    .forEach(([key,d])=>kb.append(html('div','kv',`<span class="k">${esc(key)}</span><span class="v mut">${esc(d)}</span>`)));
   k.append(kb);root.append(k);

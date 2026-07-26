@@ -17,6 +17,7 @@
  * approval prompt prints that list rather than implying the machine already decided.
  */
 import type { Thread } from './types.js';
+import { assessClaims } from './claims.js';
 
 export type Severity = 'block' | 'warn';
 
@@ -197,6 +198,35 @@ export function assessQuality(body: string, ctx: QualityContext = {}): QualityRe
   }
   if (words < 25) {
     issues.push({ severity: 'block', code: 'too-short', message: `${words} words — too thin to be worth posting` });
+  }
+
+  /* ---- claim budget ---- */
+  /**
+   * How much unverified certainty this reply puts in public.
+   *
+   * This is the one gate that deliberately disagrees with the rest of the module. Everything
+   * else here rewards specificity and confident, concrete prose, because that is what a good
+   * reply reads like. But specificity about how software behaves is exactly what nothing in
+   * this pipeline can verify, and it is where HRC-001 went wrong: fluent, specific, correctly
+   * hedged in register, and false.
+   *
+   * **Warn only, deliberately.** It was written as a block-at-double-budget gate and the
+   * measurement retired that before it shipped: across all 12 real drafts the highest unhedged
+   * count is 2 against a budget of 4, so the block could never fire, and the one real failure
+   * on record (HRC-001) was *hedged* and false — a certainty budget is not a truth check. A
+   * provisional number with nothing behind it does not get to refuse a publish on a pipeline
+   * whose defect is that it has never published anything.
+   */
+  const claims = assessClaims(body);
+  if (claims.overBudget) {
+    issues.push({
+      severity: 'warn',
+      code: 'claim-budget',
+      message:
+        `${claims.unhedged.length} unhedged claims about how software behaves (budget ${claims.budget}) — ` +
+        `each is something you would have to defend under your own name: ` +
+        `"${claims.unhedged[0]!.text.slice(0, 60)}…"`
+    });
   }
 
   /* ---- register ---- */

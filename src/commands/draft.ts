@@ -24,7 +24,8 @@ import { draftPrompt } from '../prompts.js';
 import { lintDraft } from '../disclosure.js';
 import { checkNovelty } from '../novelty.js';
 import { assessQuality } from '../quality.js';
-import { config } from '../config.js';
+import { findReference } from '../corpus.js';
+import { config, selectedAccount } from '../config.js';
 import { trace } from '../trace.js';
 import { record, say } from '../log.js';
 import type { Draft } from '../types.js';
@@ -87,6 +88,25 @@ export async function draft(threadIdArg?: string): Promise<number> {
     say.step(`What is new: ${pick.thesis.whatNew}`);
   }
   say.step(`Already said: ${gap.covered.length} claim(s) the draft must not restate`);
+
+  /**
+   * Reference material, retrieved before the model is asked anything.
+   *
+   * The subject is the thread as posted — title and body — not the comments. The comments are
+   * what other people believe about it, and retrieving against them would pull cards matching
+   * someone else's wrong guess as readily as the actual problem.
+   *
+   * Empty is the normal outcome and is printed as such: the corpus is narrow by design, so
+   * most threads touch nothing it holds. "0 sources" on screen is the honest signal that this
+   * draft rests entirely on model memory, which is the condition that produced HRC-001.
+   */
+  const reference = findReference(`${thread.title}\n${thread.body}`);
+  say.step(
+    reference.length
+      ? `Sources    : ${reference.length} — ${reference.map((r) => r.cardId).join(', ')}`
+      : 'Sources    : none — nothing in the reference corpora covers this thread, so every ' +
+        'factual claim below comes from model memory'
+  );
   say.step(`Drafting with ${config.llm.draftModel}…`);
 
   let raw: string;
@@ -96,7 +116,8 @@ export async function draft(threadIdArg?: string): Promise<number> {
         thread,
         pick.thesis?.whyThread ?? 'a gap was identified in the discussion',
         pick.thesis?.whatNew ?? 'answer the question directly',
-        { question: gap.question, covered: gap.covered, gaps: gap.gaps }
+        { question: gap.question, covered: gap.covered, gaps: gap.gaps },
+        reference
       ),
       model: config.llm.draftModel,
       maxTokens: 1600,
@@ -156,6 +177,9 @@ export async function draft(threadIdArg?: string): Promise<number> {
     lintIssues: lint.issues,
     createdAt: new Date().toISOString(),
     model: config.llm.draftModel,
+    // Recorded when known, omitted when not. `selectedAccount()` returns null in the
+    // single-profile case, and an absent field is the honest representation of that.
+    ...(selectedAccount()?.handle ? { account: selectedAccount()!.handle } : {}),
     status: 'pending'
   };
   saveDraft(saved);
@@ -195,7 +219,11 @@ export async function draft(threadIdArg?: string): Promise<number> {
     noveltyOk: novelty.ok,
     maxOverlap: Number(novelty.maxOverlap.toFixed(2)),
     qualityOk: quality.ok,
-    opportunityScore: pick.score
+    opportunityScore: pick.score,
+    // Which human-authored sources were in front of the model when it wrote this. An empty
+    // list is the fact worth having on the record, not an omission: it says the draft is
+    // unsourced, and lets a later analysis split contradiction rates by grounded vs not.
+    sources: reference.map((r) => r.cardId)
   });
 
   trace('draft', 'draft.created', {

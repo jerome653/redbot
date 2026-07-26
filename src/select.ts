@@ -186,11 +186,21 @@ export function isQuestionShaped(thread: Pick<Thread, 'title' | 'body'>): { pass
  *
  * Derived from fields that already exist (`ageMinutes` + `collectedAt`). No new state, and
  * every caller that asked the old question now asks the right one.
+ *
+ * `now` is injectable, and that is not a testing convenience. `evaluateGates` documents itself
+ * as a pure function of facts already gathered, but it reached this helper and this helper read
+ * the wall clock, so the gate matrix quietly depended on the day it ran: the gates suite passed
+ * only within 72h of its own fixture date and went red on 2026-07-27 with `thread is 77h old`.
+ * A gate whose result changes while its inputs do not cannot be reasoned about. Defaulted to
+ * `Date.now()` so every production caller behaves exactly as before.
  */
-export function currentAgeHours(thread: Pick<Thread, 'ageMinutes' | 'collectedAt'>): number | null {
+export function currentAgeHours(
+  thread: Pick<Thread, 'ageMinutes' | 'collectedAt'>,
+  now: number = Date.now()
+): number | null {
   if (thread.ageMinutes == null) return null;
   const collected = Date.parse(thread.collectedAt);
-  const sinceCollection = Number.isFinite(collected) ? (Date.now() - collected) / 3_600_000 : 0;
+  const sinceCollection = Number.isFinite(collected) ? (now - collected) / 3_600_000 : 0;
   return thread.ageMinutes / 60 + Math.max(0, sinceCollection);
 }
 

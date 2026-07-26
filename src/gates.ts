@@ -120,6 +120,28 @@ export function evaluateGates(input: GateInput): GateResult {
       gate: 'identity',
       reason: `signed in as ${input.identity.username}, expected ${input.expectedAccount} — wrong account`
     });
+  } else if (
+    input.draft.account &&
+    input.identity.username.toLowerCase() !== input.draft.account.toLowerCase()
+  ) {
+    /**
+     * The draft was written FOR a specific account and this is a different one.
+     *
+     * The check above compares the browser against the account we intend to act as; this one
+     * compares it against the account the reply was written for. They are different questions
+     * and only the second catches the case that matters once drafts are per-account: a reply
+     * composed in one account's voice, about a subject that account is credible on, sent from
+     * another. Accounts differ in role, subject list and standing on each subreddit, so this is
+     * not bookkeeping — it is who the reader thinks is talking.
+     *
+     * Drafts predating the field carry no account and skip this entirely.
+     */
+    blocks.push({
+      gate: 'identity',
+      reason:
+        `this draft was written for ${input.draft.account}, but the browser is signed in as ` +
+        `${input.identity.username} — re-draft it for this account rather than sending it as someone else`
+    });
   }
 
   /* ---- 4. was this thread judged worth replying to ---- */
@@ -181,7 +203,10 @@ export function evaluateGates(input: GateInput): GateResult {
   /* ---- 6. thread age, as it stands now ---- */
   // Was `thread.ageMinutes / 60`, which is the age at COLLECTION time. See currentAgeHours()
   // for the observation: that let a stale thread through the ceiling it was meant to stop.
-  const hours = input.thread ? currentAgeHours(input.thread) : null;
+  // `now` is threaded in rather than left to the wall clock: this function claims to be pure,
+  // and until 2026-07-27 it was not — `currentAgeHours` read `Date.now()`, so the same inputs
+  // produced a different verdict depending on the day the gates ran.
+  const hours = input.thread ? currentAgeHours(input.thread, now.getTime()) : null;
   if (hours != null) {
     if (hours > policy.maxThreadAgeHoursToPublish.value) {
       blocks.push({

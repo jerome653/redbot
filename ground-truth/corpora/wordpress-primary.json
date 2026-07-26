@@ -1,0 +1,64 @@
+{
+  "corpus": "wordpress-primary",
+  "note": "Human-authored primary documentation, quoted rather than paraphrased. Every card records the URL it came from and the date it was read, so a reviewer can check the quote against the source instead of trusting this file. Nothing here is model output: that rule is in corpus.ts and it is the whole reason this corpus is allowed to rule on anything.",
+  "retrieved": "2026-07-27",
+  "scope": "Deliberately narrow. These are the subjects redbot's own claim log actually argues about — measured across all 216 logged claims: max_allowed_packet x9, wp_options x6, admin-ajax.php x4, wp_mail x3, wp-cli x3, WP_DEBUG/WP_DEBUG_LOG. A corpus that claimed the whole WordPress domain would put nearly every claim in jurisdiction and reject the ones it holds nothing on, which is DEFECT-15 inverted.",
+  "cards": [
+    {
+      "id": "wp-primary-packet-too-large",
+      "verified": "primary",
+      "question": "What does MySQL do when a packet is larger than max_allowed_packet?",
+      "source": "https://dev.mysql.com/doc/refman/8.4/en/packet-too-large.html",
+      "content": "MySQL 8.4 Reference Manual B.3.2.8 'Packet Too Large', quoted: \"When a MySQL client or the mysqld server receives a packet bigger than max_allowed_packet bytes, it issues an ER_NET_PACKET_TOO_LARGE error and closes the connection. With some clients, you may also get a 'Lost connection to MySQL server during query' error if the communication packet is too large.\" ER_NET_PACKET_TOO_LARGE is server error 1153, SQLSTATE 08S01. The server RAISES AN ERROR AND CLOSES THE CONNECTION. It does not silently truncate the row and it does not insert an empty value. This is the exact point on which HRC-001's draft was false."
+    },
+    {
+      "id": "wp-primary-packet-defaults",
+      "verified": "primary",
+      "question": "What are the default max_allowed_packet values, and where is it set?",
+      "source": "https://dev.mysql.com/doc/refman/8.4/en/packet-too-large.html",
+      "content": "MySQL 8.4 Reference Manual B.3.2.8, quoted: \"The largest possible packet that can be transmitted to or from a MySQL 8.4 server or client is 1GB.\" \"Both the client and the server have their own max_allowed_packet variable, so if you want to handle big packets, you must increase this variable both in the client and in the server.\" The mysql command-line client default is 16MB; the server default is 64MB. It can be set per invocation (mysql --max_allowed_packet=32M, mysqld --max_allowed_packet=128M) or in an option file under [mysqld]. Quoted: \"It is safe to increase the value of this variable because the extra memory is allocated only when needed.\""
+    },
+    {
+      "id": "wp-primary-custom-css-storage",
+      "verified": "primary",
+      "question": "Where does WordPress store Additional CSS, and how is it looked up?",
+      "source": "https://developer.wordpress.org/reference/functions/wp_get_custom_css_post/",
+      "content": "Additional CSS is not stored in wp_options. wp_get_custom_css_post() fetches a post of post_type 'custom_css'. The published core source queries with: 'post_type' => 'custom_css', 'post_status' => get_post_stati(), 'name' => sanitize_title( $stylesheet ), where $stylesheet defaults to get_stylesheet() (the ACTIVE THEME). The lookup is therefore keyed on the theme's slug via post_name. A consequence that follows directly from the source: if the active theme's stylesheet slug does not match the custom_css post's post_name, the row can be intact in the database and still read as empty in the Customizer. Introduced in WordPress 4.7.0."
+    },
+    {
+      "id": "wp-primary-debug-constants",
+      "verified": "primary",
+      "question": "How do you turn on WordPress debug logging, and what does each constant do?",
+      "source": "https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/",
+      "content": "Set in wp-config.php, quoted from the handbook: define( 'WP_DEBUG', true ) enables debug mode; define( 'WP_DEBUG_LOG', true ) logs to /wp-content/debug.log; define( 'WP_DEBUG_DISPLAY', false ) stops errors interrupting page generation; define( 'SCRIPT_DEBUG', true ) uses dev versions of core JS and CSS. Quoted: \"You must insert this BEFORE /* That's all, stop editing! Happy blogging. */ in the wp-config.php file.\" Quoted: \"It is assumed to be false by default.\" Quoted warning: \"If you set constants to 'false', they will be interpreted as true because the quotes make it a string rather than a boolean.\" Quoted: \"It is not recommended to use WP_DEBUG or the other debug tools on live sites; they are meant for local testing and staging installs.\""
+    },
+    {
+      "id": "wp-primary-debug-behaviour",
+      "verified": "primary",
+      "question": "What actually changes when WP_DEBUG is enabled?",
+      "source": "https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/",
+      "content": "Quoted from the handbook: \"Enabling WP_DEBUG will cause all PHP errors, notices, and warnings to be displayed. This is likely to modify the default behavior of PHP, which only displays fatal errors or shows a white screen of death when errors are reached.\" Quoted: \"Showing all PHP notices and warnings often results in error messages for things that don't seem broken, but do not follow proper data validation conventions inside PHP.\" For logging non-error information the handbook points at PHP's error_log function, noting it \"does not provide properly formatted output by default.\""
+    },
+    {
+      "id": "wp-primary-wp-mail-return",
+      "verified": "primary",
+      "question": "Does a true return from wp_mail() mean the email was delivered?",
+      "source": "https://developer.wordpress.org/reference/functions/wp_mail/",
+      "content": "No. Quoted from the function reference: \"A true return value does not automatically mean that the user received the email successfully. It just only means that the method used was able to process the request without any errors.\" Return type is bool. Signature: wp_mail( $to, $subject, $message, $headers, $attachments ). $to accepts a string or array of addresses; $subject, $message required; $headers, $attachments, $embeds optional."
+    },
+    {
+      "id": "wp-primary-wp-mail-content-type",
+      "verified": "primary",
+      "question": "Why does wp_mail() send plain text instead of HTML, and how is that changed?",
+      "source": "https://developer.wordpress.org/reference/functions/wp_mail/",
+      "content": "Quoted: \"The default content type is text/plain which does not allow using HTML. However, you can set the content type of the email by using the 'wp_mail_content_type' filter.\" Quoted: \"The default charset is based on the charset used on the blog. The charset can be set using the 'wp_mail_charset' filter.\" Sender address and name are filtered through 'wp_mail_from' and 'wp_mail_from_name'. Embedded images for HTML mail are referenced with a cid: URL matching the file's Content-ID, which defaults to the key in the embeds array unless changed via the 'wp_mail_embed_args' filter."
+    },
+    {
+      "id": "wp-primary-mysqldump-options",
+      "verified": "primary",
+      "question": "Where do mysqldump options come from, and what do the common ones do?",
+      "source": "https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html",
+      "content": "MySQL 8.4 Reference Manual, mysqldump. Options \"can be specified on the command line or in the [mysqldump] and [client] groups of an option file\". From the published option table: --add-drop-table adds a DROP TABLE statement before each CREATE TABLE statement; --complete-insert uses complete INSERT statements that include column names; --add-locks surrounds each table dump with LOCK TABLES and UNLOCK TABLES; --compact produces more compact output; --compatible produces output more compatible with other database systems or older MySQL servers."
+    }
+  ]
+}

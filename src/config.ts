@@ -8,7 +8,21 @@ import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(HERE, '..');
-export const DATA = join(ROOT, 'data');
+
+/**
+ * Where working state lives.
+ *
+ * `REDBOT_DATA` exists so a test can point the job store, the account directories and the logs
+ * at a temporary directory. Without it, any test that creates a job writes into the real
+ * `data/` — which is the operator's evidence, is append-only, and feeds health, metrics and the
+ * evidence-campaign gate. A test suite that quietly injects rows into the record it is meant to
+ * be checking is worse than no suite.
+ *
+ * Unset in normal operation, which is every non-test path.
+ */
+export const DATA = process.env.REDBOT_DATA
+  ? join(process.env.REDBOT_DATA)
+  : join(ROOT, 'data');
 
 export const paths = {
   data: DATA,

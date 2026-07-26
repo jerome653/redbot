@@ -20,6 +20,7 @@ import { backupCmd } from './commands/backup.js';
 import { regret } from './commands/regret.js';
 import { certifyCmd } from './commands/certify.js';
 import { auto } from './commands/auto.js';
+import { jobList, jobAdd, jobCancel, work } from './commands/job.js';
 import {
   healthCmd, metricsCmd, policyCmd, selectCmd, reviewCmd, reportCmd, insightsCmd
 } from './commands/status.js';
@@ -98,7 +99,15 @@ Environment:
  * pending draft instead of the one named — a human approving specific text, sent to the wrong
  * comment. See the evaluation's H8.
  */
-export const VALUE_FLAGS = new Set(['kind', 'sub', 'checkpoint', 'limit', 'every', 'commit']);
+export const VALUE_FLAGS = new Set([
+  'kind', 'sub', 'checkpoint', 'limit', 'every', 'commit',
+  // job/queue flags. `account` matters most: omitting it here would make
+  // `redbot job list --account docs-architect` read "docs-architect" as a positional filter
+  // and then act on whatever REDBOT_ACCOUNT happened to be — the wrong queue, silently.
+  'account', 'state', 'at', 'after', 'attempts', 'note',
+  'permalink', 'direction', 'target', 'query', 'subreddit', 'title', 'body',
+  'draft', 'thread', 'comment'
+]);
 
 export interface ParsedArgs {
   flags: Set<string>;
@@ -166,6 +175,54 @@ async function main(): Promise<number> {
     }
 
     case 'certify':  return certifyCmd(positional[0], { override: flags.has('--override') });
+
+    /**
+     * The queue. `job` is the noun surface the workstation drives; `work` is the engine.
+     * Kept as one CLI so there is a single implementation of queue rules, whether the
+     * operator is clicking in the console or typing here.
+     */
+    case 'job': {
+      const sub = positional[0];
+      const account = flagValue('account');
+      if (sub === 'list' || sub === undefined) return jobList(account, flagValue('state'));
+      if (sub === 'cancel') {
+        if (!positional[1]) { say.fail('Which job? `redbot job cancel <id>`'); return 1; }
+        return jobCancel(positional[1], account);
+      }
+      if (sub === 'add') {
+        const kind = positional[1];
+        if (!kind) { say.fail('Which kind? `redbot job add <kind> [--flags]`'); return 1; }
+        // Flag names are mapped to the argument names the runners read, so the CLI surface
+        // stays readable (`--thread abc`) without the runners inventing their own vocabulary.
+        const map: Array<[string, string]> = [
+          ['permalink', 'permalink'], ['direction', 'direction'], ['target', 'target'],
+          ['query', 'query'], ['commit', 'commit'], ['subreddit', 'subreddit'],
+          ['title', 'title'], ['body', 'body'], ['draft', 'draftId'], ['thread', 'threadId'],
+          ['comment', 'commentId'], ['at', 'runAt'], ['after', 'after'],
+          ['attempts', 'maxAttempts'], ['every', 'everyMinutes'], ['note', 'note'],
+          ['sub', 'subreddit']
+        ];
+        const jobArgs: Record<string, string> = {};
+        for (const [flag, key] of map) {
+          const v = flagValue(flag);
+          if (v !== undefined) jobArgs[key] = v;
+        }
+        if (flags.has('--unsave')) jobArgs.saved = 'false';
+        if (flags.has('--unfollow')) jobArgs.following = 'false';
+        return jobAdd(kind, jobArgs, account);
+      }
+      say.fail(`Unknown: redbot job ${sub}. Use list, add or cancel.`);
+      return 1;
+    }
+
+    case 'work': {
+      const every = Number(flagValue('every'));
+      return work({
+        ...(flagValue('account') ? { account: flagValue('account')! } : {}),
+        ...(Number.isFinite(every) && every > 0 ? { everyMinutes: every } : {}),
+        once: !flags.has('--loop') && !(Number.isFinite(every) && every > 0)
+      });
+    }
     case 'auto': {
       const every = Number(flagValue('every'));
       return auto({

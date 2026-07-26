@@ -139,6 +139,107 @@ const readJson = (p) => {
   try { return JSON.parse(readFileSync(abs, 'utf8')); } catch { return null; }
 };
 
+/* ------------------------------------------------------------------ *
+ * Accounts and their queues
+ *
+ * Read straight off disk, never recomputed. `accounts.json` is configuration a person wrote;
+ * `data/accounts/<handle>/jobs.jsonl` is an append-only log the CLI writes. This console folds
+ * the log to current state for display and does nothing else to it — every mutation goes back
+ * through `node dist/cli.js job ...`, so the queue has exactly one implementation.
+ * ------------------------------------------------------------------ */
+
+const HANDLE_RE = /^[A-Za-z0-9_-]{1,40}$/;
+
+function accounts() {
+  const cfg = readJson('data/accounts.json');
+  const list = Array.isArray(cfg?.accounts) ? cfg.accounts : [];
+  return {
+    available: Boolean(cfg),
+    accounts: list.map((a) => ({
+      handle: a.handle,
+      role: a.role ?? null,
+      subreddits: a.subreddits ?? [],
+      timezone: a.timezone ?? null,
+      quietHours: a.quietHours ?? null,
+      dailyCeiling: a.dailyCeiling ?? null,
+      debugPort: a.debugPort ?? null,
+      profileDir: a.profileDir ?? null
+    }))
+  };
+}
+
+/** Fold the append-only job log to current state. Last write per id wins. */
+function jobsFor(handle) {
+  if (!HANDLE_RE.test(handle ?? '')) return { available: false, reason: 'not a usable account handle', jobs: [] };
+  const abs = join(ROOT, 'data', 'accounts', handle, 'jobs.jsonl');
+  if (!existsSync(abs)) {
+    return { available: true, jobs: [], counts: emptyCounts(), reason: 'no jobs yet' };
+  }
+  const byId = new Map();
+  for (const line of readFileSync(abs, 'utf8').split('\n')) {
+    const s = line.trim();
+    if (!s) continue;
+    try { const j = JSON.parse(s); byId.set(j.id, j); } catch { /* torn line */ }
+  }
+  const jobs = [...byId.values()];
+  const counts = emptyCounts();
+  for (const j of jobs) if (j.state in counts) counts[j.state]++;
+  return { available: true, jobs, counts };
+}
+
+function emptyCounts() {
+  return { pending: 0, scheduled: 0, running: 0, waiting: 0, completed: 0, cancelled: 0, failed: 0 };
+}
+
+/**
+ * Queue mutations, routed through the CLI.
+ *
+ * Publishing is deliberately absent: a `publish` job can be QUEUED here (it stops at `waiting`)
+ * but sending it still needs the approval token and a person, exactly as before. Nothing in
+ * this file can complete a publish.
+ */
+async function jobMutate(body) {
+  const handle = String(body?.account ?? '');
+  if (!HANDLE_RE.test(handle)) return { ok: false, error: 'which account?' };
+
+  const op = String(body?.op ?? '');
+  if (op === 'cancel') {
+    const id = String(body?.id ?? '');
+    if (!/^[A-Za-z0-9_]{1,60}$/.test(id)) return { ok: false, error: 'that is not a job id' };
+    const r = await runCli(['job', 'cancel', id, '--account', handle]);
+    return { ok: r.code === 0, ...r };
+  }
+
+  if (op === 'add') {
+    const kind = String(body?.kind ?? '');
+    if (!/^[a-z-]{1,20}$/.test(kind)) return { ok: false, error: 'that is not a job kind' };
+    const args = ['job', 'add', kind, '--account', handle];
+    // Only known flags are forwarded, and each value is passed as its own argv entry — never
+    // interpolated into a string — so nothing here can become a second command.
+    const allowed = ['permalink', 'direction', 'target', 'query', 'commit', 'subreddit',
+                     'title', 'body', 'draft', 'thread', 'comment', 'at', 'after',
+                     'attempts', 'every', 'note', 'sub'];
+    for (const key of allowed) {
+      const v = body?.[key];
+      if (v === undefined || v === null || v === '') continue;
+      args.push(`--${key}`, String(v));
+    }
+    if (body?.unsave) args.push('--unsave');
+    if (body?.unfollow) args.push('--unfollow');
+    const r = await runCli(args);
+    return { ok: r.code === 0, cli: `redbot ${args.join(' ')}`, ...r };
+  }
+
+  if (op === 'work') {
+    // One pass, on demand. The looping worker is started from a terminal on purpose: a
+    // long-running browser-driving process should not be owned by a web request.
+    const r = await runCli(['work', '--account', handle]);
+    return { ok: r.code === 0, cli: `redbot work --account ${handle}`, ...r };
+  }
+
+  return { ok: false, error: `unknown queue operation "${op}"` };
+}
+
 async function chromeStatus() {
   try {
     const r = await fetch('http://127.0.0.1:9222/json/version', { signal: AbortSignal.timeout(1500) });
@@ -598,6 +699,9 @@ function queue() {
     const c = done.get(d.id);
     return {
       id: d.id, threadId: d.threadId, title: d.title ?? null,
+      // Null, not a default. A draft written before drafts recorded an owner has no owner, and
+      // filling one in here would attribute existing evidence to whoever is selected today.
+      account: d.account ?? null,
       status: d.status, bodyChars: (d.body ?? '').length,
       createdAt: d.createdAt ?? null,
       certified: Boolean(c),
@@ -832,6 +936,19 @@ function fetchSiteOk(req) {
   const s = req.headers['sec-fetch-site'];
   return s === undefined || s === 'same-origin' || s === 'none';
 }
+/**
+ * An Origin header, when present, must be this console. Absent is allowed — a non-browser
+ * client on loopback sends none — but a present-and-foreign Origin is a cross-site caller and
+ * is refused outright.
+ */
+function originIsLocal(o) {
+  try {
+    const h = new URL(String(o)).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+  } catch {
+    return false;
+  }
+}
 
 const server = createServer(async (req, res) => {
   const u = new URL(req.url, `http://127.0.0.1:${PORT}`);
@@ -839,6 +956,43 @@ const server = createServer(async (req, res) => {
   try {
     if (!hostIsLocal(req.headers.host) || !fetchSiteOk(req)) {
       return json(res, 403, { error: 'refused: this console only answers same-origin requests addressed to localhost' });
+    }
+
+    /**
+     * Queue mutations. POST only, JSON only.
+     *
+     * The GET surface is read-only and stays that way: a queue operation that could be driven
+     * by `<img src="...">` from any page the operator has open is the same class of hole the
+     * loopback guard above was added for. A cross-site page cannot send content-type
+     * application/json without a preflight the browser will block, and cannot forge a loopback
+     * Origin, so requiring both closes it.
+     */
+    if (req.method === 'POST' && p === '/api/job') {
+      const ct = String(req.headers['content-type'] ?? '');
+      if (!ct.includes('application/json')) {
+        return json(res, 415, { error: 'queue operations must be sent as application/json' });
+      }
+      const origin = req.headers.origin;
+      if (origin && !originIsLocal(origin)) {
+        return json(res, 403, { error: 'refused: cross-origin queue operation' });
+      }
+      const chunks = [];
+      for await (const c of req) {
+        chunks.push(c);
+        // A queue instruction is a few hundred bytes; anything larger is not one.
+        if (chunks.reduce((n, b) => n + b.length, 0) > 64_000) {
+          return json(res, 413, { error: 'request body too large for a queue operation' });
+        }
+      }
+      let body;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
+      catch { return json(res, 400, { error: 'body is not readable JSON' }); }
+      const r = await jobMutate(body);
+      return json(res, r.ok ? 200 : 400, r);
+    }
+
+    if (req.method !== 'GET') {
+      return json(res, 405, { error: `${req.method} is not supported here` });
     }
     if (p === '/' || p === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
@@ -878,6 +1032,8 @@ const server = createServer(async (req, res) => {
     if (p === '/api/search')    return json(res, 200, search(u.searchParams.get('q') ?? '', Number(u.searchParams.get('limit') ?? 200)));
     if (p === '/api/timeline')  return json(res, 200, timeline());
     if (p === '/api/queue')     return json(res, 200, queue());
+    if (p === '/api/accounts')  return json(res, 200, accounts());
+    if (p === '/api/jobs')      return json(res, 200, jobsFor(u.searchParams.get('account') ?? ''));
     if (p === '/api/run-history') return json(res, 200, runHistory());
     if (p === '/api/activity')  return json(res, 200, { events: activity(Number(u.searchParams.get('n') ?? 40)) });
     if (p === '/api/charts')    return json(res, 200, charts());

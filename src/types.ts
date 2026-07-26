@@ -96,6 +96,19 @@ export interface Draft {
   lintIssues: string[];
   createdAt: string;
   model: string;
+  /**
+   * Which account this draft was written for.
+   *
+   * Optional because every draft written before 2026-07-27 predates the field, and a draft with
+   * no account is shown as unassigned rather than quietly attributed to whoever is selected now
+   * — inventing an owner for existing evidence is worse than admitting it was never recorded.
+   *
+   * Accounts differ in what they credibly speak to (`accounts.json` gives each one a role and a
+   * subject list) and in their standing on each subreddit. A pool of drafts with no owner means
+   * the operator picks which account sends which reply at approval time, from memory. This
+   * records the intent at the moment it existed.
+   */
+  account?: string;
   status: 'pending' | 'approved' | 'rejected' | 'published' | 'failed';
   /**
    * The Argus verdict, persisted onto the draft by `redbot certify` so the publish gate can
@@ -118,6 +131,21 @@ export interface Draft {
 }
 
 export type HistoryKind =
+  /**
+   * Job lifecycle, written by the scheduler. Only the events an operator has to act on are
+   * recorded: work that was interrupted and requeued, a retry, and a final failure. Routine
+   * state changes stay in the per-account job log — history feeds the health state machine and
+   * the reliability metrics, and filling it with every transition would drown both.
+   */
+  | 'job.recovered'
+  | 'job.retry'
+  | 'job.failed'
+  /**
+   * A browser action a job performed — vote, save, follow, post, reply-to-comment. These DO
+   * belong in history rather than only in the job log: they are things this account did on
+   * Reddit, which is exactly what the account record exists to hold.
+   */
+  | 'job.action'
   | 'login'
   /** an attempted sign-in that Reddit refused — feeds the health state machine */
   | 'login.fail'

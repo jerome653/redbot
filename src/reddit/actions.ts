@@ -1,0 +1,370 @@
+/**
+ * Write actions beyond the top-level comment: replying to a comment, submitting a post,
+ * voting, saving and following.
+ *
+ * `post.ts` stays what it was — the comment publish path, unchanged, with its own confirmation
+ * and its own history rows. This module is the rest of the operator's hands, and every function
+ * here follows the same three rules it established:
+ *
+ *   1. **Confirm from the page, never from the click.** A control that was clicked is not an
+ *      action that happened. Where Reddit exposes state (`aria-pressed`, a label that flips
+ *      from Save to Unsave) it is read back; where it does not, the result says so rather than
+ *      reporting success it cannot see.
+ *   2. **Absence refuses.** A control that cannot be found returns `ok: false` with the reason.
+ *      No fallbacks that "probably" hit the right element.
+ *   3. **The caller logs.** These take a page and return a result; history and job state are
+ *      the caller's business, so the same function is usable from a job runner, the CLI, or a
+ *      test without any of them inheriting the others' side effects.
+ *
+ * ⚠ The selectors these depend on are marked UNVERIFIED in `selectors.ts` — written from
+ * Reddit's component names, never resolved against a live signed-in DOM. The failure mode is
+ * "control not found → refuse", which is safe, but the first live run should confirm each one.
+ */
+import type { Page, Locator } from 'playwright';
+import { sel } from './selectors.js';
+import { firstVisible } from './scrape.js';
+import { pause, sleep, typingDelay } from '../pacing.js';
+
+export interface ActionResult {
+  ok: boolean;
+  error?: string;
+  /** What the page showed afterwards, when it showed anything. Absent = could not confirm. */
+  confirmed?: boolean;
+  url?: string;
+  /** For submissions: the permalink of what was created, when Reddit exposes it. */
+  permalink?: string;
+}
+
+async function typeHuman(page: Page, text: string): Promise<void> {
+  for (const ch of text) {
+    await page.keyboard.type(ch);
+    await sleep(typingDelay());
+  }
+}
+
+/** First matching control inside a scope, or null. Mirrors `firstVisible` for sub-trees. */
+async function within(scope: Locator, candidates: readonly string[]): Promise<Locator | null> {
+  for (const c of candidates) {
+    const found = scope.locator(c).first();
+    try {
+      if (await found.isVisible({ timeout: 800 })) return found;
+    } catch { /* not present in this scope */ }
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Replying to a comment
+ * ------------------------------------------------------------------ */
+
+/**
+ * Reply to one comment rather than to the post.
+ *
+ * `publishComment` always writes a top-level reply, because it opens the page composer. Answering
+ * a specific person needs the composer that belongs to their comment, so the comment is located
+ * first and every control is scoped inside it. A reply that lands in the wrong place is not a
+ * cosmetic error — it answers someone who did not ask.
+ */
+export async function replyToComment(
+  page: Page,
+  permalink: string,
+  commentId: string,
+  body: string
+): Promise<ActionResult> {
+  try {
+    await page.goto(permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await pause();
+
+    const comment = page
+      .locator(`${sel.commentNode[0]}[thingid="${commentId}"], ${sel.commentNode[0]}[id="${commentId}"]`)
+      .first();
+    if (!(await comment.isVisible({ timeout: 3000 }).catch(() => false))) {
+      return { ok: false, error: `comment ${commentId} is not on the page — deleted, collapsed, or on another page of comments` };
+    }
+
+    const replyBtn = await within(comment, sel.commentReplyButton);
+    if (!replyBtn) return { ok: false, error: 'no reply control on that comment — thread locked, or archived' };
+    await replyBtn.click();
+    await pause();
+
+    // The composer opens inside the comment's own subtree; taking a page-level editor here is
+    // how a reply ends up attached to the post instead of the person.
+    const editor = await within(comment, sel.commentEditor);
+    if (!editor) return { ok: false, error: 'the reply composer did not open on that comment' };
+
+    await editor.click();
+    await sleep(400);
+    await typeHuman(page, body);
+    await pause();
+
+    const submit = await within(comment, sel.commentSubmit);
+    if (!submit) return { ok: false, error: 'no submit control in the reply composer' };
+    await submit.click();
+    await sleep(3500);
+
+    const landed = await comment.innerText()
+      .then((t) => t.replace(/\s+/g, ' ').includes(body.replace(/\s+/g, ' ').slice(0, 60)))
+      .catch(() => false);
+
+    return { ok: true, url: page.url(), confirmed: landed };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Submitting a post
+ * ------------------------------------------------------------------ */
+
+export interface SubmitPostInput {
+  subreddit: string;
+  title: string;
+  body: string;
+}
+
+/**
+ * Submit a text post to a subreddit.
+ *
+ * Deliberately does not handle flair. Subreddits that require it will refuse the submission,
+ * and that refusal is reported as-is — guessing a flair is choosing how a post is categorised
+ * in a community, which is an editorial decision and not one to make from a selector list.
+ */
+export async function submitPost(page: Page, input: SubmitPostInput): Promise<ActionResult> {
+  try {
+    const url = `https://www.reddit.com/r/${input.subreddit}/submit/?type=TEXT`;
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await pause();
+
+    const title = await firstVisible(page, sel.postTitleField);
+    if (!title) {
+      return { ok: false, error: 'the submit form did not load — signed out, or this subreddit does not accept text posts' };
+    }
+    await title.click();
+    await typeHuman(page, input.title);
+    await pause();
+
+    const bodyField = await firstVisible(page, sel.postBodyField);
+    if (!bodyField) return { ok: false, error: 'no body field on the submit form' };
+    await bodyField.click();
+    await sleep(400);
+    await typeHuman(page, input.body);
+    await pause();
+
+    const submit = await firstVisible(page, sel.postSubmitButton);
+    if (!submit) return { ok: false, error: 'no submit control on the form' };
+
+    const before = page.url();
+    await submit.click();
+    await sleep(4000);
+
+    /**
+     * Reddit navigates to the created post on success. If the URL has not moved off the submit
+     * form, the submission was refused — most often a missing required flair, a karma or
+     * account-age minimum, or an automod rule. Reporting "submitted" here would be the
+     * shadow-removal failure with an extra step.
+     */
+    const after = page.url();
+    if (after.includes('/submit')) {
+      return {
+        ok: false,
+        url: after,
+        error: 'still on the submit form after posting — the subreddit refused it (flair required, karma or age minimum, or automod)'
+      };
+    }
+
+    return { ok: true, url: after, permalink: after, confirmed: after !== before };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Voting
+ * ------------------------------------------------------------------ */
+
+export type VoteDirection = 'up' | 'down';
+
+/**
+ * Vote on a post.
+ *
+ * Reddit's vote buttons are toggles and expose `aria-pressed`, so the state is read before and
+ * after. Voting when the target is already in that state would silently REMOVE the vote — the
+ * opposite of what was asked — so an already-voted target is reported as already voted and left
+ * alone.
+ *
+ * Caller obligations this function cannot enforce on its own: never vote on another configured
+ * account's content (`accounts.json`), and never vote as part of an automated pass. Both are
+ * enforced by the job layer, which knows what the other accounts are; this function only knows
+ * about a page.
+ */
+export async function votePost(
+  page: Page,
+  permalink: string,
+  direction: VoteDirection
+): Promise<ActionResult> {
+  try {
+    await page.goto(permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await pause();
+
+    /**
+     * Scope to the post before looking for a vote button.
+     *
+     * MEASURED LIVE 2026-07-27: on a post detail page `button[upvote]` matches **5** elements —
+     * index 0 belongs to `shreddit-post`, indices 1-4 to `shreddit-comment-action-row`. An
+     * unscoped `.first()` is therefore one DOM reordering away from upvoting a random comment
+     * instead of the post, which is a wrong public action with no error to notice.
+     *
+     * The first live attempt also failed outright: `locator.click: Timeout 30000ms exceeded —
+     * waiting for element to be visible, enabled and stable`, on an element that was visible
+     * and enabled. Scoping plus an explicit scroll fixed it, verified by aria-pressed going
+     * false → true on r/Wordpress as docs-architect.
+     */
+    const postScope = page.locator(sel.postUnit[0]).first();
+    const candidates = direction === 'up' ? sel.upvoteButton : sel.downvoteButton;
+    const button = (await within(postScope, candidates)) ?? (await firstVisible(page, candidates));
+    if (!button) return { ok: false, error: `no ${direction}vote control on the page — signed out, or the post is archived` };
+
+    // Reddit renders the action bar below the fold on a long post; the actionability check
+    // fails on an element the viewport has never reached.
+    await button.scrollIntoViewIfNeeded().catch(() => { /* already in view */ });
+    await sleep(600);
+
+    const pressedBefore = await button.getAttribute('aria-pressed').catch(() => null);
+    if (pressedBefore === 'true') {
+      return {
+        ok: true,
+        confirmed: true,
+        url: page.url(),
+        error: `already ${direction}voted — clicking again would remove the vote, so nothing was done`
+      };
+    }
+
+    await button.click();
+    await sleep(1200);
+
+    const pressedAfter = await button.getAttribute('aria-pressed').catch(() => null);
+    return {
+      ok: true,
+      url: page.url(),
+      ...(pressedAfter === null ? {} : { confirmed: pressedAfter === 'true' })
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Save / unsave
+ * ------------------------------------------------------------------ */
+
+export async function setSaved(page: Page, permalink: string, saved: boolean): Promise<ActionResult> {
+  try {
+    await page.goto(permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await pause();
+
+    // Scoped to the post: a detail page has one overflow menu per post AND one per comment.
+    const postScope = page.locator(sel.postUnit[0]).first();
+    const menu = (await within(postScope, sel.overflowMenu)) ?? (await firstVisible(page, sel.overflowMenu));
+    if (!menu) return { ok: false, error: 'no overflow menu on the post' };
+
+    await menu.scrollIntoViewIfNeeded().catch(() => { /* already in view */ });
+    await sleep(400);
+    // The host element is not itself clickable; its trigger is the button inside it.
+    const trigger = menu.locator('button').first();
+    await trigger.click({ timeout: 10_000 });
+    await pause();
+
+    /**
+     * Pick the item by its exact label, in code.
+     *
+     * The menu shows exactly one of Save / Unsave, so the label that is present also reports
+     * the current state. Matching is done here rather than in a selector because `:has-text`
+     * is a substring test — "Save" matches "Unsave" — and `:text-is` fails on these items,
+     * which wrap their label in nested markup. Both were measured live on 2026-07-27.
+     */
+    /**
+     * MEASURED LIVE 2026-07-27: the un-save label is **"Remove from saved"**, not "Unsave".
+     * Verified by saving a post through this code path and re-reading the menu, which went from
+     * ["Follow post","Award this post","Save","Hide","Report"] to
+     * ["Follow post","Award this post","Remove from saved","Hide","Report"].
+     * "Unsave" is kept as an accepted alternative for older or A/B'd markup.
+     */
+    const SAVE_LABELS = ['save'];
+    const UNSAVE_LABELS = ['remove from saved', 'unsave'];
+    const wanted = saved ? SAVE_LABELS : UNSAVE_LABELS;
+    const items = page.locator(sel.overflowMenuItem[0]!);
+    const n = await items.count();
+    let target: Locator | null = null;
+    const labels: string[] = [];
+
+    for (let i = 0; i < n; i++) {
+      const item = items.nth(i);
+      const text = (await item.innerText().catch(() => ''))
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+      if (text) labels.push(text);
+      if (wanted.includes(text)) { target = item; break; }
+    }
+
+    if (!target) {
+      // Not a failure: the opposite label being present is how Reddit reports the current state.
+      const opposite = saved ? UNSAVE_LABELS : SAVE_LABELS;
+      const alreadyThere = labels.some((l) => opposite.includes(l));
+      await page.keyboard.press('Escape').catch(() => { /* menu may already be closed */ });
+      return {
+        ok: alreadyThere,
+        confirmed: alreadyThere,
+        ...(alreadyThere
+          ? { error: `already ${saved ? 'saved' : 'not saved'} — the menu offers "${opposite}"` }
+          : { error: `no "${wanted}" item in the overflow menu (saw: ${labels.join(', ') || 'nothing'})` })
+      };
+    }
+
+    await target.click({ timeout: 10_000 });
+    await sleep(1500);
+    return { ok: true, url: page.url() };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Follow / unfollow
+ * ------------------------------------------------------------------ */
+
+/**
+ * Follow or unfollow a user or a subreddit.
+ *
+ * `target` is a path fragment — `user/somebody` or `r/WordPress` — because the control is the
+ * same component on both surfaces and the only difference is which page it sits on.
+ */
+export async function setFollowing(
+  page: Page,
+  target: string,
+  following: boolean
+): Promise<ActionResult> {
+  if (!/^(?:user|r)\/[A-Za-z0-9_-]{1,40}$/.test(target)) {
+    return { ok: false, error: `"${target}" is not a user/<name> or r/<name> path` };
+  }
+  try {
+    await page.goto(`https://www.reddit.com/${target}/`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await pause();
+
+    const want = following ? sel.followButton : sel.unfollowButton;
+    const button = await firstVisible(page, want);
+    if (!button) {
+      return {
+        ok: true,
+        confirmed: true,
+        error: `no "${following ? 'Follow' : 'Unfollow'}" control — already ${following ? 'following' : 'not following'}`
+      };
+    }
+
+    await button.click();
+    await sleep(1500);
+    return { ok: true, url: page.url() };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
