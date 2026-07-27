@@ -16,6 +16,7 @@ import {
   checkWarmingComment, checkWarmingPace, isWarmingTarget,
   WARMING_MAX_WORDS
 } from '../warming.js';
+import { policy } from '../policy.js';
 
 const GOOD =
   'Check the error log first — a 502 right after a PHP upgrade is usually a fatal in a plugin ' +
@@ -100,15 +101,39 @@ test('a first-ever comment has no spacing to violate', () => {
 
 /* ---- targets ---- */
 
+/**
+ * The age ceiling is read from policy, not hardcoded here.
+ *
+ * The first version of this test asserted a literal 2h, which is how warming shipped with a
+ * rule that found zero threads on every run: measured 2026-07-27, r/WordPress `/new`'s youngest
+ * post was 6.1h old, so nothing could ever qualify. Asserting the literal would have kept the
+ * test green while the feature was inert — the shape of failure this whole session keeps
+ * finding. It now asserts the BEHAVIOUR either side of whatever the limit is.
+ */
 test('threads are chosen for being read, not for being easy', () => {
-  // under 2h with few answers — the whole point
+  const maxAge = policy.warmingMaxThreadAgeHours.value;
+  const maxAnswers = policy.warmingMaxAnswers.value;
+
+  // comfortably inside both limits — the whole point
   assert.equal(isWarmingTarget({ ageHours: 1, commentCount: 2, subreddit: 'WordPress', title: 't' }).ok, true);
 
-  // past 2h a comment is buried and earns nothing
-  assert.equal(isWarmingTarget({ ageHours: 6, commentCount: 1, subreddit: 'WordPress', title: 't' }).ok, false);
+  // just inside the age ceiling still qualifies
+  assert.equal(
+    isWarmingTarget({ ageHours: maxAge - 0.5, commentCount: 1, subreddit: 'WordPress', title: 't' }).ok,
+    true
+  );
 
-  // the eleventh voice in a crowded thread is invisible
-  assert.equal(isWarmingTarget({ ageHours: 1, commentCount: 40, subreddit: 'WordPress', title: 't' }).ok, false);
+  // past it, a comment is buried and earns nothing
+  assert.equal(
+    isWarmingTarget({ ageHours: maxAge + 1, commentCount: 1, subreddit: 'WordPress', title: 't' }).ok,
+    false
+  );
+
+  // one voice in a crowd is invisible
+  assert.equal(
+    isWarmingTarget({ ageHours: 1, commentCount: maxAnswers + 1, subreddit: 'WordPress', title: 't' }).ok,
+    false
+  );
 
   // unknown age fails closed — we cannot tell whether it would be read
   assert.equal(isWarmingTarget({ ageHours: null, commentCount: 0, subreddit: 'WordPress', title: 't' }).ok, false);

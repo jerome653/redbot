@@ -12,7 +12,14 @@ import { saveThreads } from '../store.js';
 import { record, say } from '../log.js';
 import type { Thread } from '../types.js';
 
-export async function read(subreddit: string | undefined, limit?: number): Promise<number> {
+/**
+ * `sort` matters more than it looks. The default `hot` feed is where warming goes to die:
+ * measured 2026-07-27, the YOUNGEST thread in r/WordPress's hot feed was 2.7h old, because a
+ * thread has to accumulate engagement before it becomes hot. The warming protocol wants threads
+ * under 2h — so from `hot`, the rule can never be satisfied and `warmup` reports zero targets
+ * forever. Fresh threads live in `new`.
+ */
+export async function read(subreddit: string | undefined, limit?: number, sort = 'hot'): Promise<number> {
   if (!subreddit) {
     say.fail('Usage: redbot read <subreddit>');
     return 1;
@@ -20,7 +27,7 @@ export async function read(subreddit: string | undefined, limit?: number): Promi
   const name = subreddit.replace(/^\/?r\//i, '');
   const max = limit ?? config.limits.maxThreadsPerRead;
 
-  say.head(`redbot read r/${name}`);
+  say.head(`redbot read r/${name}` + (sort === 'hot' ? '' : ` · ${sort}`));
   if (!(await isBrowserUp())) {
     say.fail(new NoBrowserError(config.browser.cdpEndpoint).message);
     return 1;
@@ -29,7 +36,7 @@ export async function read(subreddit: string | undefined, limit?: number): Promi
   const threads: Thread[] = [];
 
   try {
-    await openSubreddit(s.page, name);
+    await openSubreddit(s.page, name, sort);
 
     // A block page renders as a normal document, so collection would otherwise scrape an
     // interstitial and count it as "0 threads" while hammering Reddit. `isBlocked` was imported

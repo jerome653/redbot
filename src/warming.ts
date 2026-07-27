@@ -203,11 +203,13 @@ export function isWarmingTarget(t: WarmingTarget): { ok: boolean; why: string } 
   if (t.ageHours === null) {
     return { ok: false, why: 'thread age unknown — cannot tell whether a comment would be read' };
   }
-  if (t.ageHours > 2) {
-    return { ok: false, why: `${Math.round(t.ageHours)}h old — past 2h a new comment is buried and earns nothing` };
+  const maxAge = policy.warmingMaxThreadAgeHours.value;
+  if (t.ageHours > maxAge) {
+    return { ok: false, why: `${Math.round(t.ageHours)}h old — past ${maxAge}h a new comment is buried and earns nothing` };
   }
-  if (t.commentCount !== null && t.commentCount > 8) {
-    return { ok: false, why: `${t.commentCount} answers already — a reply here is the eleventh voice, not the first` };
+  const maxAnswers = policy.warmingMaxAnswers.value;
+  if (t.commentCount !== null && t.commentCount > maxAnswers) {
+    return { ok: false, why: `${t.commentCount} answers already (max ${maxAnswers}) — a reply here is one voice in a crowd` };
   }
   return {
     ok: true,

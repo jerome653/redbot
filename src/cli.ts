@@ -20,6 +20,7 @@ import { backupCmd } from './commands/backup.js';
 import { regret } from './commands/regret.js';
 import { certifyCmd } from './commands/certify.js';
 import { auto } from './commands/auto.js';
+import { warmup } from './commands/warmup.js';
 import { jobList, jobAdd, jobCancel, work } from './commands/job.js';
 import {
   healthCmd, metricsCmd, policyCmd, selectCmd, reviewCmd, reportCmd, insightsCmd
@@ -104,7 +105,7 @@ export const VALUE_FLAGS = new Set([
   // job/queue flags. `account` matters most: omitting it here would make
   // `redbot job list --account docs-architect` read "docs-architect" as a positional filter
   // and then act on whatever REDBOT_ACCOUNT happened to be — the wrong queue, silently.
-  'account', 'state', 'at', 'after', 'attempts', 'note',
+  'account', 'state', 'at', 'after', 'attempts', 'note', 'sort',
   'permalink', 'direction', 'target', 'query', 'subreddit', 'title', 'body',
   'draft', 'thread', 'comment'
 ]);
@@ -150,7 +151,7 @@ async function main(): Promise<number> {
   switch (cmd) {
     case 'login':   return login();
     case 'operators': return operators(positional[0], positional[1]);
-    case 'read':    return read(positional[0]);
+    case 'read':    return read(positional[0], undefined, flagValue('sort'));
     case 'search':  return search(positional[0], undefined, flagValue('commit'));
     case 'draft':   return draft(positional[0]);
     case 'reply':   return reply(positional[0], { quick: flags.has('--quick') });
@@ -230,6 +231,7 @@ async function main(): Promise<number> {
         ...(Number.isFinite(every) && every > 0 ? { everyMinutes: every } : {})
       });
     }
+    case 'warmup':   return warmup({ dry: flags.has('--dry') });
     case 'regret':   return regret(positional[0]);
     case 'doctor':   return doctor();
     case 'backup':   return backupCmd({ list: flags.has('--list'), verify: flags.has('--verify') });

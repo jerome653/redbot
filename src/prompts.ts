@@ -109,6 +109,70 @@ ${comments || '(none)'}`;
  * silent — and it is told to refuse rather than manufacture one. The three answers are
  * checked against the gap analysis afterwards; they are not taken on trust.
  */
+/**
+ * The warming prompt — deliberately the opposite of `draftPrompt`.
+ *
+ * `draftPrompt` optimises for novelty: say something nobody else has said, and justify why the
+ * thread deserves a reply at all. That is the right shape for a contribution and the wrong
+ * shape for warming. A new account's first comments should be **ordinary** — short, useful,
+ * unremarkable — because what earns karma is being a person who reads this subreddit, not being
+ * the most insightful voice in it.
+ *
+ * The hard rules here are stricter than the contribution ones and are enforced again in code by
+ * `checkWarmingComment`, which refuses the draft rather than trusting the model to have
+ * complied. Prompts drift; a check does not.
+ */
+export function warmupPrompt(thread: Thread): string {
+  const topComments = thread.comments
+    .slice(0, 6)
+    .map((c, i) => `${i + 1}. ${trim(c.body, 300)}`)
+    .join('\n');
+
+  return `Write a short, ordinary, genuinely helpful Reddit comment — the kind a working
+developer leaves in passing when they happen to know the answer.
+
+This is a NEW account with almost no history. The goal is not to be impressive. It is to be
+useful and unremarkable, so the account reads like a person who reads this subreddit.
+
+WHAT GOOD LOOKS LIKE
+Two to five sentences. Answer the specific thing asked, or ask the one clarifying question
+that would unblock them. Speak from practical experience. If you are not sure, say what you
+would check and why — that is a genuinely useful comment and it cannot be wrong.
+
+HARD RULES — a draft breaking any of these is thrown away by a check after you
+1. **No links of any kind.** Not documentation, not a guide, nothing. From a new account even
+   a helpful link reads as promotion.
+2. **No product, company or brand names**, including any you might be affiliated with. Do not
+   recommend a tool, a host, a plugin or a service.
+3. **Under 120 words.** An essay from a two-day-old account is conspicuous.
+4. **No engagement bait.** No "hope this helps", no "let me know if you need anything".
+5. **Do not assert how software behaves unless you are certain.** Prefer "I'd check X" over
+   "X does Y". A new account being publicly wrong is the worst available outcome.
+
+DECLINE IF YOU SHOULD
+If you have nothing genuinely useful to add, set "decline" to true. Filler is what makes an
+account look like a bot, and one skipped thread costs nothing.
+
+OUTPUT
+Return ONLY this JSON object, no prose, no fence:
+
+{
+  "decline": false,
+  "why": "one line — what you are adding, or why you are declining",
+  "comment": "the comment itself, plain text, no preamble"
+}
+
+THREAD
+subreddit: r/${thread.subreddit}
+title: ${thread.title}
+
+body:
+${trim(thread.body, 1800)}
+
+existing comments:
+${topComments || '(none yet — you would be the first reply)'}`;
+}
+
 export function draftPrompt(
   thread: Thread,
   reason: string,

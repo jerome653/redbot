@@ -169,6 +169,36 @@ export const policy = {
   unhedgedClaimBudget: L(
     4, 'unhedged behavioural assertions per reply', 'provisional',
     'each unhedged claim is a separate thing the reviewer must verify alone; not measured'
+  ),
+
+  /* ---------------- warming ---------------- */
+
+  /**
+   * How old a thread may be and still be worth a warming comment.
+   *
+   * MEASURED 2026-07-27, and it corrected a number I had guessed. `ACCOUNT-WARMING.md` says
+   * "threads under 2h old so the comment is read", so warming shipped with a hard 2h ceiling —
+   * and found **zero** eligible threads, every run. Reading the live feeds explained why:
+   *
+   *   r/WordPress `/hot`  youngest thread  2.7h   (a thread must age to become hot)
+   *   r/WordPress `/new`  youngest thread  6.1h   (the subreddit simply posts slower than that)
+   *
+   * So 2h was unsatisfiable on this subreddit at this hour, and the rule silently guaranteed
+   * warming could never run. The doc's intent is "early enough that the comment gets read",
+   * which on a subreddit producing a handful of threads a day is satisfied well past 2h — the
+   * 6-answer thread at 6.1h had nobody answering the actual question.
+   *
+   * `provisional`: 8 is chosen to clear the measured floor with headroom, not derived. A busier
+   * subreddit should lower it. If warming starts finding threads that are already answered by
+   * the time we arrive, this is the number that is wrong.
+   */
+  warmingMaxThreadAgeHours: L(
+    8, 'hours', 'provisional',
+    'measured: r/WordPress /new youngest was 6.1h, so a 2h ceiling found nothing at all'
+  ),
+  warmingMaxAnswers: L(
+    8, 'existing answers', 'declared',
+    'past this the reply is one voice in a crowd and earns the account nothing'
   )
 } as const;
 
