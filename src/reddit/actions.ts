@@ -240,13 +240,39 @@ export async function votePost(
     }
 
     await button.click();
-    await sleep(1200);
+    await sleep(1500);
 
-    const pressedAfter = await button.getAttribute('aria-pressed').catch(() => null);
+    /**
+     * Confirm by RELOADING, not by re-reading the button we just clicked.
+     *
+     * MEASURED 2026-07-27, and this is the whole reason the check changed. A downvote as
+     * docs-architect (karma 1) sets `aria-pressed="true"` on the node immediately — and a
+     * reload shows `false` with the score unmoved at 3. Reddit's UI is optimistic: it renders
+     * the vote locally and the server discards it, silently, with no error anywhere.
+     *
+     * Reading the same node 1.2s after the click therefore measured our own click, not the
+     * outcome, and the runner recorded `confirmed: true` for a vote that never existed. That
+     * is the shadow-removal failure this project already documents for comments, one action
+     * across. Persistence can only be established by asking the server again.
+     */
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await sleep(2500);
+
+    const after = (await within(page.locator(sel.postUnit[0]).first(), candidates))
+      ?? (await firstVisible(page, candidates));
+    const pressedAfter = after ? await after.getAttribute('aria-pressed').catch(() => null) : null;
+    const persisted = pressedAfter === 'true';
+
     return {
-      ok: true,
+      ok: persisted,
       url: page.url(),
-      ...(pressedAfter === null ? {} : { confirmed: pressedAfter === 'true' })
+      ...(pressedAfter === null ? {} : { confirmed: persisted }),
+      ...(persisted ? {} : {
+        error:
+          `the ${direction}vote did not persist — it appeared in the page and was gone after a ` +
+          `reload. Reddit accepted the click and discarded the vote, which a new or ` +
+          `low-karma account should expect. Nothing is wrong with the selector.`
+      })
     };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -351,18 +377,74 @@ export async function setFollowing(
     await page.goto(`https://www.reddit.com/${target}/`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await pause();
 
-    const want = following ? sel.followButton : sel.unfollowButton;
-    const button = await firstVisible(page, want);
-    if (!button) {
+    const [kind, name] = target.split('/') as ['user' | 'r', string];
+
+    /**
+     * A subreddit is addressed by attribute, never by position.
+     *
+     * MEASURED 2026-07-27: r/Wordpress renders 12 `shreddit-join-button` hosts, 11 of which
+     * belong to the sidebar's related-communities list. Taking the first would have joined
+     * r/webdev. The host carries the community name, so the right control can be named
+     * outright — and if the attribute lookup finds nothing, this refuses rather than falling
+     * back to a positional guess.
+     */
+    const labels = { join: ['join'], leave: ['joined', 'leave'], follow: ['follow'], unfollow: ['unfollow'] };
+    const wanted = kind === 'r'
+      ? (following ? labels.join : labels.leave)
+      : (following ? labels.follow : labels.unfollow);
+
+    /**
+     * The community name lives on the `name` attribute — MEASURED 2026-07-27. The host also
+     * carries `subreddit-id` (`t5_2qhjq` for r/Wordpress) and `subscribe-label` /
+     * `unsubscribe-label`, but `name` is the one that reads as the community. An earlier guess
+     * at a `subreddit` attribute matched nothing, and the job failed closed with "no join
+     * control" — the correct failure for a selector that finds nothing. It refused rather than
+     * joining one of the eleven sidebar communities.
+     */
+    const host = kind === 'r'
+      ? page.locator(`${sel.joinButtonHost[0]}[name="${name}" i]`).first()
+      : null;
+
+    if (host && (await host.count().catch(() => 0)) === 0) {
+      return { ok: false, error: `no join control for r/${name} on that page — renamed, private, or banned?` };
+    }
+
+    /**
+     * Exact label, in code. `:has-text("Follow")` is a substring test and returns the
+     * **Unfollow** button on a profile that has both — measured on user/spez, where the page
+     * carries "Follow", "Unfollow" AND "Join" at once.
+     */
+    const buttons = (host ?? page).locator('button');
+    const n = await buttons.count();
+    let target_btn: Locator | null = null;
+    const seen: string[] = [];
+
+    for (let i = 0; i < n; i++) {
+      const b = buttons.nth(i);
+      const text = (await b.innerText().catch(() => '')).replace(/\s+/g, ' ').trim().toLowerCase();
+      if (text) seen.push(text);
+      if (wanted.includes(text)) { target_btn = b; break; }
+    }
+
+    if (!target_btn) {
+      // The opposite label being present is how Reddit reports the current state.
+      const opposite = kind === 'r'
+        ? (following ? labels.leave : labels.join)
+        : (following ? labels.unfollow : labels.follow);
+      const already = seen.some((s) => opposite.includes(s));
       return {
-        ok: true,
-        confirmed: true,
-        error: `no "${following ? 'Follow' : 'Unfollow'}" control — already ${following ? 'following' : 'not following'}`
+        ok: already,
+        confirmed: already,
+        error: already
+          ? `already ${following ? 'joined/following' : 'not joined/following'} — the control offers "${opposite[0]}"`
+          : `no "${wanted[0]}" control on ${target} (saw: ${seen.slice(0, 6).join(', ') || 'nothing'})`
       };
     }
 
-    await button.click();
-    await sleep(1500);
+    await target_btn.scrollIntoViewIfNeeded().catch(() => { /* already in view */ });
+    await sleep(400);
+    await target_btn.click({ timeout: 10_000 });
+    await sleep(1800);
     return { ok: true, url: page.url() };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };

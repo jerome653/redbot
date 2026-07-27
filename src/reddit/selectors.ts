@@ -147,15 +147,31 @@ export const sel = {
     '[role="menuitem"]'
   ],
 
-  /** Follow / unfollow on a profile or subreddit. */
+  /**
+   * Joining a subreddit, and following a user. Two different controls with two different
+   * vocabularies — Reddit says **Join / Joined** for a community and **Follow / Unfollow**
+   * for a person.
+   *
+   * MEASURED LIVE 2026-07-27, and both findings are the same shape as the vote and save bugs:
+   *
+   * 1. `r/Wordpress` carries **12** `shreddit-join-button` elements. Eleven of them are the
+   *    sidebar's related-communities list — webdev, drupal, elementor, woocommerce and so on —
+   *    and the subreddit you are actually looking at is index **11**. An unscoped `.first()`
+   *    would have joined **r/webdev**. Each host exposes a `subreddit` attribute, so the
+   *    correct control is addressable exactly; `setFollowing` builds that selector from the
+   *    target name rather than guessing a position.
+   * 2. On `user/spez` the labels present are "Unfollow", "Follow" AND "Join" simultaneously.
+   *    `:has-text("Follow")` is a substring match, so it returns the **Unfollow** button —
+   *    asking to follow would have unfollowed. Matching is done on exact label in code.
+   *
+   * These entries are the fallbacks for when the attribute lookup finds nothing.
+   */
+  joinButtonHost: ['shreddit-join-button'],
   followButton: [
-    'shreddit-join-button button',
-    'button:has-text("Follow")',
-    'button[aria-label*="Follow" i]'
+    'button[aria-label*="Follow" i]',
+    'shreddit-join-button button'
   ],
   unfollowButton: [
-    'button:has-text("Unfollow")',
-    'button:has-text("Following")',
     'button[aria-label*="Unfollow" i]'
   ],
 

@@ -323,11 +323,25 @@ Short version, as of 2026-07-27:
 | | |
 |---|---|
 | Reading, scoring, gap analysis, drafting | **verified against live Reddit** |
-| Upvote · save · unsave | **verified** — executed as `docs-architect`, confirmed by reading the page back |
-| Downvote · follow · create post | written, never executed |
+| Save · unsave · join/leave a subreddit | **verified** — executed as `docs-architect`, round-tripped, account left as found |
+| Cross-account vote guard | **verified** — fails closed on a thread it has no record of |
+| **Upvote · downvote** | **execute but do not persist** — see below |
+| Follow/unfollow a user · create post | written, never executed |
 | **Publishing a reply** | **never completed, not once** |
 | Certifications | 16 runs, **16 REJECT**, 0 CERTIFIED |
 | Suite | 328 tests · benchmark 4/4 · doctor 12 pass / 4 warn / 0 fail |
 
-The engagement path works. The contribution path — the reason the project exists — has never
-run to completion. Everything else is scaffolding around that one number.
+The engagement path partly works. The contribution path — the reason the project exists — has
+never run to completion. Everything else is scaffolding around that one number.
+
+### Votes do not persist on a new account
+
+Measured 2026-07-27, and it is not a redbot bug. A vote as `docs-architect` sets
+`aria-pressed="true"` immediately; reload the page and it reads `false`, with the post score
+unmoved. Reddit renders the vote locally and the server discards it. The account is karma 1
+and `redbot health` says plainly that new-account filters apply.
+
+redbot was reporting these as successes, because it confirmed by re-reading the button it had
+just clicked — measuring its own click rather than the outcome. Confirmation now reloads and
+re-reads, which is the only way to tell an optimistic UI from a persisted fact. **Treat voting
+as unusable until an account has real standing.**
