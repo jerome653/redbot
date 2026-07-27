@@ -18,6 +18,7 @@ import { config, loadAccounts } from './config.js';
 import { loadThreads } from './store.js';
 import { record } from './log.js';
 import { registerRunner } from './scheduler.js';
+import { act } from './confirm.js';
 import { read } from './commands/read.js';
 import { search } from './commands/search.js';
 import { opportunity } from './commands/opportunity.js';
@@ -48,17 +49,57 @@ async function withPage(job: Job, fn: (page: import('playwright').Page) => Promi
   if (!(await isBrowserUp())) throw new NoBrowserError(config.browser.cdpEndpoint);
   const session = await attach();
   try {
-    const result = await fn(session.page);
-    if (!result.ok) throw new Error(result.error ?? 'the action failed without saying why');
+    /**
+     * Every browser action goes through the confirmation contract — perform, confirm, audit,
+     * record — and none of them reports success on the strength of having been attempted.
+     *
+     * Enforced here rather than inside each action so a capability added later inherits it by
+     * default. On 2026-07-27 three separate actions returned success for something that had
+     * not happened, and every one of them was individually plausible; the fix that holds is
+     * structural, not another careful reading of each call site.
+     *
+     * The action functions do their own post-action read and report `confirmed`. This layer
+     * decides what that is worth: `confirmed !== true` fails the job, which surfaces in the
+     * queue as a failure with the reason rather than as a green row that quietly did nothing.
+     */
+    await act({
+      action: `${job.kind}${job.args?.direction ? `:${String(job.args.direction)}` : ''}`,
+      account: job.account,
+      jobId: job.id,
+      perform: () => fn(session.page),
+      confirm: async (result) => {
+        if (!result.ok) {
+          return {
+            confirmed: false,
+            source: 'reloaded' as const,
+            observed: result.error ?? 'the action failed without saying why',
+            visibility: 'unknown' as const
+          };
+        }
+        /**
+         * `confirmed: undefined` means the action could not tell — which is NOT the same as
+         * "it worked", and is treated as unconfirmed. That asymmetry is deliberate: the cost
+         * of a false failure is a retry, the cost of a false success is believing redbot acted
+         * when it did not.
+         */
+        return {
+          confirmed: result.confirmed === true,
+          source: 'reloaded' as const,
+          observed: result.confirmed === true
+            ? `${job.kind} still in effect when the page was read again`
+            : `${job.kind} could not be confirmed from an independent read${result.error ? ` — ${result.error}` : ''}`,
+          ...(result.permalink ? { permalink: result.permalink } : {}),
+          // Only a third-party read can establish this, and nothing here does one.
+          visibility: 'unknown' as const
+        };
+      }
+    });
+
     record('job.action', `${job.kind} for ${job.account}`, {
       account: job.account,
       jobId: job.id,
       kind: job.kind,
-      url: result.url ?? null,
-      // `confirmed: false` and `confirmed: undefined` are different facts and are kept apart:
-      // one means the page disagreed, the other that the page did not say.
-      confirmed: result.confirmed ?? null,
-      note: result.error ?? null
+      confirmed: true
     });
   } finally {
     await session.close();

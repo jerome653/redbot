@@ -373,7 +373,47 @@ export async function setSaved(page: Page, permalink: string, saved: boolean): P
 
     await target.click({ timeout: 10_000 });
     await sleep(1500);
-    return { ok: true, url: page.url() };
+
+    /**
+     * Confirm from a reload, not from the click.
+     *
+     * Until 2026-07-27 this returned `ok: true` here and stopped. Clicking "Save" is not
+     * evidence that anything was saved — it is the same assumption that let a discarded vote
+     * and a non-existent post both report success. The menu is the state: it offers exactly one
+     * of Save / Remove from saved, so re-opening it after a reload says what Reddit actually
+     * believes.
+     */
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await sleep(2000);
+
+    const menu2 = (await within(page.locator(sel.postUnit[0]).first(), sel.overflowMenu))
+      ?? (await firstVisible(page, sel.overflowMenu));
+    if (!menu2) {
+      return { ok: true, confirmed: false, url: page.url(), error: 'could not re-open the menu to confirm' };
+    }
+    await menu2.scrollIntoViewIfNeeded().catch(() => { /* already in view */ });
+    await menu2.locator('button').first().click({ timeout: 10_000 }).catch(() => { /* stays closed */ });
+    await sleep(1200);
+
+    const after = page.locator(sel.overflowMenuItem[0]!);
+    const afterN = await after.count();
+    const afterLabels: string[] = [];
+    for (let i = 0; i < afterN; i++) {
+      const t = (await after.nth(i).innerText().catch(() => '')).replace(/\s+/g, ' ').trim().toLowerCase();
+      if (t) afterLabels.push(t);
+    }
+    await page.keyboard.press('Escape').catch(() => { /* menu may already be closed */ });
+
+    // Saved means the menu now offers the UNSAVE label, and vice versa.
+    const expected = saved ? UNSAVE_LABELS : SAVE_LABELS;
+    const flipped = afterLabels.some((l) => expected.includes(l));
+
+    return {
+      ok: true,
+      confirmed: flipped,
+      url: page.url(),
+      ...(flipped ? {} : { error: `after a reload the menu still offers ${JSON.stringify(afterLabels)}` })
+    };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -479,7 +519,38 @@ export async function setFollowing(
     await sleep(400);
     await target_btn.click({ timeout: 10_000 });
     await sleep(1800);
-    return { ok: true, url: page.url() };
+
+    /**
+     * Confirm from a reload. The visible control is the state — Reddit renders both buttons and
+     * toggles which one is shown — so after the action the OPPOSITE label should be the visible
+     * one. Reading it without a reload would only tell us the button we clicked re-rendered.
+     */
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await sleep(2200);
+
+    const after = (host ?? page).locator('button');
+    const afterN = await after.count();
+    const opposite = kind === 'r'
+      ? (following ? labels.leave : labels.join)
+      : (following ? labels.unfollow : labels.follow);
+
+    let flipped = false;
+    const afterLabels: string[] = [];
+    for (let i = 0; i < afterN; i++) {
+      const b = after.nth(i);
+      if (!(await b.isVisible().catch(() => false))) continue;
+      const t = (await b.innerText().catch(() => '')).replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!t) continue;
+      afterLabels.push(t);
+      if (opposite.includes(t)) { flipped = true; break; }
+    }
+
+    return {
+      ok: true,
+      confirmed: flipped,
+      url: page.url(),
+      ...(flipped ? {} : { error: `after a reload the visible control still reads ${JSON.stringify(afterLabels.slice(0, 4))}` })
+    };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
