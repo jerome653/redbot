@@ -166,6 +166,43 @@ export async function doctor(): Promise<number> {
   add('debuggable chrome', up ? 'PASS' : 'WARN',
     up ? `reachable at ${config.browser.cdpEndpoint}` : `nothing at ${config.browser.cdpEndpoint} — reading and publishing will refuse`);
 
+  /**
+   * Is that browser HEADED?
+   *
+   * This check exists because of the shape of failure it prevents, not because of a bug that
+   * happened here. A headless browser is reachable, answers CDP perfectly, and passes every
+   * check above — and Reddit serves it a **block page delivered as HTTP 200 with the block in
+   * the body**, so a naive status check reads it as success. Measured twice on 2026-07-27:
+   * headless got the block page and never cleared the anonymous interstitial; headed Chrome on
+   * the very same profile signed straight in.
+   *
+   * The consequence is the one worth guarding against: on a server, or anywhere without a
+   * display, redbot would *appear* to run. Jobs queue, the scheduler ticks, the suite is green,
+   * and every Reddit action silently fails. An installation that looks healthy while its
+   * dependency is not connected is exactly how a deployment gets believed.
+   *
+   * So this is a FAIL, not a warning. redbot is a workstation tool; that is not a limitation to
+   * design around, it is the choice that took reading from 0 threads to 25.
+   */
+  if (up) {
+    let ua: string | null = null;
+    try {
+      const r = await fetch(`${config.browser.cdpEndpoint}/json/version`, { signal: AbortSignal.timeout(2500) });
+      if (r.ok) ua = ((await r.json()) as { 'User-Agent'?: string })['User-Agent'] ?? null;
+    } catch { /* unreachable is already reported by the check above */ }
+
+    if (ua === null) {
+      add('headed browser', 'WARN', 'could not read the browser user-agent — cannot tell whether it is headless');
+    } else if (/headless/i.test(ua)) {
+      add('headed browser', 'FAIL',
+        'the attached browser is HEADLESS — Reddit answers it with a block page served as HTTP 200, ' +
+        'so reads return nothing and every action fails silently. Attach a headed Chrome; redbot ' +
+        'cannot run on a server or any display-less host.');
+    } else {
+      add('headed browser', 'PASS', 'headed — Reddit serves browsers, not clients');
+    }
+  }
+
   /* ---- pipeline staleness ---- */
   const drafts = loadDrafts();
   const pending = drafts.filter((d) => d.status === 'pending');
