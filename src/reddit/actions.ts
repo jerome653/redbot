@@ -172,6 +172,30 @@ export async function submitPost(page: Page, input: SubmitPostInput): Promise<Ac
       };
     }
 
+    /**
+     * A created post lands on its own permalink, which always contains `/comments/`.
+     *
+     * MEASURED 2026-07-27: the first real submission left the browser on `/r/test/` — the
+     * subreddit index, not the post — and the old check passed because the URL was merely no
+     * longer `/submit`. It reported `ok: true` with `permalink: https://www.reddit.com/r/test/`,
+     * which is not a post. The thread HAD been created (found on the account's profile at
+     * `/r/test/comments/1v7kvj2/…`), so the action worked and the confirmation lied about what
+     * it produced — the same weak-confirmation family as reading a vote button we just clicked.
+     *
+     * Landing somewhere else is therefore reported as unconfirmed, with the URL we actually got.
+     * A caller that needs the permalink can read it off the account's submitted list.
+     */
+    if (!/\/comments\/[a-z0-9]+/i.test(after)) {
+      return {
+        ok: true,
+        url: after,
+        confirmed: false,
+        error:
+          `submitted, but the browser landed on ${after} rather than a post permalink — the ` +
+          `thread may exist; confirm on the account's profile before assuming either way`
+      };
+    }
+
     return { ok: true, url: after, permalink: after, confirmed: after !== before };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
