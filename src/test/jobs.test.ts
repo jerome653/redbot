@@ -198,6 +198,32 @@ test('a queued reply is treated as a publish, not as a missing runner', async ()
   assert.ok(PUBLISH_KINDS.includes('reply'));
 });
 
+/**
+ * Anything that puts PUBLIC CONTENT on Reddit stops for a person.
+ *
+ * Found 2026-07-27 while testing: `reply-comment` and `post` both had working runners and were
+ * absent from PUBLISH_KINDS, so the scheduler would have executed them — a public statement
+ * under the operator's name with no certification, no approval and no token, purely because
+ * they were not called "publish". A vote or a follow is reversible in one click; a post is not.
+ */
+test('every content-producing kind stops for a person, not just the ones called publish', async () => {
+  clearRunners();
+  const ran: string[] = [];
+  for (const kind of ['reply-comment', 'post'] as const) {
+    registerRunner(kind, async () => { ran.push(kind); });
+  }
+
+  const a = createJob({ kind: 'reply-comment', account: 'content', args: { body: 'x' } }, T0);
+  const b = createJob({ kind: 'post', account: 'content', args: { title: 'x' } }, T0);
+  const r = await runPass('content', T0);
+
+  assert.deepEqual(ran, [], 'a content runner must never be invoked by the scheduler');
+  assert.equal(r.waiting, 2);
+  assert.equal(getJob('content', a.id)?.state, 'waiting');
+  assert.equal(getJob('content', b.id)?.state, 'waiting');
+  clearRunners();
+});
+
 test('a recurring job schedules a successor instead of looping in place', async () => {
   clearRunners();
   registerRunner('read', async () => {});

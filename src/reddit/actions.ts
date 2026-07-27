@@ -419,8 +419,18 @@ export async function setFollowing(
     let target_btn: Locator | null = null;
     const seen: string[] = [];
 
+    /**
+     * The control must be VISIBLE, not merely present.
+     *
+     * MEASURED 2026-07-27 on a user profile: Reddit renders both buttons and toggles which one
+     * is shown. `Unfollow` sits in the DOM at index 21 with a zero-size box, and the live
+     * `Follow` is index 22 at y=132. Matching on label alone finds the hidden one and the click
+     * then times out against an element nobody can see — so the visible control is the only one
+     * that reports the current state, and the only one that can be clicked.
+     */
     for (let i = 0; i < n; i++) {
       const b = buttons.nth(i);
+      if (!(await b.isVisible().catch(() => false))) continue;
       const text = (await b.innerText().catch(() => '')).replace(/\s+/g, ' ').trim().toLowerCase();
       if (text) seen.push(text);
       if (wanted.includes(text)) { target_btn = b; break; }

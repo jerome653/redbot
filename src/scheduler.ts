@@ -56,8 +56,19 @@ export function clearRunners(): void {
  * that sends a draft to Reddit. Without this entry a queued `reply` would fall through to "no
  * runner is registered" and read as a wiring bug rather than as the deliberate refusal it is —
  * and the day somebody fixed that "bug" by adding a runner, redbot would publish unattended.
+ *
+ * `reply-comment` and `post` were ADDED 2026-07-27 after a gap found while testing. Both have
+ * working runners, so the scheduler would have executed them — putting **public content**
+ * under the operator's name with no certification, no approval prompt and no token, purely
+ * because they were not called "publish". The line this project draws is not about the word:
+ *
+ *   - votes, saves, follows change a relationship and are reversible in one click
+ *   - a post or a reply is a **public statement** and is not
+ *
+ * Everything in the second category stops for a person. Testing one means a human authorises
+ * that specific action, which is exactly the guarantee — not an exception to it.
  */
-export const PUBLISH_KINDS: readonly JobKind[] = ['publish', 'reply'];
+export const PUBLISH_KINDS: readonly JobKind[] = ['publish', 'reply', 'reply-comment', 'post'];
 
 export interface PassResult {
   ran: number;

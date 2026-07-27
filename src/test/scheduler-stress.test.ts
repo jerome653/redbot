@@ -43,25 +43,30 @@ test('120 mixed jobs: all run, none twice, none starved', async () => {
     });
   }
 
-  const kinds = ['read', 'search', 'vote', 'save', 'follow', 'post', 'draft', 'certify'] as const;
+  // Content-producing kinds are deliberately absent: `post` and `reply-comment` are
+  // publish-class and stop for a person, so putting them in the rotation would be measuring
+  // the approval gate rather than queue throughput. They get their own assertion below.
+  const kinds = ['read', 'search', 'vote', 'save', 'follow', 'opportunity', 'draft', 'certify'] as const;
   const created: string[] = [];
   for (let i = 0; i < 120; i++) {
     const kind = kinds[i % kinds.length]!;
     created.push(createJob({ kind, account: ACCOUNT, args: { n: i } }, T0).id);
   }
-  // …plus publish-class work mixed in, which must survive every pass untouched.
+  // …plus every publish-class kind mixed in, which must survive every pass untouched.
   const publishIds = [
     createJob({ kind: 'publish', account: ACCOUNT, args: { draftId: 'd_1' } }, T0).id,
-    createJob({ kind: 'reply', account: ACCOUNT, args: { draftId: 'd_2' } }, T0).id
+    createJob({ kind: 'reply', account: ACCOUNT, args: { draftId: 'd_2' } }, T0).id,
+    createJob({ kind: 'reply-comment', account: ACCOUNT, args: { body: 'x' } }, T0).id,
+    createJob({ kind: 'post', account: ACCOUNT, args: { title: 'x' } }, T0).id
   ];
 
   const started = Date.now();
   const pass = await runPass(ACCOUNT, T0);
   const elapsed = Date.now() - started;
 
-  assert.equal(pass.ran, 122, 'every queued job should be attempted in one pass');
+  assert.equal(pass.ran, 124, "every queued job should be attempted in one pass");
   assert.equal(pass.completed, 120);
-  assert.equal(pass.waiting, 2, 'both publish-class jobs stop for a person');
+  assert.equal(pass.waiting, 4, 'all four publish-class jobs stop for a person');
   assert.equal(pass.failed, 0);
 
   // no duplicate execution
@@ -79,13 +84,13 @@ test('120 mixed jobs: all run, none twice, none starved', async () => {
 
   const counts = jobCounts(ACCOUNT);
   assert.equal(counts.completed, 120);
-  assert.equal(counts.waiting, 2);
+  assert.equal(counts.waiting, 4);
   assert.equal(counts.running, 0, 'no job may be left claimed');
 
   // Latency is recorded rather than asserted against a threshold: this machine's timing is not
   // a property of the software, and a green bar that depends on the CI host is a lie waiting.
   // eslint-disable-next-line no-console
-  console.log(`      [stress] 122 jobs, one pass, ${elapsed} ms wall clock`);
+  console.log(`      [stress] 124 jobs, one pass, ${elapsed} ms wall clock`);
   clearRunners();
 });
 
