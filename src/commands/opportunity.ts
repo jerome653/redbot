@@ -17,10 +17,24 @@ import { isQuestionShaped, PILOT_SUBREDDITS, currentAgeHours } from '../select.j
 import { policy } from '../policy.js';
 import { trace, timed } from '../trace.js';
 import { record, say } from '../log.js';
+import { getPool } from '../db.js';
+import { savePrefilterOutcome } from '../db/prefilter.js';
 import type { Thread, GapAnalysis, OpportunityAssessment } from '../types.js';
 
-interface Dropped {
+/**
+ * WHICH rule caught a thread, as a value rather than as prose.
+ *
+ * `why` is written for a person and changes whenever the wording improves. Anything that needs
+ * to GROUP drops — the console's breakdown, `insights.ts` — needs a key that does not move, and
+ * before this existed insights.ts recovered one by running regexes over the sentence
+ * (`/past the/.test(d.why)`). That silently reclassifies every drop the day somebody rephrases
+ * a message, which is the sort of bug nobody notices because the number still looks plausible.
+ */
+export type DropKind = 'not-a-question' | 'age-unknown' | 'too-old' | 'outside-pilot';
+
+export interface Dropped {
   thread: Thread;
+  kind: DropKind;
   why: string;
 }
 
@@ -30,18 +44,18 @@ export function prefilter(threads: Thread[]): { keep: Thread[]; dropped: Dropped
 
   for (const t of threads) {
     const shape = isQuestionShaped(t);
-    if (!shape.pass) { dropped.push({ thread: t, why: shape.detail }); continue; }
+    if (!shape.pass) { dropped.push({ thread: t, kind: 'not-a-question', why: shape.detail }); continue; }
 
     // Age as it stands now, not at collection — see currentAgeHours() for the observation.
     const ageH = currentAgeHours(t);
-    if (ageH == null) { dropped.push({ thread: t, why: 'age unknown — recency cannot be confirmed' }); continue; }
+    if (ageH == null) { dropped.push({ thread: t, kind: 'age-unknown', why: 'age unknown — recency cannot be confirmed' }); continue; }
     if (ageH > policy.maxThreadAgeHoursToPublish.value) {
-      dropped.push({ thread: t, why: `${Math.round(ageH)}h old, past the ${policy.maxThreadAgeHoursToPublish.value}h ceiling` });
+      dropped.push({ thread: t, kind: 'too-old', why: `${Math.round(ageH)}h old, past the ${policy.maxThreadAgeHoursToPublish.value}h ceiling` });
       continue;
     }
 
     if (!(PILOT_SUBREDDITS as readonly string[]).includes(t.subreddit.toLowerCase())) {
-      dropped.push({ thread: t, why: `r/${t.subreddit} is outside the pilot set` });
+      dropped.push({ thread: t, kind: 'outside-pilot', why: `r/${t.subreddit} is outside the pilot set` });
       continue;
     }
 
@@ -53,7 +67,7 @@ export function prefilter(threads: Thread[]): { keep: Thread[]; dropped: Dropped
 export async function opportunity(opts?: { force?: boolean; limit?: number }): Promise<number> {
   say.head('redbot opportunity');
 
-  const threads = loadThreads();
+  const threads = await loadThreads();
   if (!threads.length) {
     say.warn('No threads collected. Run `redbot session` or `redbot read` first.');
     return 1;
@@ -62,15 +76,35 @@ export async function opportunity(opts?: { force?: boolean; limit?: number }): P
   const { keep, dropped } = prefilter(threads);
   say.step(`${threads.length} collected · ${keep.length} pass the mechanical prefilter · ${dropped.length} dropped`);
 
+  /**
+   * Written down, not just printed.
+   *
+   * This verdict used to exist for the length of one terminal line. The console could then
+   * only report "71 never assessed" — a number nobody can act on — while the reason that would
+   * have told them their collector is reading the wrong subreddits was already computed and
+   * thrown away. Recording it costs one statement per dropped thread, once per run.
+   *
+   * Fails SOFT on purpose: this is a reporting aid, and a database hiccup must not stop the
+   * actual work of assessing threads. The run says so and carries on.
+   */
+  try {
+    await savePrefilterOutcome(
+      getPool(),
+      dropped.map((d) => ({ threadId: d.thread.id, kind: d.kind, detail: d.why })),
+      keep.map((t) => t.id)
+    );
+  } catch (e) {
+    say.warn(`The prefilter reasons could not be recorded: ${e instanceof Error ? e.message : String(e)}`);
+    say.step('The run continues — this only affects the breakdown the console shows.');
+  }
+
   if (dropped.length) {
+    const WORD: Record<DropKind, string> = {
+      'too-old': 'too old', 'outside-pilot': 'wrong subreddit',
+      'age-unknown': 'age unknown', 'not-a-question': 'not a question'
+    };
     const byReason = new Map<string, number>();
-    for (const d of dropped) {
-      const key = /past the/.test(d.why) ? 'too old'
-        : /outside the pilot set/.test(d.why) ? 'wrong subreddit'
-        : /age unknown/.test(d.why) ? 'age unknown'
-        : 'not a question';
-      byReason.set(key, (byReason.get(key) ?? 0) + 1);
-    }
+    for (const d of dropped) byReason.set(WORD[d.kind], (byReason.get(WORD[d.kind]) ?? 0) + 1);
     for (const [why, n] of [...byReason.entries()].sort((a, b) => b[1] - a[1])) {
       say.step(`   dropped ${n}: ${why}`);
     }
@@ -81,7 +115,7 @@ export async function opportunity(opts?: { force?: boolean; limit?: number }): P
     return 1;
   }
 
-  const existing = new Map(loadGaps().map((g) => [g.threadId, g]));
+  const existing = new Map((await loadGaps()).map((g) => [g.threadId, g]));
   const todo = (opts?.force ? keep : keep.filter((t) => !existing.has(t.id)))
     .slice(0, opts?.limit ?? 15);
 
@@ -107,7 +141,7 @@ export async function opportunity(opts?: { force?: boolean; limit?: number }): P
       // Persist each analysis as it lands. A gap call costs ~25-70s, so batching the write
       // until the end of the loop means a crash on thread 12 discards eleven minutes of
       // completed work. Same reasoning as DEFECT-04: isolate the unit, keep what succeeded.
-      saveGaps([analysis]);
+      await saveGaps([analysis]);
 
       trace('gap', 'gap.result', {
         covered: analysis.covered.length,
@@ -133,11 +167,11 @@ export async function opportunity(opts?: { force?: boolean; limit?: number }): P
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       say.warn(`        gap analysis failed: ${msg.slice(0, 120)}`);
-      record('error', `gap analysis failed for ${thread.id}: ${msg.slice(0, 200)}`);
+      await record('error', `gap analysis failed for ${thread.id}: ${msg.slice(0, 200)}`);
     }
   }
 
-  if (gaps.length) saveGaps(gaps);
+  if (gaps.length) await saveGaps(gaps);
 
   if (corrections.length) {
     say.warn(`${corrections.length} headroom score(s) recomputed locally from the model's own gaps:`);
@@ -155,7 +189,7 @@ export async function opportunity(opts?: { force?: boolean; limit?: number }): P
       verdict: a.verdict, score: a.score, headroom: gap.headroom, reasons: a.reasons
     }, { threadId: thread.id });
   }
-  if (assessments.length) saveAssessments(assessments);
+  if (assessments.length) await saveAssessments(assessments);
 
   const contribute = assessments.filter((a) => a.verdict === 'contribute');
 
@@ -173,7 +207,7 @@ export async function opportunity(opts?: { force?: boolean; limit?: number }): P
     say.warn('Nothing clears the bar. A system that finds an opportunity in every thread has not found any.');
   }
 
-  record('opportunity', `${contribute.length}/${assessments.length} worth contributing to`, {
+  await record('opportunity', `${contribute.length}/${assessments.length} worth contributing to`, {
     collected: threads.length,
     prefiltered: keep.length,
     analyzed: gaps.length,
@@ -181,7 +215,7 @@ export async function opportunity(opts?: { force?: boolean; limit?: number }): P
     headroomCorrections: corrections.length
   });
 
-  const total = loadAssessments().length;
+  const total = (await loadAssessments()).length;
   say.info('');
   say.step(`${total} assessment(s) on record. Next: redbot draft`);
   return 0;

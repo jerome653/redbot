@@ -56,14 +56,14 @@ const median = (xs: number[]): number => {
   return s.length % 2 ? s[mid]! : Math.round((s[mid - 1]! + s[mid]!) / 2);
 };
 
-export function computeInsights(): Insights {
-  const threads = loadThreads();
-  const gaps = loadGaps();
-  const assessments = loadAssessments();
-  const drafts = loadDrafts();
-  const reviews = loadReviews();
-  const history = loadHistory();
-  const events = loadTrace();
+export async function computeInsights(): Promise<Insights> {
+  const threads = await loadThreads();
+  const gaps = await loadGaps();
+  const assessments = await loadAssessments();
+  const drafts = await loadDrafts();
+  const reviews = await loadReviews();
+  const history = await loadHistory();
+  const events = await loadTrace();
 
   const { keep, dropped } = prefilter(threads);
   const contribute = assessments.filter((a) => a.verdict === 'contribute');
@@ -86,12 +86,15 @@ export function computeInsights(): Insights {
 
   /* ---- prefilter losses ---- */
   if (dropped.length) {
+    /* Grouped by the rule that fired, not by a regex over its message. The prose is written
+       for a person and gets rephrased; `kind` is the value the filter actually decided. */
+    const WORD: Record<string, string> = {
+      'too-old': 'too old', 'outside-pilot': 'wrong subreddit',
+      'age-unknown': 'age unknown', 'not-a-question': 'not a question'
+    };
     const reasons = new Map<string, number>();
     for (const d of dropped) {
-      const key = /past the/.test(d.why) ? 'too old'
-        : /outside the pilot set/.test(d.why) ? 'wrong subreddit'
-        : /age unknown/.test(d.why) ? 'age unknown'
-        : 'not a question';
+      const key = WORD[d.kind] ?? 'not a question';
       reasons.set(key, (reasons.get(key) ?? 0) + 1);
     }
     const [topReason, topCount] = [...reasons.entries()].sort((a, b) => b[1] - a[1])[0]!;
