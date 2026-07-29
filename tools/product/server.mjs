@@ -18,17 +18,112 @@
  * data/operators/ is never served — it holds credentials next to evidence.
  */
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, appendFileSync, mkdirSync, createWriteStream, rmSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
-const DATA = join(ROOT, 'data');
+/**
+ * Same `REDBOT_DATA` override src/config.ts:23 documents, for the same reason: this console
+ * WRITES (accounts.json, sources.json, decisions.jsonl, approvals/), so a test that exercises
+ * those endpoints against the real data/ would be injecting into the operator's own evidence.
+ * Unset in normal operation — the console a person opens still reads and writes data/.
+ */
+const DATA = process.env.REDBOT_DATA ? join(process.env.REDBOT_DATA) : join(ROOT, 'data');
 
 const portArg = process.argv.indexOf('--port');
 const PORT = portArg > -1 ? Number(process.argv[portArg + 1]) : 7902;
+
+/**
+ * The domain comes from Postgres, not from data/*.json.
+ *
+ * `src/store.ts` moved threads, drafts, gap analyses, assessments and history into the
+ * database; this console went on reading the JSON files, which nothing writes any more. The
+ * screens were rendering dead files — an empty console on a database with rows in it.
+ *
+ * Imported from dist/ rather than reimplemented in SQL here: this file already depends on
+ * dist/cli.js (it spawns it for every action), and one typed implementation shared with the
+ * operator console cannot drift from the row mappers the way two hand-written copies would.
+ *
+ * A dynamic import so a missing build is a message an operator can act on, rather than an
+ * unexplained module-not-found before the server has printed anything.
+ */
+let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccountImpl = null,
+    deleteAccountImpl = null, changePortImpl = null, suggestPortImpl = null,
+    portStatusImpl = null, stopBrowserImpl = null, setUpHereImpl = null,
+    boundHandlesImpl = null, machineImpl = null, pagesApi = null, summaryApi = null,
+    dbStatus = null, sourcesApi = null;
+/**
+ * The vault, for the Setup screen.
+ *
+ * Same rule as `src/commands/vault.ts`: a secret goes IN and is never handed back out. Nothing
+ * reached from here returns a stored value — `listSecrets()` answers with the name, the
+ * four-character hint and which master key sealed it, which identifies a credential without
+ * being usable as one.
+ */
+let vaultApi = null;
+try {
+  const [d, a, db, src, cred, ports, dbAccounts, machine, pages, sum, pre] = await Promise.all([
+    import('../../dist/console-data.js'),
+    import('../../dist/console-accounts.js'),
+    import('../../dist/db.js'),
+    import('../../dist/sources.js'),
+    import('../../dist/credentials.js'),
+    import('../../dist/ports.js'),
+    import('../../dist/db/accounts.js'),
+    import('../../dist/machine.js'),
+    import('../../dist/db/pages.js'),
+    import('../../dist/db/summary.js'),
+    import('../../dist/db/prefilter.js')
+  ]);
+  domain = d.loadConsoleDomain;
+  consoleAccounts = d.loadConsoleAccounts;
+  createAccountImpl = a.createConsoleAccount;
+  updateAccountImpl = a.updateConsoleAccount;
+  deleteAccountImpl = a.deleteConsoleAccount;
+  changePortImpl = a.changeAccountPort;
+  suggestPortImpl = a.suggestFreePort;
+  portStatusImpl = ports.statusForAccounts;
+  stopBrowserImpl = ports.stopAccountBrowser;
+  setUpHereImpl = a.setUpAccountHere;
+  boundHandlesImpl = () => dbAccounts.boundHandles(db.getPool());
+  machineImpl = machine.machineId;
+  /* Every figure that used to be `array.length` over a fully-loaded table. */
+  summaryApi = {
+    totals: () => sum.consoleTotals(db.getPool()),
+    accounts: () => sum.accountTallies(db.getPool()),
+    handles: () => sum.handlesInLogs(db.getPool()),
+    subreddits: () => sum.threadsBySubreddit(db.getPool()),
+    argus: () => sum.argusSummary(db.getPool()),
+    /* Which mechanical rule caught each thread that never reached a model call (0014). */
+    prefilter: () => pre.prefilterBreakdown(db.getPool())
+  };
+  /* Bound to the pool here so every call site asks the database for a page, and none of them
+     can quietly go back to loading a table and slicing it. */
+  pagesApi = {
+    threads: (q) => pages.pageThreads(db.getPool(), q),
+    outcomes: (q) => pages.pageOutcomes(db.getPool(), q),
+    observations: (q) => pages.pageObservations(db.getPool(), q),
+    draftIds: (q) => pages.pageDraftIds(db.getPool(), q),
+    draftCounts: () => pages.draftCounts(db.getPool()),
+    funnel: () => pages.threadFunnel(db.getPool()),
+    checkpoints: () => pages.checkpointSummary(db.getPool()),
+    clamp: pages.clampPage,
+    DEFAULT_PAGE: pages.DEFAULT_PAGE
+  };
+  dbStatus = db.dbUnavailableReason;
+  sourcesApi = src;
+  vaultApi = cred;
+} catch (e) {
+  console.error(
+    '\n  This console reads the database through the compiled build, which is missing or stale.\n' +
+    '    npm run build\n' +
+    `  (${e && e.message ? e.message : e})\n`
+  );
+  process.exit(1);
+}
 
 /* ------------------------------------------------------------------ *
  * reading — every accessor reports absence rather than substituting a default
@@ -54,18 +149,113 @@ const meta = (rel) => {
 /* ------------------------------------------------------------------ *
  * state
  * ------------------------------------------------------------------ */
-function buildState() {
-  const drafts = arr(readJson(join(DATA, 'drafts.json'), []), 'drafts');
-  const threads = arr(readJson(join(DATA, 'threads.json'), []), 'threads');
-  const assessments = arr(readJson(join(DATA, 'assessments.json'), []), 'assessments');
-  const gaps = arr(readJson(join(DATA, 'gaps.json'), []), 'gaps');
-  const certs = readLines(join(DATA, 'certifications.jsonl'));
-  const history = readLines(join(DATA, 'history.jsonl'));
-  const observations = readLines(join(DATA, 'observations.jsonl'));
-  const reviews = readLines(join(DATA, 'reviews.jsonl'));
-  const regret = readLines(join(DATA, 'regret.jsonl'));
+async function buildState(opts = {}) {
+  /**
+   * The domain, from Postgres. These were nine reads of data/*.json and data/*.jsonl —
+   * files that `src/store.ts` stopped writing when the store moved to the database. The
+   * console went on rendering them, so every screen showed an empty redbot no matter how
+   * much work the engine had actually done.
+   *
+   * `unavailable` is carried through to the client rather than swallowed: a console showing
+   * nothing because the database is down must say so, or it reads as "redbot did nothing".
+   */
+  /**
+   * The page's drafts are chosen BEFORE the domain is read, because everything heavy hangs off
+   * them — their threads, their assessments, their certifications. Resolving the ids first is
+   * what turns four whole-table reads into three narrowed ones.
+   *
+   * Falls back to an unscoped read when the pager is unavailable, which keeps a console with no
+   * database, or an older build, correct rather than empty.
+   */
+  let draftPage = null, draftTally = null, summary = null, argusRaw = null, subs = null;
+  if (pagesApi && summaryApi) {
+    try {
+      [draftPage, draftTally, summary, argusRaw, subs] = await Promise.all([
+        pagesApi.draftIds({ offset: opts.reviewOffset }),
+        pagesApi.draftCounts(),
+        summaryApi.totals(),
+        summaryApi.argus(),
+        summaryApi.subreddits()
+      ]);
+    } catch (e) {
+      /* Unscoped, then — every draft rather than a page. Correct, just not bounded, and the
+         same rule as below: a fallback nobody can see is indistinguishable from working. */
+      console.error('[state] draft paging failed, reading every draft:', e && e.message ? e.message : e);
+    }
+  }
+  /* The two derived fields the screen wants but SQL should not be asked to name. */
+  const argus = argusRaw && {
+    ...argusRaw,
+    everCertified: (argusRaw.byVerdict?.CERTIFIED ?? 0) > 0,
+    draftsCheckedTwice: argusRaw.claimSpread.length
+  };
+
+  const dom = await domain(
+    draftPage ? { draftIds: draftPage.rows, skipLogs: true, historyLimit: 200 } : {}
+  );
+  const drafts = dom.drafts;
+  const threads = dom.threads;
+  const assessments = dom.assessments;
+  const gaps = dom.gaps;
+  const certs = dom.certifications;
+  const history = dom.history;
+  const observations = dom.observations;
+  const reviews = dom.reviews;
+  const regret = dom.regret;
 
   const threadById = new Map(threads.map((t) => [t.id, t]));
+
+  /**
+   * The Threads screen's page and its figures, from the database rather than from array
+   * lengths. Both fail SOFT: a console that cannot reach Postgres already reports that at the
+   * top of every screen, and this must not be the thing that turns a degraded console into a
+   * blank one.
+   */
+  let threadPage = { rows: [], total: 0, offset: 0, limit: 25 };
+  let threadCounts = {
+    threadsCollected: threads.length, assessed: assessments.length,
+    contribute: assessments.filter((a) => a.verdict === 'contribute').length,
+    skip: assessments.filter((a) => a.verdict === 'skip').length,
+    gapsAnalysed: gaps.length, drafted: drafts.length
+  };
+  /* Null until the prefilter has run and recorded itself — which is a different thing from
+     "nothing was dropped", and the screen says so rather than showing an empty breakdown. */
+  let prefilterDrops = null;
+  let observationPage = {
+    rows: observations.map((o) => ({
+      ts: o.ts, account: o.account, kind: o.kind, value: o.value, vector: o.vector,
+      note: o.note, checkpoint: o.checkpoint ?? null, permalink: o.permalink ?? null
+    })),
+    total: observations.length, offset: 0, limit: 25
+  };
+  /* Derived from EVERY observation, not from the page — see checkpointSummary. Falls back to
+     deriving from what is in hand, which is exact whenever the page is the whole table. */
+  let checkpoints = [...new Set(observations.filter((o) => o.checkpoint).map((o) => o.checkpoint))]
+    .map((key) => {
+      const mine = observations.filter((o) => o.checkpoint === key);
+      return { checkpoint: key, taken: mine.length, latestTs: mine[mine.length - 1]?.ts ?? null };
+    });
+
+  if (pagesApi && !dom.unavailable) {
+    try {
+      [threadPage, threadCounts, observationPage, checkpoints, prefilterDrops] = await Promise.all([
+        pagesApi.threads({}), pagesApi.funnel(), pagesApi.observations({}), pagesApi.checkpoints(),
+        summaryApi ? summaryApi.prefilter() : null
+      ]);
+    } catch (e) {
+      /**
+       * Falls back to the arrays in hand — but SAYS SO.
+       *
+       * This catch used to be silent, and it hid a real fault: one member of the batch was
+       * undefined (a wiring edit that never landed), so calling it threw and took the other
+       * four aggregates down with it. The console then served `3 collected` for a database
+       * holding 116 — plausible enough to read as truth, with nothing anywhere saying a
+       * fallback had happened. A degraded answer has to be a loud one.
+       */
+      console.error('[state] page/summary aggregates failed, falling back to loaded rows:',
+                    e && e.message ? e.message : e);
+    }
+  }
 
   /* certifications grouped per draft, newest last */
   const certsByDraft = new Map();
@@ -96,7 +286,21 @@ function buildState() {
     };
   };
 
-  const review = drafts.map((d) => {
+  /**
+   * Which drafts this response carries.
+   *
+   * The ids come from SQL — newest first, one page — and only those are projected. Projecting a
+   * draft is not cheap: it joins its certifications, its thread and its assessment, so doing it
+   * for every draft to show twenty-five was the expensive half of this response.
+   *
+   * Falls back to every draft when the page cannot be fetched, which keeps a degraded console
+   * correct rather than empty.
+   */
+  /* Resolved above, before the domain read. Only the fallbacks are computed here. */
+  draftPage ??= { rows: drafts.map((d) => d.id), total: drafts.length, offset: 0, limit: 25 };
+  draftTally ??= { total: drafts.length, pending: drafts.filter((d) => d.status === 'pending').length };
+  const onPage = new Set(draftPage.rows);
+  const review = drafts.filter((d) => onPage.has(d.id)).map((d) => {
     const list = certsByDraft.get(d.id) || [];
     const last = list[list.length - 1] || null;
     const t = threadById.get(d.threadId) || null;
@@ -146,27 +350,45 @@ function buildState() {
   const profiles = readdirSync(DATA, { withFileTypes: true })
     .filter((e) => e.isDirectory() && e.name.startsWith('chrome-profile'))
     .map((e) => e.name);
-  const namedInLogs = [...new Set([
-    ...observations.map((o) => o.account),
-    ...history.map((h) => h.account)
-  ].filter(Boolean))];
+  /* From a UNION in SQL rather than from two loaded logs — those are no longer read here. */
+  const namedInLogs = summaryApi
+    ? await summaryApi.handles().catch(() => [])
+    : [...new Set([...observations.map((o) => o.account), ...history.map((h) => h.account)].filter(Boolean))];
+
+  /* Per-account figures, grouped by the database: one query for all accounts rather than a
+     scan per card. Empty when unavailable, and the fallbacks below fill in from what is held. */
+  const tallies = summaryApi ? await summaryApi.accounts().catch(() => new Map()) : new Map();
 
   /**
    * Configured accounts, from accounts.json. Kept strictly apart from what has been measured:
    * a handle written in a config file is an intention, a karma reading is a fact. The screen
    * shows both and never lets the first stand in for the second.
    */
+  // Configured accounts come from redbot.accounts (the system of record), falling back to
+  // the seed file only when the database is empty or unreachable — dom.accountsFrom says
+  // which, and the screen reports it rather than letting a stale file look authoritative.
+  const configured = dom.accounts;
+  rememberSoleAccount(configured);   // keeps the run-as fallback current
+  // `_rules` has no table: it is prose a person writes beside their accounts, so it stays
+  // in the seed file. Read defensively — the file legitimately may not exist at all.
   const acctFile = readJson(join(DATA, 'accounts.json'), null);
-  const configured = (acctFile && acctFile.accounts) || [];
   const rules = (acctFile && acctFile._rules) || [];
 
   /* union: everything configured, plus anything the logs name that nobody configured */
   const handles = [...new Set([...configured.map((a) => a.handle), ...namedInLogs])];
   const accounts = handles.map((handle) => {
     const cfg = configured.find((c) => c.handle === handle) || null;
-    const mine = observations.filter((o) => o.account === handle);
-    const karma = [...mine].reverse().find((o) => o.kind === 'karma') || null;
-    const published = history.filter((h) => h.account === handle && h.kind === 'reply').length;
+    /**
+     * Counted by the database, per account, in one grouped query — see accountTallies. These
+     * were `observations.filter(...)` and `history.filter(...)` over two fully-loaded logs,
+     * once per card. The fallback path keeps a database-less console honest.
+     */
+    const tally = tallies.get(handle) || null;
+    const mine = tally ? null : observations.filter((o) => o.account === handle);
+    const karma = tally ? tally.karma : ([...(mine ?? [])].reverse().find((o) => o.kind === 'karma') || null);
+    const published = tally
+      ? tally.published
+      : history.filter((h) => h.account === handle && h.kind === 'publish.ok').length;
     return {
       handle,
       configured: !!cfg,
@@ -186,7 +408,7 @@ function buildState() {
       karmaMeasuredAt: karma ? karma.ts : null,
       karmaVector: karma ? karma.vector : null,
       karmaNote: karma ? karma.note : null,
-      observations: mine.length,
+      observations: tally ? tally.observations : (mine ?? []).length,
       published,
       /* karma 1 is exactly the profile new-account filters catch — see ACCOUNT-WARMING.md */
       stage: karma && karma.value < 10 ? 'warming' : karma ? 'established' : 'unmeasured'
@@ -197,43 +419,98 @@ function buildState() {
   const takenPorts = configured.map((c) => c.debugPort).filter(Boolean);
   const takenDirs = configured.map((c) => c.profileDir).filter(Boolean);
 
-  const published = history.filter((h) => h.kind === 'reply').length;
+  /* The figure the whole Results screen hangs off, counted rather than filtered. */
+  const published = summary ? summary.published : history.filter((h) => h.kind === 'publish.ok').length;
 
   /**
-   * Where threads are looked for. Configuration, read from disk — the console turns whatever
-   * is switched on into the commands to run. It cannot collect anything itself, and nothing
-   * here fires on a schedule; a person runs each command.
+   * Where threads are looked for. From redbot.sources — the console turns whatever is switched
+   * on into the commands to run. It cannot collect anything itself, and nothing here fires on
+   * a schedule; a person runs each command.
+   *
+   * This panel used to be null whenever data/sources.json was absent, which on a fresh install
+   * meant the whole "what do we collect" screen simply did not render — no list, and no way to
+   * see that the answer was "nothing yet".
    */
+  let srcView, srcError = null;
+  try { srcView = await sourcesApi.loadSources(); }
+  catch (e) { srcView = { sources: [], from: 'seed-file', unavailable: null }; srcError = String(e && e.message || e); }
+  // `_limits` is prose with no table, so it stays in the seed file — read defensively, since
+  // that file legitimately may not exist at all.
   const srcFile = readJson(join(DATA, 'sources.json'), null);
-  /* named `collect`, not `sources` — `sources` is already the file-provenance list below */
-  const collect = srcFile ? {
-    maxPerRun: (srcFile._limits && srcFile._limits.maxThreadsPerRun) || null,
-    limitNote: (srcFile._limits && srcFile._limits.note) || null,
-    subreddits: srcFile.subreddits || [],
-    searches: srcFile.searches || [],
-    /* how many threads on file came from each place, so a source that never pays off is visible */
-    collected: threads.reduce((m, t) => {
+
+  /* named `collect`, not `sources` — `sources` is already the provenance list below */
+  const collect = {
+    from: srcView.from,
+    unavailable: srcView.unavailable,
+    error: srcError,
+    maxPerRun: (srcFile && srcFile._limits && srcFile._limits.maxThreadsPerRun) || null,
+    limitNote: (srcFile && srcFile._limits && srcFile._limits.note) || null,
+    subreddits: srcView.sources.filter((s) => s.kind === 'subreddit')
+      .map((s) => ({ name: s.value, why: s.why, enabled: s.enabled })),
+    searches: srcView.sources.filter((s) => s.kind === 'search')
+      .map((s) => ({ query: s.value, why: s.why, enabled: s.enabled })),
+    /* how many threads on record came from each place, so a source that never pays off is visible */
+    /**
+     * Tallied case-INSENSITIVELY, because Reddit canonicalises the name: a source added as
+     *  comes back on every thread as , and  as . The console
+     * looked these up by exact key, so two of three sources read "0 on file" while holding 16
+     * and 14 threads — it reported the collector as having done nothing, right next to the
+     * threads it had collected.
+     *
+     * Both shapes are returned:  keeps Reddit's own casing (it is the real name of
+     * the place), and  is the lower-cased index the lookup actually needs.
+     */
+    /**
+     * Two shapes, on purpose.
+     *
+     * Reddit canonicalises a subreddit name: a source added as "wordpress" comes back on every
+     * thread as "Wordpress", and "crm" as "CRM". The console looked the count up by exact key,
+     * so two of three sources read "0 on file" while holding 16 and 14 threads — it reported
+     * the collector as having done nothing, directly above the threads it had just collected.
+     *
+     * `collected` keeps Reddit's own casing, because that is the real name of the place.
+     * `collectedByKey` is the lower-cased index the lookup actually needs.
+     */
+    /* GROUP BY subreddit — `threads` now holds only the page's threads, so counting them here
+       would report a source as having collected nothing directly above its own threads, which
+       is the exact defect the comment above describes, reintroduced by paging. */
+    collected: subs ? subs.collected : threads.reduce((m, t) => {
       const k = t.subreddit || 'unknown';
       m[k] = (m[k] || 0) + 1;
       return m;
+    }, {}),
+    collectedByKey: subs ? subs.collectedByKey : threads.reduce((m, t) => {
+      const k = (t.subreddit || 'unknown').toLowerCase();
+      m[k] = (m[k] || 0) + 1;
+      return m;
     }, {})
-  } : null;
+  };
 
   return {
     generatedAt: new Date().toISOString(),
     collect,
 
     pulse: {
-      waitingOnYou: drafts.filter((d) => d.status === 'pending').length,
+      /* Every one of these was `array.length` over a fully-loaded log. They are the badges in
+         the shell, so they describe the WHOLE record — a page-derived figure here would be
+         wrong on every screen at once. */
+      waitingOnYou: summary ? summary.pending : drafts.filter((d) => d.status === 'pending').length,
       profilesProvisioned: profiles.length,
       accountsInLogs: accounts.length,
       published,
-      operatorDecisions: reviews.length,
-      regretReadings: regret.length,
-      removals: observations.filter((o) => o.kind === 'removal').length
+      operatorDecisions: summary ? summary.reviews : reviews.length,
+      regretReadings: summary ? summary.regret : regret.length,
+      removals: summary ? summary.removals
+                        : observations.filter((o) => o.kind === 'reply-marked-removed').length
     },
 
     review,
+    /* The queue's real size, counted by the database. The header reports THIS, not the page —
+       "3 waiting" when three hundred are is the one wrong number on that screen a person acts on. */
+    reviewTotal: draftTally.total,
+    reviewPending: draftTally.pending,
+    reviewOffset: draftPage.offset,
+    reviewLimit: draftPage.limit,
 
     /**
      * The fact-checker's own record, read from the log rather than described.
@@ -242,7 +519,15 @@ function buildState() {
      * are computed here so the explanation can never drift from the evidence — a guide that
      * says "nothing has passed yet" while the log says otherwise would be worse than no guide.
      */
-    argus: (() => {
+    /**
+     * How the fact-checker has performed, over the WHOLE record — never over the page.
+     *
+     * This is the console's answer to "can Argus be trusted", and the evidence for that is
+     * every certification ever run. Now that `certs` holds only the page's drafts, deriving it
+     * here would answer that question from twenty-five rows. Counted in SQL instead; the
+     * fallback below is exact whenever the certifications in hand ARE the whole table.
+     */
+    argus: argus ?? (() => {
       const byVerdict = { REJECT: 0, ESCALATE: 0, CERTIFIED: 0 };
       for (const c of certs) if (c.verdict in byVerdict) byVerdict[c.verdict]++;
       const ruleCounts = {};
@@ -255,35 +540,36 @@ function buildState() {
         everCertified: byVerdict.CERTIFIED > 0,
         topReasons: Object.entries(ruleCounts).sort((a, b) => b[1] - a[1]).slice(0, 5)
           .map(([rule, n]) => ({ rule, n })),
-        /** Drafts checked more than once — the only place a stability claim can come from. */
         draftsCheckedTwice: repeated.length,
         claimSpread: repeated.map((l) => l.map((c) => (c.claims || []).length))
       };
     })(),
 
+    /**
+     * The Threads screen. FIRST PAGE ONLY, and the figures counted by the database.
+     *
+     * This used to sort every assessment and `.map()` it with a `drafts.find()` inside — an
+     * O(n·m) pass over two fully-loaded tables to render one screen, with every row shipped to
+     * the browser whether or not it was ever scrolled to. At sixteen threads that is free; at
+     * sixteen thousand it is the whole page-load. `items` is now one page and `total` says how
+     * many there are, so the screen can page through the rest without ever holding them all.
+     */
     discovery: {
-      threadsCollected: threads.length,
-      assessed: assessments.length,
-      contribute: assessments.filter((a) => a.verdict === 'contribute').length,
-      skip: assessments.filter((a) => a.verdict === 'skip').length,
-      gapsAnalysed: gaps.length,
-      drafted: drafts.length,
-      items: assessments
-        .slice()
-        .sort((x, y) => y.score - x.score)
-        .map((a) => {
-          const t = threadById.get(a.threadId);
-          const d = drafts.find((x) => x.threadId === a.threadId);
-          return {
-            threadId: a.threadId, title: a.title, permalink: a.permalink,
-            verdict: a.verdict, score: a.score, thesis: a.thesis, reasons: a.reasons || [],
-            subreddit: t ? t.subreddit : null,
-            comments: t ? t.commentCount : null,
-            ageText: t ? t.ageText : null,
-            draftId: d ? d.id : null,
-            draftStatus: d ? d.status : null
-          };
-        })
+      ...threadCounts,
+      items: threadPage.rows,
+      total: threadPage.total,
+      offset: threadPage.offset,
+      limit: threadPage.limit,
+      /**
+       * WHY the threads that never reached a model call were dropped.
+       *
+       * `collected − assessed` is NOT all prefilter drops, and conflating them would be the
+       * made-up figure this panel has always refused to show. It also contains threads the
+       * filter KEPT and that simply have not been analysed yet — `redbot opportunity` takes 15
+       * at a time. So the recorded drops are reported as themselves, and whatever is left over
+       * is named as "not looked at yet" rather than attributed to a rule that never fired.
+       */
+      prefilter: prefilterDrops
     },
 
     accounts,
@@ -300,19 +586,61 @@ function buildState() {
 
     outcomes: {
       published,
-      observations: observations.map((o) => ({ ts: o.ts, account: o.account, kind: o.kind, value: o.value, vector: o.vector, note: o.note })),
-      reviews: reviews.length,
-      regret: regret.length,
+      /**
+       * `checkpoint` and `permalink` are carried through deliberately.
+       *
+       * `src/health.ts` defines a reading as happening at one of four moments — immediate,
+       * 1h, 24h, 7d — and `redbot.observations` stores which. This projection dropped both,
+       * so the console could say a measurement existed but never WHEN in a comment's life it
+       * was taken, and the Results screen had no way to tell "the 24h check has not run yet"
+       * from "there is nothing to check". They are different facts.
+       *
+       * Null where the row has none: a karma probe is not tied to a checkpoint, and reporting
+       * it as `immediate` would be inventing a reading nobody took.
+       */
+      /* FIRST PAGE ONLY. This grows with every karma probe and every checkpoint reading — a
+         slow but genuinely unbounded table, the kind that looks harmless for months. */
+      observations: observationPage.rows,
+      observationsTotal: observationPage.total,
+      observationsOffset: observationPage.offset,
+      observationsLimit: observationPage.limit,
+      /* Counted over the whole table, so "not run" means not run rather than not on this page. */
+      checkpoints,
+      reviews: summary ? summary.reviews : reviews.length,
+      regret: summary ? summary.regret : regret.length,
       /* Everything Outcomes exists to show is downstream of a published reply. */
       blockedBy: published === 0 ? 'nothing has been published' : null
     },
 
+    /* The last forty events. `history` is already bounded to that by the scope passed to the
+       domain read, so this slice is a safety net rather than the thing doing the limiting. */
     activity: history.slice(-40).reverse().map((h) => ({ ts: h.ts, kind: h.kind, summary: h.summary })),
 
+    /**
+     * Where the numbers on this screen came from.
+     *
+     * This used to list ten data/ files. Nine of them are now tables, and after the store
+     * moved they all reported `exists: false` — a provenance panel saying "no evidence on
+     * disk" beside a screen full of rows, which is the exact inversion of what it is for.
+     * It reports the database as one source with its row counts, plus the files that really
+     * are still files.
+     */
     sources: [
-      meta('drafts.json'), meta('threads.json'), meta('assessments.json'), meta('gaps.json'),
-      meta('certifications.jsonl'), meta('history.jsonl'), meta('observations.jsonl'),
-      meta('reviews.jsonl'), meta('regret.jsonl'), meta('sources.json')
+      {
+        file: 'postgres: redbot',
+        exists: !dom.unavailable,
+        detail: dom.unavailable ?? `${threads.length} threads, ${drafts.length} drafts, ` +
+          `${gaps.length} gap analyses, ${assessments.length} assessments, ${certs.length} certifications, ` +
+          `${history.length} history, ${observations.length} observations, ${reviews.length} reviews, ` +
+          `${regret.length} regret`
+      },
+      { file: `accounts (${dom.accountsFrom === 'database' ? 'redbot.accounts' : 'data/accounts.json seed'})`,
+        exists: configured.length > 0, detail: `${configured.length} configured` },
+      { file: `sources (${srcView.from === 'database' ? 'redbot.sources' : 'data/sources.json seed'})`,
+        exists: srcView.sources.length > 0,
+        detail: srcError ?? srcView.unavailable ??
+          `${collect.subreddits.length} subreddit(s), ${collect.searches.length} search(es)` },
+      meta('ui-status.json')
     ]
   };
 }
@@ -328,23 +656,295 @@ function buildState() {
  *
  * `reply` is not in this list. Publishing has its own endpoint with its own confirmation.
  * ------------------------------------------------------------------ */
+/**
+ * `needsBrowser` marks the actions that attach to Chrome over CDP, and therefore MUST know
+ * which account they are running as. Verified against the engine rather than guessed:
+ * read (src/commands/read.ts), search (src/commands/search.ts), probe-karma
+ * (src/probe-karma.ts) and reply (src/commands/reply.ts) all reach `attach()`;
+ * opportunity, draft and certify never do and run fine without an account.
+ *
+ * The flag exists because `config.browser.cdpEndpoint` does NOT fail closed when no account
+ * is set — src/config.ts `resolveEndpoint()` falls through to a hardcoded 127.0.0.1:9222,
+ * and on this machine that port is answered by Lenovo Vantage's Edge WebView2. Attaching
+ * there is worse than refusing: it opens tabs in the wrong browser and reports the empty
+ * result as though Reddit had served nothing.
+ */
+/**
+ * `stoppable` says whether a person may interrupt this action part-way.
+ *
+ * It is true for everything that READS and ANALYSES: killing a collect half-way leaves fewer
+ * threads collected, which is exactly what "stop" should mean. It is false for exactly one
+ * action, and that exception is the whole reason this flag exists rather than a blanket kill —
+ * see `__reply` below.
+ */
 const ACTIONS = {
-  'find-threads':   { args: (o) => ['read', String(o.subreddit || 'WordPress')], label: 'look for new threads' },
-  'find-search':    { args: (o) => ['search', String(o.query || '')],            label: 'run a saved search' },
-  'score':          { args: () => ['opportunity'],                               label: 'score what came back' },
-  'write':          { args: (o) => ['draft', ...(o.threadId ? [String(o.threadId)] : [])], label: 'write a reply' },
-  'check':          { args: (o) => ['certify', ...(o.draftId ? [String(o.draftId)] : []), ...(o.override ? ['--override'] : [])], label: 'fact-check a reply' },
-  'check-karma':    { args: () => ['probe-karma'],                               label: 'check karma' },
+  'find-threads':   { args: (o) => ['read', String(o.subreddit || 'WordPress')], label: 'look for new threads', needsBrowser: true, stoppable: true },
+  'find-search':    { args: (o) => ['search', String(o.query || '')],            label: 'run a saved search',   needsBrowser: true, stoppable: true },
+  'score':          { args: () => ['opportunity'],                               label: 'score what came back', stoppable: true },
+  'write':          { args: (o) => ['draft', ...(o.threadId ? [String(o.threadId)] : [])], label: 'write a reply', stoppable: true },
+  'check':          { args: (o) => ['certify', ...(o.draftId ? [String(o.draftId)] : []), ...(o.override ? ['--override'] : [])], label: 'fact-check a reply', stoppable: true },
+  'check-karma':    { args: () => ['probe-karma'],                               label: 'check karma',          needsBrowser: true, stoppable: true },
   /**
    * Publishing. Deliberately named with a leading underscore and NOT reachable from
    * /api/run — the only caller is publish(), which will not proceed without the typed
    * confirmation and which writes the single-use approval token first.
+   *
+   * NOT STOPPABLE, and this is the case the flag exists for. A reply is submitted to Reddit and
+   * then CONFIRMED by re-reading its permalink — two steps, deliberately separate, because a
+   * post that landed and was not recorded is the one failure this codebase spent a whole commit
+   * on ("confirmation is a first-class stage"). Killing between them leaves a live comment on
+   * Reddit that redbot does not know it made: it will not be measured, not checked for removal,
+   * and may be written again. Waiting out a publish is the lesser harm, every time.
    */
-  '__reply':        { args: (o) => ['reply', String(o.draftId || '')],           label: 'send the reply' }
+  '__reply':        { args: (o) => ['reply', String(o.draftId || '')],           label: 'send the reply',       needsBrowser: true, stoppable: false }
 };
 const PUBLIC_ACTIONS = Object.keys(ACTIONS).filter((k) => !k.startsWith('__'));
 
 let running = null;   // one at a time — two runs against the same data files corrupt each other
+/**
+ * The live child, so it can be stopped from outside the promise that started it.
+ *
+ * Held as the ChildProcess OBJECT, never as a bare pid kept for later. A pid is a rendezvous
+ * with whatever holds it NOW: Windows recycles them quickly, and a stale number will happily
+ * name somebody else's process by the time you use it. Everything below re-reads
+ * `runningChild.pid` at the moment of the kill and checks the child is still alive first.
+ */
+let runningChild = null;
+/** Set when a person pressed Stop, so the close handler can say "stopped" and not "failed". */
+let runningStopped = false;
+/**
+ * WHICH account the running action is driving, or null when it drives no browser.
+ *
+ * Kept beside `running` because the one-at-a-time rule above was never the whole story: the
+ * unattended loop is held in `autoProc` and consults neither, so the loop and a button could
+ * drive the same Chrome at the same time. Deciding whether that is happening needs the
+ * account, not just the action name.
+ */
+let runningAccount = null;
+
+/**
+ * The one account to drive when a request does not name one — or null when that is ambiguous.
+ *
+ * Refreshed whenever the console reads accounts (every /api/state and /api/pulse), so a newly
+ * created account is usable without restarting the server. Null with zero accounts and null
+ * with several: in both cases there is no defensible choice, and the child must fail closed
+ * rather than drive somebody's browser by accident.
+ */
+let soleAccountHandle = null;
+
+/**
+ * Every configured handle, so an ambiguous run can name the choices instead of just refusing.
+ * Kept next to `soleAccountHandle` because both are refreshed from the same read.
+ */
+let knownAccountHandles = [];
+
+function rememberSoleAccount(accounts) {
+  const list = (Array.isArray(accounts) ? accounts : []).filter((a) => a && a.handle);
+  knownAccountHandles = list.map((a) => String(a.handle));
+  soleAccountHandle = list.length === 1 ? String(list[0].handle) : null;
+}
+
+/* ------------------------------------------------------------------ *
+ * The live run log.
+ *
+ * `/api/run` answers only when the child EXITS, and a collect pass takes minutes. Until then
+ * the screen said "Looking through r/wordpress…" and nothing else — so a run that was working
+ * and a run that had wedged looked identical, and the only way to tell them apart was to wait.
+ * Every defect found in this console so far was diagnosed from CLI output the operator could
+ * not see.
+ *
+ * The child's stdout/stderr is appended here line by line as it arrives, and served by
+ * GET /api/run/log. Kept on the SERVER rather than pushed down a socket for two reasons:
+ * reloading the page mid-run must not lose the log, and this console holds no other streaming
+ * connection to keep alive. Polling a bounded array is the smaller mechanism.
+ *
+ * Read-only, like the rest of the GET surface: it exposes what a command printed, and nothing
+ * about how to start one.
+ * ------------------------------------------------------------------ */
+const RUN_LOG_MAX = 2000;   // bounded: `auto` can print for days
+/* Built with the constructor so the pattern text is unambiguous in every editor and escape layer. */
+const NEWLINE = String.fromCharCode(10);
+const ANSI = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
+const TRAILING_CR = new RegExp(String.fromCharCode(13) + '$');
+let runLog = { id: 0, key: null, command: null, startedAt: null, lines: [], dropped: 0, done: true, code: null };
+let runLogPartial = '';
+
+/* ------------------------------------------------------------------ *
+ * Where a finished run goes.
+ *
+ * The live buffer above is memory, so a restart lost it and starting a second action discarded
+ * the first — which meant the output that diagnosed every defect found today was gone the
+ * moment you clicked anything else.
+ *
+ * One file per run under data/run-logs/, JSONL: a header line, then one line per output line,
+ * then a footer. Written AS THE RUN GOES rather than on exit, so a crashed or killed run still
+ * leaves what it managed to print — the case you most want a log for.
+ *
+ * Files, not Postgres: this is debug output, not the operator's evidence, and it has to stay
+ * readable when the database is the thing that broke.
+ * ------------------------------------------------------------------ */
+const RUN_LOG_DIR = join(DATA, 'run-logs');
+const RUN_LOG_KEEP = 500;              // newest 500 runs; older ones pruned when a run starts
+let runLogStream = null;
+
+/** Sortable by name, so listing and pruning never have to stat every file. */
+function runLogFileName(startedAt, id) {
+  return startedAt.replace(/[:.]/g, '-') + '__' + String(id).padStart(6, '0') + '.jsonl';
+}
+
+function runLogWrite(obj) {
+  if (!runLogStream) return;
+  try { runLogStream.write(JSON.stringify(obj) + NEWLINE); } catch { /* disk full, read-only fs */ }
+}
+
+/**
+ * Delete everything past the newest RUN_LOG_KEEP.
+ *
+ * Done when a run starts, not on a timer: that is exactly when the count can exceed the cap,
+ * and it means no background work and no surprise pause in the middle of a run.
+ */
+function runLogPrune(target) {
+  try {
+    const files = readdirSync(RUN_LOG_DIR).filter((f) => f.endsWith('.jsonl')).sort();
+    const excess = files.length - target;
+    for (let i = 0; i < excess; i++) rmSync(join(RUN_LOG_DIR, files[i]), { force: true });
+  } catch { /* no directory yet, or unreadable — nothing to prune */ }
+}
+
+/** Newest first. Headers only — a run's lines stay on disk until it is actually opened. */
+function runLogList(limit = 100) {
+  try {
+    const files = readdirSync(RUN_LOG_DIR).filter((f) => f.endsWith('.jsonl')).sort().reverse();
+    return files.slice(0, limit).map((f) => {
+      try {
+        const raw = readFileSync(join(RUN_LOG_DIR, f), 'utf8');
+        const rows = raw.split(NEWLINE).filter((l) => l.trim());
+        const h = JSON.parse(rows[0]);
+        const foot = rows.length > 1 ? JSON.parse(rows[rows.length - 1]) : null;
+        const done = !!(foot && foot.t === 'f');
+        return {
+          file: f, id: h.id, key: h.key, command: h.command, startedAt: h.startedAt,
+          /* No footer means the process died mid-run. Reported, not hidden: a truncated log is
+             itself the most useful thing to know about that run. */
+          done, code: done ? foot.code : null, lines: done ? foot.lines : rows.length - 1
+        };
+      } catch {
+        return { file: f, id: null, key: null, command: '(unreadable log)', startedAt: null,
+                 done: false, code: null, lines: null };
+      }
+    });
+  } catch { return []; }
+}
+
+/** One past run, in the same shape the live endpoint returns. */
+function runLogRead(file) {
+  if (!/^[0-9A-Za-z._-]+[.]jsonl$/.test(file)) return null;   // name shape only: no traversal
+  let raw;
+  try { raw = readFileSync(join(RUN_LOG_DIR, file), 'utf8'); } catch { return null; }
+  const rows = raw.split(NEWLINE).filter((l) => l.trim());
+  if (!rows.length) return null;
+  let header;
+  try { header = JSON.parse(rows[0]); } catch { return null; }
+  const out = [];
+  let foot = null;
+  for (const r of rows.slice(1)) {
+    try {
+      const o = JSON.parse(r);
+      if (o && o.t === 'l') out.push({ at: o.at, text: o.text });
+      else if (o && o.t === 'f') foot = o;
+    } catch { /* skip a torn line rather than fail the whole read */ }
+  }
+  return {
+    runId: header.id, key: header.key, command: header.command, startedAt: header.startedAt,
+    running: false, done: !!foot, code: foot ? foot.code : null, dropped: foot ? foot.dropped : 0,
+    total: out.length, lines: out, file
+  };
+}
+
+function runLogStart(key, command) {
+  runLogPartial = '';
+  try { if (runLogStream) runLogStream.end(); } catch { /* already closed */ }
+  runLogStream = null;
+  runLog = {
+    id: runLog.id + 1, key, command,
+    startedAt: new Date().toISOString(),
+    lines: [], dropped: 0, done: false, code: null
+  };
+
+  /* Open this run's file and write its header at once, so even a run that dies in its first
+     second leaves a record that it was attempted. */
+  try {
+    mkdirSync(RUN_LOG_DIR, { recursive: true });
+    /* KEEP-1: this run is about to add its own file, and the cap is a promise about how
+       many files exist — not how many existed a moment before the newest one appeared. */
+    runLogPrune(RUN_LOG_KEEP - 1);
+    runLog.file = runLogFileName(runLog.startedAt, runLog.id);
+    runLogStream = createWriteStream(join(RUN_LOG_DIR, runLog.file), { flags: 'a' });
+    runLogWrite({ t: 'h', id: runLog.id, key, command, startedAt: runLog.startedAt });
+  } catch {
+    runLogStream = null;   // a console that cannot write its log still runs commands
+  }
+}
+
+/**
+ * Split on newlines and stamp each line with milliseconds since the run began.
+ *
+ * A chunk boundary is not a line boundary, so a partial line is held back until its newline
+ * arrives — otherwise the viewer renders half a sentence and then repeats it whole.
+ */
+function runLogAppend(chunk) {
+  if (runLog.done) return;
+  const at = Date.now() - Date.parse(runLog.startedAt);
+  const parts = (runLogPartial + String(chunk)).split(NEWLINE);
+  runLogPartial = parts.pop() ?? '';
+  for (const raw of parts) {
+    // The CLI writes for a terminal; this renders in HTML. Strip the colour codes.
+    const text = raw.replace(ANSI, '').replace(TRAILING_CR, '');
+    runLog.lines.push({ at, text });
+    runLogWrite({ t: 'l', at, text });   // to disk as it happens, not on exit
+  }
+  if (runLog.lines.length > RUN_LOG_MAX) {
+    const cut = runLog.lines.length - RUN_LOG_MAX;
+    runLog.lines.splice(0, cut);
+    runLog.dropped += cut;   // reported to the client, never silently forgotten
+  }
+}
+
+function runLogFinish(code) {
+  if (runLogPartial) runLogAppend(NEWLINE);   // flush a final line with no trailing newline
+  runLogPartial = '';
+  runLog.done = true;
+  runLog.code = code;
+  /* A footer appended rather than the header rewritten: append-only means a reader never
+     sees a half-updated record, and a run killed before this point simply has none. */
+  runLogWrite({ t: 'f', code, lines: runLog.lines.length, dropped: runLog.dropped });
+  try { if (runLogStream) runLogStream.end(); } catch { /* already closed */ }
+  runLogStream = null;
+}
+
+/**
+ * Why a reply could not start right now, or null when nothing is in the way.
+ *
+ * The same three questions `runAction` asks, asked without side effects so `publish()` can ask
+ * them BEFORE it writes an approval token. Kept as one function rather than two copies: a
+ * pre-flight that drifts from the real gate is worse than no pre-flight, because it says yes
+ * to something that is then refused.
+ */
+function whyReplyCannotStart(requestedAccount) {
+  const spec = ACTIONS['__reply'];
+  if (running) return `"${running}" is still running`;
+  const account = requestedAccount ? String(requestedAccount) : soleAccountHandle;
+  if (!account) {
+    return `"${spec.label}" drives a Reddit browser, so it needs to know which account to run as. ` +
+      (knownAccountHandles.length
+        ? `Configured: ${knownAccountHandles.join(', ')}.`
+        : 'No accounts are configured yet — add one on the Accounts screen.');
+  }
+  if (autoProc && autoProc.account === account) {
+    return `The unattended loop is already running as ${account}. Stop it first — two processes on one Chrome read each other's pages.`;
+  }
+  return null;
+}
 
 function runAction(key, opts) {
   return new Promise((resolve) => {
@@ -352,8 +952,50 @@ function runAction(key, opts) {
     if (!spec) return resolve({ ok: false, error: `unknown action: ${key}` });
     if (running) return resolve({ ok: false, error: `"${running}" is still running` });
 
+    /**
+     * Which account, decided BEFORE the run slot is claimed so a refusal cannot wedge it.
+     *
+     * An explicit account from the request wins; otherwise the single configured account.
+     * With none resolvable this is genuinely ambiguous, and a browser-driving action must
+     * refuse rather than let the child fall through to `resolveEndpoint()`'s 9222 default.
+     */
+    const account = (opts && opts.account) ? String(opts.account) : soleAccountHandle;
+    if (spec.needsBrowser && !account) {
+      const known = knownAccountHandles.length
+        ? `Configured: ${knownAccountHandles.join(', ')}.`
+        : 'No accounts are configured yet — add one on the Accounts screen.';
+      return resolve({
+        ok: false,
+        error: `"${spec.label}" drives a Reddit browser, so it needs to know which account to run as. ${known}`
+      });
+    }
+
+    /**
+     * The loop and this button must not drive one Chrome between them.
+     *
+     * `running` guards one button against another; `autoProc` guards one loop against another;
+     * neither consulted the other, so starting the unattended loop as an account and then
+     * pressing Collect as that same account put TWO processes on that account's CDP endpoint,
+     * both calling `context.newPage()` and both writing threads. The comment on `running`
+     * already says why that is not allowed — "two runs against the same data files corrupt
+     * each other" — the loop simply was not covered by it.
+     *
+     * Scoped to the SAME account on purpose. A loop running as A while you collect as B is two
+     * browsers and no conflict, and the loop was deliberately held apart from `running` so it
+     * could never block a person from pressing a button. This keeps that, and only refuses the
+     * case that actually collides.
+     */
+    if (spec.needsBrowser && autoProc && autoProc.account === account) {
+      return resolve({
+        ok: false,
+        status: 409,
+        error: `The unattended loop is already running as ${account}. Stop it first — two processes on one Chrome read each other's pages.`
+      });
+    }
+
     const args = spec.args(opts || {}).filter((a) => a !== '');
     running = key;
+    runningAccount = spec.needsBrowser ? account : null;
     const started = Date.now();
     /**
      * Who runs it, and as whom.
@@ -365,7 +1007,21 @@ function runAction(key, opts) {
      * accounts.json before anything runs.
      */
     const env = { ...process.env };
-    if (opts && opts.account) env.REDBOT_ACCOUNT = String(opts.account);
+    /**
+     * Which Reddit browser this drives. Resolved above, into `account`.
+     *
+     * This block used to END the story with "so nothing is set and the child fails closed".
+     * It did not. `soleAccountHandle` is null with two or more accounts, so REDBOT_ACCOUNT
+     * went unset, and src/config.ts `selectedAccount()` returns null (it does not throw) —
+     * leaving `resolveEndpoint()` to fall through to its hardcoded 127.0.0.1:9222. Measured
+     * on 2026-07-29: that port answered /json/version as "LenovoVantage/3.0.0.191", the very
+     * browser the old comment named as the bug it had fixed. The guard was inert on any
+     * machine with more than one account.
+     *
+     * The refusal is now explicit, above, and only browser-driving actions are subject to it —
+     * opportunity, draft and certify never attach and keep working without an account.
+     */
+    if (account) env.REDBOT_ACCOUNT = account;
     /**
      * Bill the run to the operator the console picked, overriding whatever the server's shell
      * inherited. Only ever a name already in operators.json (the select endpoint validates it),
@@ -373,24 +1029,44 @@ function runAction(key, opts) {
      * If nothing is selected, the child's config.ts fails closed with "No Claude operator set".
      */
     if (selectedOperator) env.REDBOT_OPERATOR = selectedOperator;
+    /* Which LLM path. Always set, because 'cli' must be able to OVERRIDE a REDBOT_LLM=api the
+       server's own shell exported — a choice made on the Setup screen has to win over it. */
+    env.REDBOT_LLM = selectedProvider;
     // H5: the CDP endpoint is NOT taken from the request. The selected account already resolves
     // its own debug port from accounts.json (config.ts); letting the browser body set REDBOT_CDP
     // would let a caller point redbot at a debugger they control and harvest every scraped
     // thread. config.ts additionally refuses any non-loopback REDBOT_CDP as defence in depth.
 
+    runLogStart(key, `redbot ${args.join(' ')}`);
     const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), ...args], {
       cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe']
     });
+    runningChild = child;
+    runningStopped = false;
     let out = '', err = '';
-    child.stdout.on('data', (d) => { out += String(d); });
-    child.stderr.on('data', (d) => { err += String(d); });
+    // Buffered for the final response AND streamed to the live log — the response contract
+    // is unchanged, the log is additive.
+    child.stdout.on('data', (d) => { out += String(d); runLogAppend(d); });
+    child.stderr.on('data', (d) => { err += String(d); runLogAppend(d); });
     const timer = setTimeout(() => { try { child.kill(); } catch {} }, 20 * 60 * 1000);
     child.on('close', (code) => {
-      clearTimeout(timer); running = null;
-      resolve({ ok: code === 0, code, ms: Date.now() - started, output: (out + err).slice(-24000), command: `redbot ${args.join(' ')}` });
+      clearTimeout(timer); running = null; runningAccount = null; runningChild = null;
+      runLogFinish(code);
+      /* A run somebody stopped is not a run that failed. Reported separately so the screen can
+         say "Stopped" rather than showing a red error for the thing it was asked to do. */
+      const stopped = runningStopped;
+      runningStopped = false;
+      resolve({
+        ok: code === 0, code, stopped, ms: Date.now() - started,
+        ...(stopped ? { error: 'Stopped.' } : {}),
+        output: (out + err).slice(-24000), command: `redbot ${args.join(' ')}`
+      });
     });
     child.on('error', (e) => {
-      clearTimeout(timer); running = null;
+      clearTimeout(timer); running = null; runningAccount = null; runningChild = null;
+      runningStopped = false;
+      runLogAppend(`failed to start: ${e && e.message || e}` + NEWLINE);
+      runLogFinish(-1);
       resolve({ ok: false, error: String(e && e.message || e) });
     });
   });
@@ -423,6 +1099,17 @@ const operatorsPath = join(DATA, 'operators', 'operators.json');
  * ------------------------------------------------------------------ */
 let selectedOperator = process.env.REDBOT_OPERATOR || null;
 
+/**
+ * Which LLM path a run takes: this machine's Claude login ('cli') or a stored API key ('api').
+ *
+ * Starts from REDBOT_LLM so a shell that already chose keeps working with no click — the same
+ * rule as `selectedOperator`. Forwarded to every child rather than mutated into this process's
+ * own environment: a running child cannot be re-pointed, and pretending otherwise would make
+ * the screen disagree with the run.
+ */
+let selectedProvider = process.env.REDBOT_LLM === 'api' ? 'api' : 'cli';
+const llmProvider = () => selectedProvider;
+
 function readOperators() {
   const all = readJson(operatorsPath, null);
   if (!all || typeof all !== 'object') return [];
@@ -439,6 +1126,110 @@ function readOperators() {
     }));
 }
 
+/** Reddit-ish operator names, matching VALID in src/commands/operators.ts. */
+const OPERATOR_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
+
+/**
+ * Register an operator — the half of `redbot operators add` that a web page legitimately can do.
+ *
+ * Creating one is a directory and a line in a registry: no credential is involved, so there is
+ * nothing here the console must be kept away from. The half it CANNOT do is the SIGN-IN — that
+ * is an interactive `claude` session with `/login` typed into it by a person, and no web page
+ * drives that. So this returns the exact command to paste, and `ready` stays false until that
+ * folder actually has a login in it.
+ *
+ * Mirrors src/commands/operators.ts rather than shelling out to it: `operators add` writes
+ * prose to stdout for a human, and the console needs the values.
+ *
+ * ON RETURNING configDir. `readOperators()` above deliberately withholds it, and that rule is
+ * right for a list polled on every render. This is the considered exception: it is the path of
+ * the operator you just created, returned once, to a loopback-only origin, and the sign-in
+ * command is unusable without it. Nothing else here hands out a path.
+ */
+function createOperator(rawName) {
+  const name = String(rawName || '');
+  if (!OPERATOR_NAME_RE.test(name)) {
+    return { ok: false, error: 'Letters, digits, dot, dash and underscore only — up to 32 characters, starting with a letter or digit.' };
+  }
+
+  const existing = readJson(operatorsPath, null);
+  if (existing !== null && (typeof existing !== 'object' || Array.isArray(existing))) {
+    return { ok: false, error: 'data/operators/operators.json is not readable JSON. Fix or remove it before adding an operator.' };
+  }
+  const all = existing || {};
+  if (all[name]) {
+    return { ok: false, error: `"${name}" already exists. Remove its entry by hand to re-create it.` };
+  }
+
+  const configDir = join(DATA, 'operators', name, 'claude');
+  mkdirSync(configDir, { recursive: true });
+  all[name] = {
+    configDir,
+    declaredBy: name,
+    declaredAt: new Date().toISOString().slice(0, 10),
+    note: 'Dedicated login folder created from the console. Sign in once before use.'
+  };
+  writeFileSync(operatorsPath, JSON.stringify(all, null, 2) + '\n', 'utf8');
+
+  return {
+    ok: true,
+    name,
+    signIn: {
+      powershell: `$env:CLAUDE_CONFIG_DIR = "${configDir}"; claude`,
+      bash: `CLAUDE_CONFIG_DIR="${configDir}" claude`
+    }
+  };
+}
+
+/**
+ * Everything the Setup screen needs to say whether this install can actually run.
+ *
+ * Reports ABSENCE as absence, the same rule as the rest of this file: a vault that cannot be
+ * opened, a database that is down and a key that was never stored are three different answers
+ * and each gets its own sentence. Never reports a secret VALUE — `listSecrets()` returns the
+ * name, the 4-char hint and the sealing key id, which identifies a credential without being one.
+ */
+async function setupStatus() {
+  const dbReason = dbStatus ? dbStatus() : 'the compiled build is missing';
+  const vaultReason = vaultApi ? vaultApi.vaultUnavailableReason() : 'the compiled build is missing';
+
+  let fingerprint = null;
+  if (!vaultReason) {
+    try { fingerprint = vaultApi.keyFingerprint(); } catch { fingerprint = null; }
+  }
+
+  /* Only attempted when both halves are up: listing needs the database, opening needs the key. */
+  let secrets = [], secretsError = null;
+  if (!dbReason && !vaultReason) {
+    try {
+      secrets = (await vaultApi.listSecrets()).map((s) => ({
+        scope: s.scope, name: s.name, hint: s.hint, keyId: s.keyId,
+        updatedAt: s.updatedAt, lastUsedAt: s.lastUsedAt
+      }));
+    } catch (e) {
+      secretsError = e && e.message ? e.message : String(e);
+    }
+  }
+
+  const operators = readOperators();
+  const apiKeyName = vaultApi ? vaultApi.ANTHROPIC_API_KEY : 'anthropic_api_key';
+  return {
+    database: { ok: !dbReason, reason: dbReason },
+    vault: { ok: !vaultReason, reason: vaultReason, keyId: fingerprint },
+    secrets, secretsError, apiKeyName,
+    /* Whether a key is on file at all — the one fact the "which provider" choice turns on. */
+    apiKeyStored: secrets.some((s) => s.name === apiKeyName),
+    /* The environment's key wins over the vault (src/config.ts anthropicKey), so say when one
+       is set — otherwise storing a vault key and seeing no change is baffling. */
+    apiKeyFromEnv: Boolean(process.env.ANTHROPIC_API_KEY),
+    provider: llmProvider(),
+    providerFromEnv: process.env.REDBOT_LLM === 'api' ? 'api' : null,
+    operators,
+    selectedOperator,
+    operatorReady: operators.some((o) => o.name === selectedOperator && o.ready)
+  };
+}
+
 function chromeBinary() {
   const candidates = [
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -448,49 +1239,110 @@ function chromeBinary() {
   return candidates.find((p) => existsSync(p)) || null;
 }
 
-function createAccount(body) {
-  const handle = String(body.handle || '').trim();
-  if (!/^[A-Za-z0-9_-]{3,20}$/.test(handle)) {
-    return { ok: false, error: 'A Reddit username is 3–20 characters: letters, numbers, underscore or dash.' };
-  }
-  const file = readJson(accountsPath, null);
-  if (!file || !Array.isArray(file.accounts)) return { ok: false, error: 'accounts.json is missing or malformed.' };
-  if (file.accounts.some((a) => a.handle.toLowerCase() === handle.toLowerCase())) {
-    return { ok: false, error: `${handle} is already set up.` };
-  }
-  const ports = file.accounts.map((a) => a.debugPort).filter(Boolean);
-  const dirs = file.accounts.map((a) => a.profileDir).filter(Boolean);
-  const port = (ports.length ? Math.max(...ports) : 9221) + 1;
-  let dir, i = dirs.length;
-  do { dir = `chrome-profile-${String.fromCharCode(97 + i)}`; i++; } while (dirs.includes(dir));
+/**
+ * The everyday Chrome profiles that actually exist on this machine.
+ *
+ * Read from Chrome's own `Local State` → `profile.info_cache`, which is exactly the list
+ * Chrome's profile switcher shows: folder name, display name, and the Google account signed
+ * into it. Overridable by REDBOT_CHROME_USER_DATA so a test can point at a fixture instead of
+ * whatever browser the machine running the suite happens to have.
+ *
+ * WHY `usableForAutomation` IS FALSE — this is the important part.
+ *
+ * redbot cannot drive one of these profiles, and the failure is silent, which is worse than
+ * an error. MEASURED on 2026-07-29 against Chrome 150 on this machine: launching Chrome with
+ * `--user-data-dir=<the real User Data folder> --profile-directory="Profile 1"
+ * --remote-debugging-port=9337` DOES open a working CDP endpoint — /json/version answered 200
+ * — but the browser behind it carried NONE of that profile's data: 0 cookies, against 11
+ * cookies (reddit among them) on redbot's own profile probed the same way, in the same script.
+ *
+ * That is the Chrome 136 change: remote debugging is refused for the everyday data directory,
+ * and what answers instead is an isolated, empty profile.
+ * https://developer.chrome.com/blog/remote-debugging-port
+ *
+ * So an account pointed at one of these would attach perfectly and behave as though signed
+ * out. The list is offered for RECOGNITION — "this Reddit login lives in that profile" — and
+ * the screen says plainly that redbot still drives its own window.
+ */
+const CHROME_USER_DATA = process.env.REDBOT_CHROME_USER_DATA
+  || (process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'User Data') : null);
 
-  const entry = {
-    handle,
-    role: String(body.role || 'Support'),
-    speaks: String(body.speaks || ''),
-    knows: Array.isArray(body.knows) ? body.knows.map(String) : [],
-    subreddits: Array.isArray(body.subreddits) && body.subreddits.length ? body.subreddits.map(String) : ['WordPress'],
-    timezone: String(body.timezone || 'Asia/Manila'),
-    quietHours: [0, 8],
-    dailyCeiling: 1,
-    profileDir: dir,
-    debugPort: port,
-    createdBy: 'console',
-    createdAt: new Date().toISOString(),
-    note: String(body.note || 'Added from the console.')
+function chromeProfiles() {
+  const none = (reason) => ({ available: false, reason, profiles: [], usableForAutomation: false });
+  if (!CHROME_USER_DATA) return none('This machine does not report a Chrome data folder.');
+
+  const statePath = join(CHROME_USER_DATA, 'Local State');
+  if (!existsSync(statePath)) return none('Chrome’s profile list is not where it usually lives, so its profiles cannot be read.');
+
+  const state = readJson(statePath, null);
+  const cache = state && state.profile && state.profile.info_cache;
+  if (!cache || typeof cache !== 'object') return none('Chrome’s profile list could not be read.');
+
+  const profiles = Object.entries(cache)
+    .filter(([dir]) => typeof dir === 'string' && dir)
+    .map(([dir, info]) => ({
+      directory: dir,
+      name: (info && typeof info.name === 'string' && info.name) || dir,
+      /* Two profiles routinely share a display name; the account is what tells them apart, and
+         Chrome's own switcher already shows it. */
+      email: (info && typeof info.user_name === 'string' && info.user_name) || null,
+      onDisk: existsSync(join(CHROME_USER_DATA, dir))
+    }))
+    // Default first, then Profile 1, 2, 3 — the order Chrome itself presents them in.
+    .sort((a, b) => (a.directory === 'Default' ? -1 : b.directory === 'Default' ? 1
+                     : a.directory.localeCompare(b.directory, 'en', { numeric: true })));
+
+  return {
+    available: true,
+    reason: null,
+    profiles,
+    lastUsed: (state.profile && state.profile.last_used) || null,
+    usableForAutomation: false,
+    whyNotUsable: 'Chrome refuses remote debugging on your everyday profile, so redbot would attach to an empty one and read Reddit signed out. It signs in through its own window instead.'
   };
-  file.accounts.push(entry);
-  writeFileSync(accountsPath, JSON.stringify(file, null, 2), 'utf8');
-  return { ok: true, account: entry };
+}
+
+/**
+ * Adding an account is the one mutation this console performs directly, and it now lands in
+ * `redbot.accounts` — the system of record — with data/accounts.json written alongside as the
+ * seed and the database-is-down fallback.
+ *
+ * The allocator (which free port, which profile folder) lives in dist/console-accounts.js so
+ * this console and the operator console cannot each grow their own version of it and start
+ * handing out the same port.
+ */
+async function createAccount(body) {
+  return createAccountImpl(body);
 }
 
 /** Opens that account's own Chrome. Detached — closing the console must not close it. */
-function launchChrome(handle) {
-  const file = readJson(accountsPath, null);
-  const a = (file && file.accounts || []).find((x) => x.handle === handle);
+async function launchChrome(handle) {
+  // Which port and folder this account owns is read from the system of record, so a browser
+  // opened here is the same browser the CLI will later attach to. Reading the seed file
+  // instead would open the wrong Chrome the moment the two disagreed.
+  const { accounts } = await consoleAccounts();
+  const a = accounts.find((x) => x.handle === handle);
   if (!a) return { ok: false, error: `${handle} is not set up.` };
   const bin = chromeBinary();
   if (!bin) return { ok: false, error: 'Chrome could not be found in the usual place. Set CHROME_PATH and try again.' };
+
+  /**
+   * Refuse when the port is not this account's to take.
+   *
+   * Chrome given an occupied --remote-debugging-port does NOT fail: it starts, silently gives
+   * up the port to whoever holds it, and the window looks perfectly normal. redbot then
+   * attaches to the squatter. That is how a machine with Lenovo Vantage on 9222 produced a
+   * signed-out reading for an account whose Chrome was signed in — so the check belongs here,
+   * before a window is opened that would look like success.
+   */
+  const [live] = await portStatusImpl([a]);
+  if (live && live.state === 'foreign') {
+    return { ok: false, error: live.detail };
+  }
+  if (live && live.ours) {
+    return { ok: true, handle, port: a.debugPort, profileDir: a.profileDir, alreadyRunning: true };
+  }
+
   const dir = join(DATA, a.profileDir);
   try {
     const child = spawn(bin, [
@@ -520,10 +1372,29 @@ let autoLog = [];
 function autoStart({ account, everyMinutes }) {
   if (autoProc) return { ok: false, error: 'The unattended loop is already running.' };
   if (!account) return { ok: false, error: 'Choose which account it should run as.' };
+  /* The mirror of the check in runAction: whichever starts second is the one that must refuse,
+     or the guard only holds in one direction and the collision comes back by starting the
+     loop last. Same scoping — only when it is the same account's Chrome. */
+  if (running && ACTIONS[running] && ACTIONS[running].needsBrowser && runningAccount === String(account)) {
+    return {
+      ok: false,
+      error: `"${ACTIONS[running].label}" is running as ${account} right now. Wait for it to finish — the loop would drive the same Chrome.`
+    };
+  }
   const every = Math.max(15, Number(everyMinutes) || 60);
   autoLog = [];
   const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), 'auto', '--every', String(every)], {
-    cwd: ROOT, env: { ...process.env, REDBOT_ACCOUNT: String(account) }, stdio: ['ignore', 'pipe', 'pipe']
+    /* Same identity rules as a button-driven run: the loop bills the chosen operator and takes
+       the chosen LLM path, or the Setup screen would silently not apply to the one thing that
+       runs unattended for days. */
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      REDBOT_ACCOUNT: String(account),
+      REDBOT_LLM: selectedProvider,
+      ...(selectedOperator ? { REDBOT_OPERATOR: selectedOperator } : {})
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
   });
   const keep = (d) => {
     autoLog.push(String(d).replace(/\[[0-9;]*m/g, ''));
@@ -568,10 +1439,10 @@ function setStatus(draftId, status, note) {
 }
 
 /* ---- publishing: the one action that reaches the outside world ---- */
-function publish(body) {
+async function publish(body) {
   const { confirm, reason } = body || {};
   const draftId = String((body && body.draftId) || '');
-  if (!draftId) return Promise.resolve({ ok: false, error: 'no draft named' });
+  if (!draftId) return { ok: false, error: 'no draft named' };
   /**
    * H4: draftId is interpolated into a file path below, so an unvalidated value like
    * "../accounts" would write data/accounts.json (breaking every browser command) and
@@ -581,25 +1452,62 @@ function publish(body) {
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(draftId)) {
     return Promise.resolve({ ok: false, error: 'that is not a valid draft id' });
   }
-  const drafts = arr(readJson(join(DATA, 'drafts.json'), []), 'drafts');
+  /**
+   * The draft must exist. Checked against Postgres — this read used to be data/drafts.json,
+   * which `src/store.ts` stopped writing when drafts moved to the database, so the existence
+   * check was failing for every draft and refusing every publish with "no draft on record".
+   */
+  const { drafts } = await domain();
   if (!drafts.some((d) => d.id === draftId)) {
-    return Promise.resolve({ ok: false, error: `no draft "${draftId}" on record` });
+    return { ok: false, error: `no draft "${draftId}" on record` };
   }
   /* fail closed: anything other than the exact word is a refusal, never an approval */
   if (confirm !== 'SEND') return Promise.resolve({ ok: false, error: 'not confirmed — type SEND exactly' });
+
+  /**
+   * Can the send actually START? Asked BEFORE anything is written.
+   *
+   * The approval token below is a capability: `takeConsoleApproval` (src/ask.ts) will let a
+   * `redbot reply` for this draft go through on it, once, for five minutes, with nobody typing
+   * SEND again. This function used to write it and THEN call runAction — so every refusal
+   * runAction can give (the slot is busy, the account is ambiguous, the loop holds that
+   * Chrome) left a live send-authorisation on disk for a reply that was never sent.
+   *
+   * Checked first, and cleaned up after, because those are two different failures: this closes
+   * the ones knowable in advance, and the cleanup below closes the race in between.
+   */
+  const blocked = whyReplyCannotStart(body.account);
+  if (blocked) return Promise.resolve({ ok: false, error: blocked });
+
   /* The decision is recorded first, and separately. If the send then fails, the fact that a
-     person approved it must still be on the record. */
+     person approved it must still be on the record — that is history, not a capability. */
   appendFileSync(join(DATA, 'decisions.jsonl'),
     JSON.stringify({ ts: new Date().toISOString(), draftId, decision: 'approved', reason: reason || '', via: 'console' }) + '\n', 'utf8');
 
   /* One draft, five minutes, consumed on read — see takeConsoleApproval in src/ask.ts */
   const dir = join(DATA, 'approvals');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${draftId}.json`),
+  const tokenPath = join(dir, `${draftId}.json`);
+  writeFileSync(tokenPath,
     JSON.stringify({ draftId, decision: 'approved', note: reason || '', at: new Date().toISOString() }, null, 2), 'utf8');
 
   return runAction('__reply', { draftId, account: body.account })
-    .then((r) => ({ ...r, recorded: true }));
+    .then((r) => {
+      /**
+       * The run never started, so the authorisation must not outlive the attempt.
+       *
+       * `ok:false` here means the child was refused before it could consume the token — the
+       * pre-flight above closes the predictable cases, but the slot can be taken in between.
+       * Leaving it would arm an unattended send for five minutes on the strength of a SEND
+       * that visibly failed. The DECISION record stays: a person did approve, and that is
+       * true whatever happened next.
+       */
+      if (!r.ok) {
+        try { if (existsSync(tokenPath)) rmSync(tokenPath, { force: true }); }
+        catch { /* a token we cannot remove is reported, not hidden */ }
+      }
+      return { ...r, recorded: true };
+    });
 }
 
 /* ------------------------------------------------------------------ *
@@ -666,6 +1574,63 @@ const server = createServer((req, res) => {
         const r = await runAction(body.key, body);
         return send(r.ok ? 200 : 409, JSON.stringify(r));
       }
+
+      /* ---------------- setup ---------------- */
+      if (url.pathname === '/api/operator/create') {
+        const r = createOperator(body.name);
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
+
+      if (url.pathname === '/api/llm/provider') {
+        const want = String(body.provider || '');
+        if (want !== 'cli' && want !== 'api') {
+          return send(400, JSON.stringify({ ok: false, error: 'provider must be "cli" or "api"' }));
+        }
+        selectedProvider = want;
+        return send(200, JSON.stringify({ ok: true, provider: selectedProvider }));
+      }
+
+      /**
+       * Store the Anthropic API key.
+       *
+       * THE VALUE ARRIVES IN THE BODY AND IS NEVER SENT BACK. This is the web equivalent of
+       * `redbot vault set` reading from stdin: src/commands/vault.ts refuses an argv value
+       * because the shell history and the process list both keep it, and a query string is the
+       * same mistake — it lands in access logs and browser history. A POST body does not.
+       *
+       * Nothing below echoes `value`, puts it in an error, or writes it to the run log. The
+       * response carries the 4-character hint only, which is what `vault list` shows.
+       */
+      if (url.pathname === '/api/vault/key') {
+        if (!vaultApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing — run npm run build' }));
+        const reason = vaultApi.vaultUnavailableReason();
+        if (reason) return send(400, JSON.stringify({ ok: false, error: reason }));
+
+        const value = typeof body.value === 'string' ? body.value.trim() : '';
+        if (!value) return send(400, JSON.stringify({ ok: false, error: 'no key given' }));
+        // A sanity ceiling, not a format rule: redbot does not get to decide what a key looks like.
+        if (value.length > 4096) return send(400, JSON.stringify({ ok: false, error: 'that is too long to be an API key' }));
+
+        try {
+          const scope = body.scope ? String(body.scope) : undefined;
+          await vaultApi.putSecret(vaultApi.ANTHROPIC_API_KEY, value, scope);
+          return send(200, JSON.stringify({ ok: true, hint: value.slice(-4), scope: scope || 'global' }));
+        } catch (e) {
+          // The message names the problem, never the value — same rule as src/vault.ts.
+          return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+        }
+      }
+
+      if (url.pathname === '/api/vault/key/remove') {
+        if (!vaultApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing — run npm run build' }));
+        try {
+          const scope = body.scope ? String(body.scope) : undefined;
+          const removed = await vaultApi.removeSecret(vaultApi.ANTHROPIC_API_KEY, scope);
+          return send(200, JSON.stringify({ ok: true, removed }));
+        } catch (e) {
+          return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+        }
+      }
       if (url.pathname === '/api/status') {
         const r = setStatus(body.draftId, body.status, body.note);
         return send(r.ok ? 200 : 400, JSON.stringify(r));
@@ -695,43 +1660,122 @@ const server = createServer((req, res) => {
         selectedOperator = name;
         return send(200, JSON.stringify({ ok: true, selected: selectedOperator }));
       }
+      /**
+       * Sources go to redbot.sources. Both of these used to refuse with "sources.json is
+       * missing." on a fresh install — the file they demanded is the file this button exists
+       * to create, the same bootstrap trap the account wizard had. Validation, the
+       * absent-vs-corrupt distinction and the seed-file mirror all live in dist/sources.js so
+       * the CLI and this console cannot disagree about what a valid source is.
+       */
       if (url.pathname === '/api/sources/add') {
         const kind = body.kind === 'search' ? 'search' : 'subreddit';
-        const value = String(body.value || '').trim().replace(/^\/?r\//i, '');
-        if (!value) return send(400, JSON.stringify({ ok: false, error: 'Nothing to add.' }));
-        if (kind === 'subreddit' && !/^[A-Za-z0-9_]{2,21}$/.test(value)) {
-          return send(400, JSON.stringify({ ok: false, error: 'A subreddit name is 2–21 characters: letters, numbers or underscore.' }));
-        }
-        const file = readJson(join(DATA, 'sources.json'), null);
-        if (!file) return send(400, JSON.stringify({ ok: false, error: 'sources.json is missing.' }));
-        const list = kind === 'search' ? (file.searches ||= []) : (file.subreddits ||= []);
-        const key = kind === 'search' ? 'query' : 'name';
-        if (list.some((x) => String(x[key]).toLowerCase() === value.toLowerCase())) {
-          return send(400, JSON.stringify({ ok: false, error: `${value} is already on the list.` }));
-        }
-        list.push({ [key]: value, why: String(body.why || 'Added from the console.'), enabled: true });
-        writeFileSync(join(DATA, 'sources.json'), JSON.stringify(file, null, 2), 'utf8');
-        return send(200, JSON.stringify({ ok: true, kind, value }));
+        const r = await sourcesApi.addSource(kind, String(body.value || ''), String(body.why || ''));
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
       if (url.pathname === '/api/sources/remove') {
         const kind = body.kind === 'search' ? 'search' : 'subreddit';
-        const value = String(body.value || '');
-        const file = readJson(join(DATA, 'sources.json'), null);
-        if (!file) return send(400, JSON.stringify({ ok: false, error: 'sources.json is missing.' }));
-        const key = kind === 'search' ? 'query' : 'name';
-        const list = kind === 'search' ? (file.searches || []) : (file.subreddits || []);
-        const i = list.findIndex((x) => String(x[key]) === value);
-        if (i < 0) return send(400, JSON.stringify({ ok: false, error: 'Not on the list.' }));
-        list.splice(i, 1);
-        writeFileSync(join(DATA, 'sources.json'), JSON.stringify(file, null, 2), 'utf8');
-        return send(200, JSON.stringify({ ok: true }));
+        const r = await sourcesApi.removeSource(kind, String(body.value || ''));
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
       if (url.pathname === '/api/account/create') {
-        const r = createAccount(body);
+        const r = await createAccount(body);
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
+      /**
+       * Editing an existing account — the descriptive half of it.
+       *
+       * The handle, the profile folder and the debug port are NOT taken from this request; see
+       * `updateConsoleAccount` for why repointing a signed-in account at another Chrome is a
+       * silent failure rather than a loud one. Sending them is not an error, but the response
+       * names them under `ignored` so a caller is never told it changed something it did not.
+       */
+      if (url.pathname === '/api/account/update') {
+        const r = await updateAccountImpl(body);
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
+      /**
+       * Removing an account — the record, never the signed-in browser folder.
+       *
+       * Answers 409 rather than 400 when it needs confirming: the request was well-formed and
+       * the account exists, the state of the world is what stopped it. A client that treats
+       * every non-200 as "bad input" would otherwise show a validation error for a question.
+       */
+      if (url.pathname === '/api/account/remove') {
+        const r = await deleteAccountImpl(body);
+        return send(r.ok ? 200 : r.needsConfirm ? 409 : 400, JSON.stringify(r));
+      }
+      /**
+       * Moving an account to another port. A separate verb from /api/account/update, which
+       * still refuses debugPort — see `changeAccountPort` for why changing it blind is the
+       * dangerous case and changing it deliberately is not.
+       */
+      if (url.pathname === '/api/account/port') {
+        const r = await changePortImpl(body);
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
+      /* Stops the browser on this account's port — and only if it can prove the process is
+         that account's own. A kill-by-port would close whatever happened to be there. */
+      if (url.pathname === '/api/account/stop') {
+        const { accounts: all } = await consoleAccounts();
+        const acct = all.find((x) => x.handle === String(body.handle || ''));
+        if (!acct) return send(400, JSON.stringify({ ok: false, error: `${body.handle} is not set up.` }));
+        const r = await stopBrowserImpl(acct);
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
+      /* Gives a shared account a folder and a port on THIS machine. The step after it is still
+         a human signing in — the session cannot travel, so nothing here pretends it can. */
+      /**
+       * Stop the action that is running now.
+       *
+       * Refuses rather than obeys in two cases, and both matter more than the button:
+       *
+       *   - nothing is running. The screen may simply be stale; killing "whatever is there"
+       *     on that basis is how the wrong process dies.
+       *   - the action is `__reply`. A publish is submit-then-confirm, and a kill between them
+       *     leaves a live comment on Reddit that redbot has no record of. See ACTIONS.
+       *
+       * `/T` because the CLI child is a tree — it drives Playwright, which has helpers of its
+       * own — and terminating only the parent leaves them holding the account's Chrome. The pid
+       * is read from the LIVE handle at this instant and only if the child has not already
+       * exited: a number captured earlier can name somebody else's process by now.
+       */
+      if (url.pathname === '/api/run/stop') {
+        const key = running;
+        if (!key || !runningChild) {
+          return send(400, JSON.stringify({ ok: false, error: 'Nothing is running.' }));
+        }
+        const spec = ACTIONS[key];
+        if (!spec || !spec.stoppable) {
+          return send(409, JSON.stringify({
+            ok: false,
+            error: 'A reply that is being sent cannot be stopped part-way — it would leave a '
+                 + 'comment on Reddit that redbot has no record of. Let it finish.'
+          }));
+        }
+        if (runningChild.exitCode !== null || runningChild.signalCode !== null) {
+          return send(400, JSON.stringify({ ok: false, error: 'That run has already finished.' }));
+        }
+        const pid = runningChild.pid;
+        runningStopped = true;
+        runLogAppend(`\n[stopped by the operator]\n`);
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+        } else {
+          try { runningChild.kill('SIGTERM'); } catch { /* already gone */ }
+        }
+        /* Answers immediately. The run's own promise resolves when the child actually closes,
+           and the screen learns it stopped from that, not from this. */
+        return send(200, JSON.stringify({ ok: true, stopped: key, label: spec.label, pid }));
+      }
+      if (url.pathname === '/api/account/setup-here') {
+        const r = await setUpHereImpl(body);
         return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
       if (url.pathname === '/api/account/open') {
-        const r = launchChrome(String(body.handle || ''));
+        // `await` is load-bearing: launchChrome became async when it started reading the port
+        // from redbot.accounts. Without it, `r` is a Promise — `r.ok` is undefined, so the
+        // button got 400 and a body of `{}` while Chrome opened perfectly well behind it.
+        const r = await launchChrome(String(body.handle || ''));
         return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
       if (url.pathname === '/api/publish') {
@@ -752,24 +1796,77 @@ const server = createServer((req, res) => {
    * Everything here is probed at request time. Nothing is remembered between calls, so this
    * cannot report a browser as reachable because it was reachable a minute ago.
    */
+  /**
+   * The live log. `since` is a line INDEX, not a timestamp: the client sends how many lines it
+   * already has and gets only what is new, so a poll is a few hundred bytes rather than the
+   * whole run. `runId` lets the client notice a new run started and reset its view instead of
+   * appending one run's output onto another's.
+   */
+  /**
+   * Past runs, newest first. Headers only — a run's lines are read from disk only when one is
+   * actually opened, so listing 500 runs costs 500 first-lines rather than 500 whole files.
+   */
+  if (url.pathname === '/api/run/history') {
+    const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit') ?? 100) || 100));
+    return send(200, JSON.stringify({ keep: RUN_LOG_KEEP, runs: runLogList(limit) }));
+  }
+
+  if (url.pathname === '/api/run/log') {
+    const since = Math.max(0, Number(url.searchParams.get('since') ?? 0) || 0);
+    /**
+     * ?file=<name> reads a PAST run from disk instead of the live buffer. Same response shape,
+     * so the viewer renders history and a running command with one code path.
+     */
+    const wanted = url.searchParams.get('file');
+    if (wanted) {
+      const past = runLogRead(wanted);
+      if (!past) return send(404, JSON.stringify({ error: 'no such run log' }));
+      return send(200, JSON.stringify({ ...past, lines: past.lines.slice(since) }));
+    }
+
+    return send(200, JSON.stringify({
+      runId: runLog.id,
+      key: runLog.key,
+      command: runLog.command,
+      startedAt: runLog.startedAt,
+      running: !runLog.done,
+      done: runLog.done,
+      code: runLog.code,
+      dropped: runLog.dropped,
+      total: runLog.lines.length,
+      lines: runLog.lines.slice(since)
+    }));
+  }
+
   if (url.pathname === '/api/pulse') {
-    const file = readJson(accountsPath, null);
-    const accts = (file && file.accounts) || [];
-    Promise.all(accts.map(async (a) => {
-      let up = false, detail = 'no debugging port answered';
-      try {
-        const res = await fetch(`http://127.0.0.1:${a.debugPort}/json/version`, { signal: AbortSignal.timeout(1200) });
-        up = res.ok;
-        if (up) { const j = await res.json().catch(() => ({})); detail = j.Browser || 'connected'; }
-      } catch { up = false; }
-      return {
-        handle: a.handle, port: a.debugPort, browserUp: up, detail,
-        profileOnDisk: existsSync(join(DATA, a.profileDir || ''))
-      };
-    })).then((browsers) => {
+    (async () => {
+      const { accounts: accts } = await consoleAccounts();
+      rememberSoleAccount(accts);
+      /**
+       * `browserUp` used to be `fetch('/json/version').ok`, and that answered TRUE for a
+       * browser that was not ours. On this machine 9222 is Lenovo Vantage's Edge WebView2 —
+       * it speaks CDP fluently — so an account pointed there reported healthy while every
+       * read came back signed out. Ownership now decides, and a squatter is a problem rather
+       * than a pass. See src/ports.ts.
+       */
+      const statuses = await portStatusImpl(accts);
+      return statuses.map((s) => ({
+        handle: s.handle, port: s.port,
+        browserUp: s.ours,
+        state: s.state,
+        detail: s.detail,
+        profileOnDisk: s.profileOnDisk
+      }));
+    })().then((browsers) => {
       const problems = [];
       for (const b of browsers) {
-        if (!b.profileOnDisk) problems.push(`${b.handle}: its browser folder is missing`);
+        /* Ownership is checked BEFORE the folder. A brand-new account has no sign-in folder
+           until its Chrome has run once, so testing the folder first let "browser folder is
+           missing" mask "port is held by something else" — hiding the one condition here that
+           makes redbot act on the wrong browser rather than simply not act. */
+        if (b.state === 'foreign') problems.push(`${b.handle}: port ${b.port} is held by something else`);
+        else if (b.state === 'unknown') problems.push(`${b.handle}: what is on port ${b.port} could not be identified`);
+        else if (!b.profileOnDisk) problems.push(`${b.handle}: its browser folder is missing`);
         else if (!b.browserUp) problems.push(`${b.handle}: browser is not open`);
       }
       if (!existsSync(join(ROOT, 'dist', 'cli.js'))) problems.push('redbot is not built — run npm run build');
@@ -779,6 +1876,66 @@ const server = createServer((req, res) => {
         healthy: problems.length === 0
       }));
     }).catch((e) => send(500, JSON.stringify({ error: String(e && e.message || e) })));
+    return;
+  }
+
+  /**
+   * What is on each account's port, right now.
+   *
+   * Its own endpoint rather than a field on /api/state: this asks the operating system who owns
+   * a socket, which is the one read here that cannot be answered from the database, and the
+   * accounts screen wants it on a faster cadence than a full state rebuild.
+   *
+   * `suggestion` rides along so the "change port" form can offer a number that is actually free
+   * instead of making a person guess and be refused.
+   */
+  /**
+   * One page of one list, straight from the database.
+   *
+   * Its own endpoint rather than a bigger `/api/state`: paging is the one read here that
+   * happens because a person clicked Next, and rebuilding every screen's figures to answer it
+   * would make the cheap action the expensive one.
+   *
+   * The list name is matched against a fixed map, never interpolated. It arrives from a query
+   * string, and the functions behind it build SQL.
+   */
+  if (url.pathname === '/api/page') {
+    const want = String(url.searchParams.get('list') || '');
+    const lists = {
+      threads: pagesApi?.threads,
+      outcomes: pagesApi?.outcomes,
+      observations: pagesApi?.observations
+    };
+    const fn = Object.prototype.hasOwnProperty.call(lists, want) ? lists[want] : null;
+    if (!fn) {
+      return send(400, JSON.stringify({ error: `unknown list "${want}"`, lists: Object.keys(lists) }));
+    }
+    fn({ offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') })
+      .then((page) => send(200, JSON.stringify({ list: want, ...page })))
+      .catch((e) => send(500, JSON.stringify({ error: String(e && e.message || e) })));
+    return;
+  }
+
+  if (url.pathname === '/api/ports') {
+    (async () => {
+      const { accounts: accts } = await consoleAccounts();
+      const ports = await portStatusImpl(accts);
+      let suggestion = null;
+      try { suggestion = await suggestPortImpl(); } catch { /* every port in range is spoken for */ }
+      /**
+       * Which of these have a browser on THIS machine.
+       *
+       * An account shared through the database from another computer arrives with a
+       * description and nothing else. Its port may even look plausible — the legacy column
+       * still answers when no binding exists — but no folder here holds its session, so
+       * "Start browser" would open a signed-out window. The card has to be able to say that.
+       */
+      let boundHere = null;
+      try { boundHere = [...await boundHandlesImpl()]; } catch { /* unknown, not empty */ }
+      return { at: new Date().toISOString(), machine: machineImpl(), ports, suggestion, boundHere };
+    })()
+      .then((payload) => send(200, JSON.stringify(payload)))
+      .catch((e) => send(500, JSON.stringify({ error: String(e && e.message || e) })));
     return;
   }
 
@@ -802,9 +1959,32 @@ const server = createServer((req, res) => {
     }));
   }
 
+  /**
+   * Everything the Setup screen reads. Async, so it is answered off the same path /api/state
+   * uses rather than the synchronous static branch below.
+   */
+  /* The machine's real Chrome profiles, for recognising which one a Reddit login lives in. */
+  if (url.pathname === '/api/chrome/profiles') {
+    return send(200, JSON.stringify(chromeProfiles()));
+  }
+
+  if (url.pathname === '/api/setup') {
+    setupStatus()
+      .then((s) => send(200, JSON.stringify(s)))
+      .catch((e) => send(500, JSON.stringify({ error: e && e.message ? e.message : String(e) })));
+    return;
+  }
+
   if (url.pathname === '/api/state') {
-    try { return send(200, JSON.stringify(buildState())); }
-    catch (e) { return send(500, JSON.stringify({ error: String(e && e.message || e) })); }
+    // The GET handler is not async (it serves static files synchronously), so the one route
+    // that now awaits a database read owns its own promise rather than making every route pay.
+    /* Which page of the review queue to assemble. Review cards are built HERE — each carries
+       its certification, its thread and its assessment — so paging that list is a parameter of
+       this response rather than a separate endpoint with nothing lighter to return. */
+    buildState({ reviewOffset: url.searchParams.get('reviewOffset') })
+      .then((state) => send(200, JSON.stringify(state)))
+      .catch((e) => send(500, JSON.stringify({ error: String(e && e.message || e) })));
+    return;
   }
 
   if (url.pathname === '/' || url.pathname === '/index.html') {

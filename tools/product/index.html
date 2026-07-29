@@ -21,12 +21,22 @@
    ambient washes — ember and slate — give the frost something to refract.
    ============================================================ */
 
+/* ------------------------------------------------------------------
+   Tokens — the instrument-panel treatment.
+
+   The palette (ember / amber / jade / ink / edge) is unchanged. What comes back is
+   --wash-a / --wash-b, which this file previously declared and then set to `transparent`
+   with the note that translucency "turned every panel to mud at small sizes".
+
+   The fix for mud is not more opacity, it is keeping the wash far BELOW the surface that
+   sits over it: the washes here are 4–5.5%, and the panes composite to a near-solid ground
+   (.74–.86 alpha), so contrast is carried by the surface rather than by the blur. That is a
+   claim about what a browser paints, so it is checked by capture at 390px, not by reading
+   these numbers — see the responsive sweep in ui.test.mjs.
+   ------------------------------------------------------------------ */
 :root{
-  /* Pure black, white type, red where something is wrong, green where it is not.
-     Opaque surfaces — the translucency turned every panel to mud at small sizes. */
+  /* Pure black, white type, red where something is wrong, green where it is not. */
   --bg:#000000;
-  --wash-a:transparent;
-  --wash-b:transparent;
   --glass:#0C0C0D;
   --glass-2:#151517;
   --edge:#26262A;
@@ -40,7 +50,21 @@
   --amber-soft:rgba(232,169,59,.12);
   --jade:#3DDC84;
   --jade-soft:rgba(61,220,132,.12);
-  --shadow:none;
+
+  /* glass */
+  --wash-a:rgba(255,68,56,.055);
+  --wash-b:rgba(61,220,132,.04);
+  --pane-a:rgba(20,20,24,.74);
+  --pane-b:rgba(7,7,8,.76);
+  --sheen:rgba(255,255,255,.07);
+  --lift:0 22px 48px -30px rgba(0,0,0,.95);
+  --hdr-a:rgba(30,30,35,.70);
+  --hdr-b:rgba(14,14,17,.55);
+  --gloss:rgba(255,255,255,.10);
+  /* Every existing surface says `box-shadow:var(--shadow)`, so pointing it at the lift
+     gives the whole sheet depth without touching one of those rules. */
+  --shadow:var(--lift);
+  --pane:linear-gradient(168deg,var(--pane-a),var(--pane-b));
 
   --grotesk:"Inter","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
   --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
@@ -48,12 +72,39 @@
 
   --pad:1.7rem;
   --r:16px;
+
+  /**
+   * The side gutter — ONE token, shared by the bar, the banner and every screen.
+   *
+   * These were three separate literals (`1.1rem` on the chrome, `1.5rem` on the sheet), so the
+   * content edge never lined up with the ledge above it. Worse, `.sheet` also carried
+   * `max-width:1460px` with no `margin-inline:auto`: past 1460px the slack all fell on the
+   * right, measured at 460px of dead space at 1920 and 1100px at 2560 — the page stopped
+   * growing while the window kept going.
+   *
+   * Fluid rather than stepped, so there is no width at which the gutter visibly jumps:
+   * 16px at 360, ~42px at 1920, capped at 44px so an ultra-wide screen spends its extra
+   * pixels on CONTENT, not on margin.
+   */
+  --gut:clamp(1rem,2.2vw,2.75rem);
+
+  /**
+   * `color-scheme` is what themes the parts of a <select> this stylesheet cannot reach: the
+   * OPTION POPUP is drawn by the OS, not by us, so without this a dark console opened a white
+   * Windows list. It also gives form controls the right default text/caret colours.
+   *
+   * `--chev` is the dropdown arrow. It has to be a background-image (a <select> gets no
+   * ::after in any engine), and a data URI cannot read `currentColor` — so the colour is baked
+   * in and the whole url() is swapped per theme. `#` MUST be written `%23` inside a data URI.
+   */
+  color-scheme:dark;
+  --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.6 6 6.4 11 1.6' fill='none' stroke='%239A9AA2' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 :root[data-theme="light"]{
+  color-scheme:light;
+  --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.6 6 6.4 11 1.6' fill='none' stroke='%2375757C' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   /* the same contract inverted: pure white, black type, same red and green */
   --bg:#FFFFFF;
-  --wash-a:transparent;
-  --wash-b:transparent;
   --glass:#FAFAFA;
   --glass-2:#F1F1F2;
   --edge:#E3E3E5;
@@ -67,18 +118,37 @@
   --amber-soft:rgba(138,106,43,.10);
   --jade:#00875A;
   --jade-soft:rgba(0,135,90,.09);
-  --shadow:none;
+
+  --wash-a:rgba(215,0,21,.05);
+  --wash-b:rgba(0,135,90,.045);
+  --pane-a:rgba(255,255,255,.86);
+  --pane-b:rgba(246,246,248,.70);
+  --sheen:rgba(255,255,255,.85);
+  --lift:0 20px 44px -32px rgba(0,0,0,.35);
+  --hdr-a:rgba(255,255,255,.72);
+  --hdr-b:rgba(236,236,239,.55);
+  --gloss:rgba(255,255,255,.55);
 }
 @media (prefers-color-scheme:light){
   :root:not([data-theme="dark"]){
-    --bg:#FFFFFF;--wash-a:transparent;--wash-b:transparent;
+    color-scheme:light;
+    --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.6 6 6.4 11 1.6' fill='none' stroke='%2375757C' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    --bg:#FFFFFF;
     --glass:#FAFAFA;--glass-2:#F1F1F2;
     --edge:#E3E3E5;--edge-2:#C6C6CB;
     --ink:#000000;--ink-2:#3A3A3D;--ink-3:#75757C;
     --ember:#D70015;--ember-soft:rgba(215,0,21,.08);
     --amber:#8A6A2B;--amber-soft:rgba(138,106,43,.10);
     --jade:#00875A;--jade-soft:rgba(0,135,90,.09);
-    --shadow:none;
+    --wash-a:rgba(215,0,21,.05);
+    --wash-b:rgba(0,135,90,.045);
+    --pane-a:rgba(255,255,255,.86);
+    --pane-b:rgba(246,246,248,.70);
+    --sheen:rgba(255,255,255,.85);
+    --lift:0 20px 44px -32px rgba(0,0,0,.35);
+    --hdr-a:rgba(255,255,255,.72);
+    --hdr-b:rgba(236,236,239,.55);
+    --gloss:rgba(255,255,255,.55);
   }
 }
 
@@ -98,7 +168,7 @@ body{
   height:100vh;height:100dvh;overflow:hidden;
   display:flex;flex-direction:column;
 }
-.bar,.banner,.pulse{flex:none}
+.bar,.banner{flex:none}
 body > section{flex:1;min-height:0;display:flex;flex-direction:column}
 body > section.sheet{overflow-y:auto}
 @media (max-width:1200px){
@@ -106,44 +176,77 @@ body > section.sheet{overflow-y:auto}
   body{height:auto;min-height:100vh;overflow:auto}
   body > section{display:block}
 }
-/* no ambient wash — a flat black field, so every pixel of colour means something */
+/* The ambient wash. Two very low-alpha pools give the blur something to refract — without
+   it, backdrop-filter over flat black does nothing at all. Fixed, so it does not scroll with
+   a pane, and pointer-events:none so it can never eat a click.
+
+   The z-index pair is load-bearing: a POSITIONED pseudo-element at z-index 0 paints above
+   static block content, so without lifting the app's own children to z-index 1 the wash
+   would render on top of the banner, the stat row and every screen. */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(58rem 34rem at 12% -6%, var(--wash-a), transparent 62%),
+    radial-gradient(52rem 30rem at 92% 4%, var(--wash-b), transparent 60%);
+}
+.banner,body > section{position:relative;z-index:1}
 h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.021em;text-wrap:balance}
 [hidden]{display:none!important}
 a{color:var(--ember);text-underline-offset:2px}
+/* In a table of 16 threads, ember on every title stops meaning "something is wrong" — which
+   is the one job colour has in here. Titles read as text and earn the accent on hover. */
+td a{color:var(--ink-2);text-decoration:none}
+td a:hover{color:var(--ember);text-decoration:underline}
 ::selection{background:var(--ember-soft)}
 :focus-visible{outline:2px solid var(--ember);outline-offset:2px;border-radius:6px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
-/* ---------- glass primitive ---------- */
-.glass{
-  background:var(--glass);
-  -webkit-backdrop-filter:blur(18px) saturate(150%);
-  backdrop-filter:blur(18px) saturate(150%);
+/* ---------- glass primitive ----------
+   One rule every surface in the sheet now shares: a 168° pane gradient over the ambient
+   wash, an inset top sheen for the lit edge, and the lift underneath. */
+.glass,.pane{
+  background:var(--pane);
+  -webkit-backdrop-filter:blur(22px) saturate(135%);
+  backdrop-filter:blur(22px) saturate(135%);
   border:1px solid var(--edge);
   border-radius:var(--r);
-  box-shadow:var(--shadow);
+  box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
 }
 
-/* ---------- top bar ---------- */
+/* ---------- top bar: a glass ledge ---------- */
 .bar{
-  position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:1.1rem;
-  padding:.85rem 1.5rem;flex-wrap:wrap;
-  background:color-mix(in srgb,var(--bg) 72%,transparent);
-  -webkit-backdrop-filter:blur(20px) saturate(160%);
-  backdrop-filter:blur(20px) saturate(160%);
-  border-bottom:1px solid var(--edge);
+  position:relative;z-index:40;display:flex;align-items:center;gap:1.1rem;
+  margin:.85rem var(--gut) 0;padding:.7rem 1rem;flex-wrap:wrap;row-gap:.65rem;
+  background:var(--pane);
+  -webkit-backdrop-filter:blur(22px) saturate(140%);
+  backdrop-filter:blur(22px) saturate(140%);
+  border:1px solid var(--edge);border-radius:var(--r);
+  box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
 }
-.logo{display:flex;align-items:center;gap:.55rem;font-family:var(--mono);font-weight:700;font-size:.9rem;letter-spacing:.02em}
+.logo{display:flex;align-items:center;gap:.55rem;font-family:var(--mono);font-weight:700;font-size:.9rem;letter-spacing:.02em;flex:none}
 .logo svg{width:24px;height:24px;flex:none;margin-top:-1px}
 .lg-a{color:var(--ink-3)} .lg-b{color:var(--ember)}
-.steps{display:flex;align-items:center;gap:.2rem;margin-left:.5rem;flex-wrap:wrap}
+/* One row that scrolls, not a block that wraps: at 390px the wrapping strip cost three
+   rows of chrome before any content. The bar itself is hidden-scrollbar like every other
+   pane, so the strip slides under a finger with nothing to look at. */
+.steps{
+  display:flex;align-items:center;gap:.2rem;margin-left:.4rem;
+  overflow-x:auto;min-width:0;max-width:100%;
+  scrollbar-width:none;-ms-overflow-style:none;
+}
+.steps::-webkit-scrollbar{display:none}
 .step{
   appearance:none;border:1px solid transparent;background:none;cursor:pointer;font:inherit;
   font-size:.855rem;color:var(--ink-3);padding:.42rem .82rem;border-radius:9px;
   display:flex;align-items:center;gap:.45rem;transition:color .16s,background .16s,border-color .16s;
+  flex:0 0 auto;white-space:nowrap;
 }
-.step:hover{color:var(--ink);background:var(--glass)}
-.step[aria-current="page"]{color:var(--ink);font-weight:600;background:var(--glass-2);border-color:var(--edge)}
+.step:hover{color:var(--ink-2)}
+.step[aria-current="page"]{
+  color:var(--ink);font-weight:600;border-color:var(--edge);
+  background:linear-gradient(180deg,var(--gloss),transparent);
+  box-shadow:inset 0 1px 0 var(--sheen);
+}
 .step .g{font-family:var(--mono);font-size:.72rem;color:var(--ink-3)}
 .step b{
   font-family:var(--mono);font-size:.7rem;font-weight:700;padding:.08rem .38rem;border-radius:6px;
@@ -158,46 +261,87 @@ button.mini{
 }
 button.mini:hover{color:var(--ink);border-color:var(--edge-2)}
 
+/* ---------- dropdowns ----------
+ * Every <select> in this console, in one place.
+ *
+ * They used to be styled inline at each call site — three of them with a border and a
+ * background but WITHOUT `appearance:none`, so Windows drew its own arrow on top of the app's
+ * own border, and one (the run picker on the Log screen) with no styling at all: a white,
+ * square-cornered Arial control sitting in a black glass console. Measured before this rule:
+ * `background rgb(255,255,255)`, `color rgb(0,0,0)`, `border 1px solid rgb(118,118,118)`,
+ * `border-radius 0px`, `font Arial 13.33px` — identical in both themes, because an unstyled
+ * control ignores the theme entirely.
+ *
+ * A class, not inline styles, because an inline style beats every stylesheet rule — which is
+ * exactly why the old ones could never be themed from here.
+ *
+ * The right padding is the chevron's lane: without it a long option name runs under the arrow.
+ */
+select.sel{
+  appearance:none;-webkit-appearance:none;
+  font:inherit;font-size:.8rem;line-height:1.4;
+  padding:.45rem 2rem .45rem .65rem;
+  border-radius:9px;border:1px solid var(--edge-2);
+  background-color:var(--glass-2);color:var(--ink);
+  background-image:var(--chev);
+  background-repeat:no-repeat;
+  background-position:right .65rem center;
+  background-size:11px 7px;
+  cursor:pointer;max-width:100%;
+  transition:border-color .16s,color .16s;
+}
+select.sel:hover{border-color:var(--ink-3)}
+/* Chrome on Windows still reserves space for a legacy expand button without this. */
+select.sel::-ms-expand{display:none}
+/* Named explicitly: with `appearance:none` some builds stop inheriting the popup colours that
+   `color-scheme` sets, and an unreadable option list is worse than a native-looking one. */
+select.sel option{background:var(--glass-2);color:var(--ink)}
+
 .banner{
-  margin:1.1rem 1.5rem 0;padding:.75rem 1.1rem;border-radius:12px;
+  margin:.85rem var(--gut) 0;padding:.75rem 1.1rem;border-radius:12px;
   font-size:.79rem;color:var(--ink-2);line-height:1.6;
   background:var(--amber-soft);border:1px solid color-mix(in srgb,var(--amber) 26%,transparent);
 }
 .banner b{color:var(--ink)}
 
-/* ---------- pulse ---------- */
-.pulse{
-  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.85rem;
-  padding:1.1rem 1.5rem 0;
+/* ---------- the ticker: five figures, in the ledge ---------- */
+.ticker{
+  display:flex;align-items:center;gap:1.05rem;flex-wrap:wrap;row-gap:.4rem;
+  margin-left:auto;font-family:var(--mono);font-size:.7rem;color:var(--ink-3);min-width:0;
 }
-@media (max-width:1100px){.pulse{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media (max-width:620px){.pulse{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.p{
-  padding:1rem 1.15rem;display:flex;flex-direction:column;gap:.15rem;
-  background:var(--glass);border:1px solid var(--edge);border-radius:13px;
-  -webkit-backdrop-filter:blur(16px) saturate(150%);backdrop-filter:blur(16px) saturate(150%);
-  box-shadow:var(--shadow);
+.tick{display:inline-flex;align-items:baseline;gap:.4rem;white-space:nowrap}
+.tick b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;font-size:.85rem}
+/* Only the figure that means WORK is a control, and only when there is work: a button that
+   goes nowhere useful teaches you to stop pressing the ones that do. */
+button.tick{
+  appearance:none;font:inherit;font-family:var(--mono);font-size:.7rem;cursor:pointer;
+  color:var(--ember);background:var(--ember-soft);
+  border:1px solid color-mix(in srgb,var(--ember) 34%,transparent);
+  border-radius:8px;padding:.2rem .55rem;transition:border-color .16s;
 }
-.p b{font-family:var(--mono);font-size:1.72rem;font-variant-numeric:tabular-nums;line-height:1.1;letter-spacing:-.02em}
-.p span{font-size:.665rem;color:var(--ink-3);font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase}
-.p em{font-style:normal;font-size:.7rem;color:var(--ink-3)}
-.p.good b{color:var(--jade)} .p.warn b{color:var(--amber)} .p.bad b{color:var(--ember)}
-.p.act{cursor:pointer;transition:border-color .16s,transform .16s}
-.p.act:hover{border-color:var(--edge-2);transform:translateY(-1px)}
+button.tick b{color:var(--ember)}
+button.tick:hover{border-color:var(--ember)}
+.tick.good b{color:var(--jade)} .tick.warn b{color:var(--amber)}
 
-.sheet{padding:1.5rem 1.5rem 4rem;max-width:1460px}
+/* Full-bleed to the gutter. The 1460px cap is gone deliberately: it left the page pinned to
+   the left with a growing void on the right, because there was no `margin-inline:auto` to
+   centre what it capped. Width is spent by the grids below, which ADD COLUMNS rather than
+   stretch a line of text — prose keeps its own `ch` measure throughout. */
+.sheet{padding:1.5rem var(--gut) 4rem}
 h2.sec{font-size:1.32rem;letter-spacing:-.025em;margin-bottom:.3rem}
 .sub{font-size:.8rem;color:var(--ink-3);margin-bottom:1.4rem;font-family:var(--mono)}
 
 /* ---------- review ---------- */
 .work{
-  display:grid;grid-template-columns:300px 1fr;gap:.9rem;padding:.9rem 1.2rem 1.2rem;
+  display:grid;grid-template-columns:minmax(280px,22%) minmax(0,1fr);gap:.9rem;
+  padding:.9rem var(--gut) 1.2rem;
   flex:1;min-height:0;
 }
 @media (max-width:1200px){.work{grid-template-columns:1fr;min-height:0;flex:none}}
 .stack{
-  background:var(--glass);border:1px solid var(--edge);border-radius:var(--r);
-  box-shadow:var(--shadow);overflow:hidden;min-height:0;
+  background:var(--pane);border:1px solid var(--edge);border-radius:var(--r);
+  -webkit-backdrop-filter:blur(22px) saturate(135%);backdrop-filter:blur(22px) saturate(135%);
+  box-shadow:inset 0 1px 0 var(--sheen),var(--lift);overflow:hidden;min-height:0;
   display:flex;flex-direction:column;
 }
 @media (max-width:1200px){.stack{max-height:260px}}
@@ -205,6 +349,7 @@ h2.sec{font-size:1.32rem;letter-spacing:-.025em;margin-bottom:.3rem}
   padding:.9rem 1.1rem;font-size:.665rem;letter-spacing:.11em;text-transform:uppercase;
   color:var(--ink-3);font-family:var(--mono);display:flex;justify-content:space-between;
   border-bottom:1px solid var(--edge);
+  background:linear-gradient(180deg,var(--hdr-a),var(--hdr-b));
 }
 .stack-l{overflow-y:auto}
 .card-q{
@@ -217,8 +362,15 @@ h2.sec{font-size:1.32rem;letter-spacing:-.025em;margin-bottom:.3rem}
 }
 .card-q[aria-current="true"]{color:var(--ink)}
 .card-q:hover{color:var(--ink)}
-.card-q:hover{background:var(--glass-2)}
-.card-q[aria-current="true"]{background:var(--glass-2);box-shadow:inset 3px 0 0 var(--ember)}
+.card-q:hover{background:linear-gradient(90deg,var(--gloss),transparent 46%)}
+/* The spine carries the VERDICT, the way a job row does on every other screen — so the queue
+   is readable at a glance without matching each dot to a legend. Selection is the ledge
+   behind the row, not the colour of the rule. */
+.card-q{box-shadow:inset 3px 0 0 var(--edge-2)}
+.card-q.stop{box-shadow:inset 3px 0 0 var(--ember)}
+.card-q.hold{box-shadow:inset 3px 0 0 var(--amber)}
+.card-q.pass{box-shadow:inset 3px 0 0 var(--jade)}
+.card-q[aria-current="true"]{background:linear-gradient(90deg,var(--gloss),transparent 60%)}
 .dot{width:9px;height:9px;border-radius:50%;margin-top:.42rem;flex:none;background:var(--ink-3)}
 .dot.stop{background:var(--ember);box-shadow:0 0 0 4px var(--ember-soft)}
 .dot.hold{background:var(--amber);box-shadow:0 0 0 4px var(--amber-soft)}
@@ -233,8 +385,9 @@ h2.sec{font-size:1.32rem;letter-spacing:-.025em;margin-bottom:.3rem}
    and nothing is clipped off the bottom of the page */
 .side{
   padding:1.3rem 1.4rem;min-width:0;overflow-wrap:break-word;overflow-y:auto;min-height:0;
-  background:var(--glass);border:1px solid var(--edge);border-radius:var(--r);
-  box-shadow:var(--shadow);
+  background:var(--pane);border:1px solid var(--edge);border-radius:var(--r);
+  -webkit-backdrop-filter:blur(22px) saturate(135%);backdrop-filter:blur(22px) saturate(135%);
+  box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
 }
 @media (max-width:1200px){.side{overflow-y:visible;max-height:none}}
 .lbl{
@@ -260,9 +413,9 @@ h2.sec{font-size:1.32rem;letter-spacing:-.025em;margin-bottom:.3rem}
 .lens{
   position:relative;border-radius:var(--r);margin-bottom:1.3rem;overflow:hidden;
   border:1px solid var(--edge-2);
-  background:var(--glass-2);
-  -webkit-backdrop-filter:blur(22px) saturate(165%);backdrop-filter:blur(22px) saturate(165%);
-  box-shadow:var(--shadow);
+  background:var(--pane);
+  -webkit-backdrop-filter:blur(24px) saturate(150%);backdrop-filter:blur(24px) saturate(150%);
+  box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
 }
 /* the glow is the judgment; it sits behind the frost, not on it */
 /* the verdict is carried by a solid rule and the heading colour, not by a glow */
@@ -270,7 +423,10 @@ h2.sec{font-size:1.32rem;letter-spacing:-.025em;margin-bottom:.3rem}
 .lens.REJECT{border-left-color:var(--ember)}
 .lens.ESCALATE{border-left-color:var(--amber)}
 .lens.CERTIFIED{border-left-color:var(--jade)}
-.lens-h{position:relative;z-index:1;padding:1.3rem 1.4rem 1.05rem;border-bottom:1px solid var(--edge)}
+.lens-h{
+  position:relative;z-index:1;padding:1.3rem 1.4rem 1.05rem;border-bottom:1px solid var(--edge);
+  background:linear-gradient(180deg,var(--hdr-a),var(--hdr-b));
+}
 .vd{
   font-size:1.92rem;line-height:1.06;letter-spacing:-.036em;font-weight:600;margin-bottom:.35rem;
 }
@@ -331,10 +487,28 @@ h2.sec{font-size:1.32rem;letter-spacing:-.025em;margin-bottom:.3rem}
 .tiny{font-size:.79rem;color:var(--ink-3);line-height:1.68;margin-top:.7rem;max-width:66ch}
 
 /* ---------- tables ---------- */
+/**
+ * `flex:none` is load-bearing, not cosmetic.
+ *
+ * `body > section` is a COLUMN flex container with a bounded height. Its children default to
+ * flex-shrink:1, and a scroll container's automatic minimum size is 0 — so `.wrap`, alone among
+ * the children, could be squeezed to nothing while the prose blocks beside it resisted. On a
+ * 1900px screen the Threads table rendered at its full 1332px inside a container 2px tall: the
+ * data was all there, correct, and clipped to a hairline. It looked exactly like "no threads
+ * collected", one line under a heading reporting 48 collected.
+ *
+ * Below 1200px a media query switches the section to display:block, which is why this only
+ * appeared on wide screens — and why testing at a laptop width missed it entirely.
+ */
 .wrap{
+  flex:none;
   overflow-x:auto;border-radius:var(--r);border:1px solid var(--edge);
-  background:var(--glass);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);box-shadow:var(--shadow);
+  background:var(--pane);
+  -webkit-backdrop-filter:blur(22px) saturate(135%);backdrop-filter:blur(22px) saturate(135%);
+  box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
 }
+/* The header strip reads as the pane's own ledge, matching every other panel head. */
+thead th{background:linear-gradient(180deg,var(--hdr-a),var(--hdr-b))}
 table{width:100%;border-collapse:collapse;font-size:.865rem}
 th{
   text-align:left;font-family:var(--mono);font-size:.645rem;letter-spacing:.11em;text-transform:uppercase;
@@ -353,13 +527,19 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
 .tag.stop{color:var(--ember);border-color:color-mix(in srgb,var(--ember) 34%,transparent);background:var(--ember-soft)}
 
 /* ---------- cards ---------- */
-/* bounded, so a single account reads as one card rather than as a mostly-empty page */
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr));gap:1rem;max-width:1080px}
+/**
+ * `auto-fill` + a 400px floor already means one account reads as one card and never as a
+ * stretched banner — the track count grows with the width instead. The `max-width:1080px`
+ * that used to sit here was doing a second, worse job of the same thing: it stopped the grid
+ * dead at 1080px, so on a wide screen the card rail ended a third of the way across while the
+ * panels beside it ran to 1436px. That ragged right edge is what read as "not arranged".
+ */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr));gap:1rem}
 .card{
   padding:1.35rem 1.45rem;display:flex;flex-direction:column;gap:.9rem;border-radius:var(--r);
-  background:var(--glass);border:1px solid var(--edge);
-  -webkit-backdrop-filter:blur(18px) saturate(150%);backdrop-filter:blur(18px) saturate(150%);
-  box-shadow:var(--shadow);
+  background:var(--pane);border:1px solid var(--edge);
+  -webkit-backdrop-filter:blur(22px) saturate(135%);backdrop-filter:blur(22px) saturate(135%);
+  box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
 }
 .card.attn{border-color:color-mix(in srgb,var(--amber) 36%,transparent)}
 .chead{display:flex;align-items:center;gap:.7rem}
@@ -397,11 +577,67 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
   color:var(--ink-3);white-space:pre-wrap;overflow-x:auto}
 
 /* ---------- collecting ---------- */
-.collect{border:1px solid var(--edge);border-radius:var(--r);background:var(--glass);margin-bottom:1.6rem;max-width:1080px}
-.collect-h{display:flex;align-items:center;gap:.8rem;padding:1rem 1.2rem;border-bottom:1px solid var(--edge);flex-wrap:wrap}
+.collect{
+  border:1px solid var(--edge);border-radius:var(--r);background:var(--pane);
+  -webkit-backdrop-filter:blur(22px) saturate(135%);backdrop-filter:blur(22px) saturate(135%);
+  box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
+  margin-bottom:1.6rem;
+  /**
+   * `overflow:hidden` clips the header gradient to the border radius. `flex:none` is what
+   * makes that safe, and it is not cosmetic — it is the same defect `.wrap` documents above.
+   *
+   * `body > section.sheet` is a COLUMN flex container with a bounded height. The moment this
+   * box stopped being `overflow:visible` it became a scroll container, whose CSS automatic
+   * minimum size is 0 — so it alone among the sheet's children could be shrunk to nothing
+   * while the prose blocks beside it resisted. It then CLIPPED its own contents: the loop's
+   * start button and all three steps of the account wizard were laid out inside a collapsed
+   * box, so a click landed on the section behind them. Caught by ui.test.mjs, which reported
+   * "<section id=v-today> intercepts pointer events" over a button it could see perfectly.
+   */
+  overflow:hidden;flex:none;
+}
+.collect-h{
+  display:flex;align-items:center;gap:.8rem;padding:1rem 1.2rem;border-bottom:1px solid var(--edge);
+  flex-wrap:wrap;background:linear-gradient(180deg,var(--hdr-a),var(--hdr-b));
+}
 .collect-h h3{font-size:.98rem}
 .collect-h .hint{font-family:var(--mono);font-size:.665rem;color:var(--ink-3);margin-left:auto}
 .collect-b{padding:.5rem 1.2rem 1.2rem}
+/**
+ * The unattended-loop panel: an explanation and the three controls that start it. Stacked, it
+ * left the right two-thirds of a full-width panel empty. Past 1400px the controls move up
+ * beside the prose — the explanation keeps its `ch` measure, the panel stops being mostly air,
+ * and the button lands next to the text that describes what it does.
+ *
+ * `align-items:center` rather than `start`: the control row is one line tall and reads as
+ * belonging to the paragraph, not as a caption hanging off its top corner.
+ */
+/**
+ * Flex-wrap, NOT a two-column grid at a fixed breakpoint.
+ *
+ * The grid version put the explanation in a `minmax(0,1fr)` track and the controls in an `auto`
+ * one. The explanation is capped at 66ch, so at 1920 it rendered 450px wide inside a 1310px
+ * track and the controls were flung to the far edge — 860px of nothing between a sentence and
+ * the button it describes.
+ *
+ * Wrapping instead makes the decision on FIT rather than on window width: the two sit side by
+ * side wherever both actually fit, and stack the moment they do not — which is what has to
+ * happen now that this panel is half-width inside `.pair`.
+ */
+.loop-b{display:flex;flex-wrap:wrap;align-items:center;gap:1rem 1.8rem}
+.loop-b > div:last-child{margin-top:0}
+
+/**
+ * The unattended-loop panel and the re-check-karma panel, paired.
+ *
+ * Both are short, single-idea panels that were each stretched across the full width and so each
+ * ended up mostly empty. Side by side they fill the band between them and neither has to spread
+ * its contents to justify its width.
+ */
+.pair{display:grid;grid-template-columns:minmax(0,1fr);gap:1rem;margin-bottom:1.6rem}
+@media (min-width:1400px){.pair{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+/* Their own bottom margins would fight the grid's gap and desync the two columns' baselines. */
+.pair > *{margin-bottom:0;align-self:start}
 .srcgrp{font-family:var(--mono);font-size:.645rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);margin:1rem 0 .3rem}
 .src-row{display:grid;grid-template-columns:auto 1fr auto;gap:.85rem;align-items:start;padding:.6rem 0;border-bottom:1px solid var(--edge)}
 .src-row:last-child{border-bottom:0}
@@ -419,8 +655,13 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
 .runbox .cmdline{margin-bottom:.4rem}
 
 /* ---------- warm-up coach ---------- */
-.wcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:1rem;max-width:1080px;margin-bottom:1.6rem}
-.wcard{padding:1.3rem 1.4rem;border:1px solid var(--edge);border-radius:var(--r);background:var(--glass)}
+.wcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:1rem;margin-bottom:1.6rem}
+.wcard{
+  padding:1.3rem 1.4rem;border:1px solid var(--edge);border-radius:var(--r);
+  background:var(--pane);
+  -webkit-backdrop-filter:blur(22px) saturate(135%);backdrop-filter:blur(22px) saturate(135%);
+  box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
+}
 .wcard.attn{border-left:3px solid var(--amber)}
 .whead{display:flex;align-items:baseline;gap:.7rem;margin-bottom:1rem}
 .whead b{font-family:var(--mono);font-size:1rem}
@@ -437,6 +678,23 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
 .todo b{color:var(--ink)}
 
 .steps-n{counter-reset:s}
+/**
+ * On a wide screen these instructions were a single 64ch column running down a 2472px panel —
+ * the panel filled the window, its contents used a quarter of it. Two tracks past 1500px and
+ * three past 2100px keep every line at its reading measure while the LIST uses the width.
+ *
+ * `break-inside:avoid` because a step split across a column boundary would separate its number
+ * from its text, and the number is the only thing giving the list its order.
+ */
+/* `display:block` is load-bearing, not tidying. This element is `class="card steps-n"`, and
+   `.card` is `display:flex` — a flex container cannot also be a multi-column container, so
+   `columns` was silently ignored and the list stayed one column at 2560px. */
+@media (min-width:1500px){.steps-n{display:block;columns:2;column-gap:2.4rem}}
+@media (min-width:2100px){.steps-n{columns:3}}
+.steps-n .stepn{break-inside:avoid}
+/* A bottom border on the last item of a column reads as a stray rule with nothing under it;
+   the borders exist to separate consecutive steps, which columns already do. */
+@media (min-width:1500px){.steps-n .stepn{border-bottom:0;padding:.85rem 0}}
 .stepn{display:grid;grid-template-columns:2rem 1fr;gap:1rem;padding:1.05rem 0;border-bottom:1px solid var(--edge);counter-increment:s}
 .stepn:last-child{border-bottom:0}
 .stepn::before{
@@ -520,6 +778,200 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
   z-index:60;box-shadow:var(--shadow);
 }
 .toast.show{transform:translateX(-50%) translateY(0)}
+/**
+ * The busy state. A run can take minutes, so this one does NOT time out — it stays until the
+ * work it names is over. The spinner is what separates "still going" from "stuck on screen":
+ * a motionless message that never left looks identical to a toast that failed to dismiss.
+ */
+.toast.busy{display:flex;align-items:center;gap:.6rem;padding-right:.5rem}
+/* Sits inside the pill. Ember-edged because it interrupts work, and never the default focus. */
+.toast .stopbtn{
+  font:inherit;font-size:.74rem;padding:.22rem .6rem;border-radius:100px;cursor:pointer;
+  border:1px solid var(--ember);color:var(--ember);background:transparent;
+}
+.toast .stopbtn:hover{background:color-mix(in srgb, var(--ember) 14%, transparent)}
+.toast .stopbtn:disabled{opacity:.45;cursor:not-allowed}
+.toast .spin{
+  width:.85rem;height:.85rem;flex:none;border-radius:50%;
+  border:2px solid var(--edge-2);border-top-color:var(--ink);
+  animation:toastspin .7s linear infinite;
+}
+@keyframes toastspin{to{transform:rotate(360deg)}}
+/* Respecting the OS setting rather than spinning regardless — the point is to show liveness,
+   and for somebody who has asked for less motion a pulse says the same thing. */
+@media (prefers-reduced-motion:reduce){
+  .toast .spin{animation:toastpulse 1.4s ease-in-out infinite}
+  @keyframes toastpulse{0%,100%{opacity:.35}50%{opacity:1}}
+}
+
+/* ==================================================================
+   Instrument-panel primitives.
+
+   The vocabulary every screen below is built from: a bordered pane with a header ledge, and
+   four kinds of row that go inside one — an account with a meter, a job with a coloured
+   spine and a score, an observation with a status dot, and a plain label/value strip.
+
+   `flex:none` on .panel is the same lesson `.wrap` and `.collect` already carry: these are
+   `overflow:hidden` boxes, so inside a bounded column flex container their automatic minimum
+   size is 0 and they would be squeezed flat, clipping their own contents.
+   ================================================================== */
+/**
+ * The rails grow with the window instead of staying at 272/316px and handing every extra
+ * pixel to the middle column. `minmax(<floor>,<pct>)` keeps the shipped width as a FLOOR — when
+ * the percentage resolves smaller than the floor the max is treated as the min, so nothing
+ * below ~1400px moves — and lets the rail take a share of a genuinely wide screen.
+ */
+/**
+ * `align-items:stretch` (the default) rather than `start`, and a bottom margin.
+ *
+ * Measured at 1920: the three columns were 171px, 261px and 360px tall against a 360px row, so
+ * two of them stopped mid-air and left a ragged bottom edge with voids under the short ones.
+ * Stretching gives one clean baseline across the row — the empty space moves INSIDE a panel,
+ * where it reads as a panel with room in it rather than as a hole in the page.
+ *
+ * The margin fixes a genuine missing gap: `.grid3`'s bottom and the next panel's top were both
+ * at y=604 — flush, no separation at all — while every other block on the screen was separated
+ * by 22-32px. `.collect` carried `margin-bottom` and this did not.
+ */
+.grid3{display:grid;grid-template-columns:minmax(272px,19%) minmax(0,1fr) minmax(316px,23%);gap:1rem;margin-bottom:1.6rem}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,25%);gap:1rem;margin-bottom:1.6rem}
+.grid3>*,.grid2>*{min-width:0}
+/* The row sets the height; the panel has to actually take it, or the border still stops short. */
+.grid3 .panel,.grid2 .panel{height:100%}
+/**
+ * `minmax(0,1fr)`, NOT `1fr`.
+ *
+ * A `1fr` track's minimum is `auto`, i.e. min-content — so the track cannot shrink below what
+ * is inside it. `.cards` (a nested grid with a 400px column floor) reported a min-content of
+ * 1080px, and this single-column collapse then rendered a 1080px track inside a 312px grid on
+ * a 360px phone. It did not trip the overflow test either: `.sheet` is `overflow-y:auto`, which
+ * computes the x-axis to `auto` as well, so the excess scrolled INSIDE the pane and the
+ * document never grew. Half the Accounts screen simply sat off the right edge of a phone.
+ *
+ * This is the same automatic-minimum-size trap `.wrap`, `.collect` and `.panel` each document
+ * above; it was just never carried into the media query.
+ */
+@media (max-width:1200px){.grid3,.grid2{grid-template-columns:minmax(0,1fr)}}
+
+.panel{
+  border:1px solid var(--edge);border-radius:var(--r);overflow:hidden;flex:none;min-width:0;
+  background:var(--pane);
+  -webkit-backdrop-filter:blur(22px) saturate(135%);backdrop-filter:blur(22px) saturate(135%);
+  box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
+  margin-bottom:1rem;
+}
+.grid3 .panel,.grid2 .panel{margin-bottom:0}
+.ph{
+  display:flex;align-items:center;justify-content:space-between;gap:.6rem;
+  padding:.75rem .95rem;border-bottom:1px solid var(--edge);
+  background:linear-gradient(180deg,var(--hdr-a),var(--hdr-b));
+}
+.ph h2,.ph h3{
+  font-family:var(--mono);font-size:.655rem;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink-2);margin:0;font-weight:600;
+}
+.ph .n{font-family:var(--mono);font-size:.69rem;color:var(--ink-3);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* --- an account, with how far along it is --- */
+.acct{padding:.85rem .95rem;border-bottom:1px solid var(--edge)}
+.acct:last-child{border-bottom:0}
+.acct .h{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem}
+.acct .nm{font-family:var(--mono);font-size:.8rem;font-weight:600}
+.st{
+  font-family:var(--mono);font-size:.63rem;letter-spacing:.08em;text-transform:uppercase;
+  padding:.1rem .45rem;border-radius:999px;border:1px solid currentColor;white-space:nowrap;
+  background-image:linear-gradient(180deg,var(--gloss),transparent);
+}
+.st.warm{color:var(--amber);background-color:var(--amber-soft)}
+.st.ready{color:var(--jade);background-color:var(--jade-soft)}
+.st.hold{color:var(--ember);background-color:var(--ember-soft)}
+.st.q{color:var(--ink-3)}
+.meter{height:4px;border-radius:3px;background:var(--edge);margin:.6rem 0 .45rem;
+  overflow:hidden;box-shadow:inset 0 1px 2px rgba(0,0,0,.25)}
+.meter i{display:block;height:100%;border-radius:3px;position:relative;min-width:2px}
+.meter i::after{content:"";position:absolute;inset:0;border-radius:3px;
+  background:linear-gradient(180deg,rgba(255,255,255,.45),rgba(255,255,255,0))}
+.kv{display:flex;justify-content:space-between;gap:.6rem;font-family:var(--mono);
+  font-size:.665rem;color:var(--ink-3);line-height:1.7}
+.kv b{color:var(--ink-2);font-weight:600;font-variant-numeric:tabular-nums}
+
+/* --- a job: a coloured spine, the thing itself, and what it scored --- */
+.job{display:grid;grid-template-columns:3px minmax(0,1fr) auto;border-bottom:1px solid var(--edge)}
+.job:last-child{border-bottom:0}
+.job:hover{background:linear-gradient(90deg,var(--gloss),transparent 46%)}
+.sp{background:var(--edge-2);position:relative}
+.sp::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(180deg,rgba(255,255,255,.5),rgba(255,255,255,0))}
+.job.stop .sp{background:var(--ember)}
+.job.look .sp{background:var(--amber)}
+.job.ok .sp{background:var(--jade)}
+.jb{padding:.8rem .95rem;min-width:0}
+.jmeta{display:flex;align-items:center;gap:.55rem;margin-bottom:.25rem;flex-wrap:wrap}
+.sr{font-family:var(--mono);font-size:.665rem;color:var(--ink-3)}
+.jt{font-size:.875rem;line-height:1.4;margin:0 0 .2rem;text-wrap:balance}
+.jw{font-size:.79rem;color:var(--ink-3);line-height:1.5;margin:0}
+.jr{display:flex;align-items:center;padding:.8rem .85rem;border-left:1px solid var(--edge)}
+.score{font-family:var(--mono);font-size:.95rem;font-weight:600;font-variant-numeric:tabular-nums}
+
+/* --- an observation: what was seen, and how --- */
+.ev{padding:.7rem .95rem;border-bottom:1px solid var(--edge);
+  display:grid;grid-template-columns:auto minmax(0,1fr);gap:.6rem;align-items:start}
+.ev:last-child{border-bottom:0}
+.ed{width:7px;height:7px;border-radius:50%;margin-top:.42rem;background:var(--edge-2);
+  box-shadow:0 0 0 3px rgba(120,120,127,.12)}
+.ed.bad{background:var(--ember);box-shadow:0 0 0 3px var(--ember-soft)}
+.ed.mid{background:var(--amber);box-shadow:0 0 0 3px var(--amber-soft)}
+.ed.good{background:var(--jade);box-shadow:0 0 0 3px var(--jade-soft)}
+.ev p{margin:0;font-size:.81rem;line-height:1.45}
+.ev .s{display:block;font-family:var(--mono);font-size:.655rem;color:var(--ink-3);margin-top:.2rem}
+
+/* --- a label and its figure --- */
+.runbar{padding:.6rem .95rem;font-family:var(--mono);font-size:.68rem;color:var(--ink-3);
+  display:flex;justify-content:space-between;gap:.6rem;border-bottom:1px solid var(--edge)}
+.runbar:last-child{border-bottom:0}
+.runbar b{color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+/* --- the funnel --- */
+.fun{padding:.65rem .95rem;border-bottom:1px solid var(--edge)}
+.fun:last-child{border-bottom:0}
+.fun .l{display:flex;justify-content:space-between;font-family:var(--mono);
+  font-size:.665rem;color:var(--ink-3);margin-bottom:.35rem}
+.fun .l b{color:var(--ink-2);font-variant-numeric:tabular-nums}
+.fbar{height:6px;border-radius:4px;background:var(--edge);overflow:hidden;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.25)}
+.fbar i{display:block;height:100%;border-radius:4px;background:var(--ink-3);position:relative}
+.fbar i::after{content:"";position:absolute;inset:0;border-radius:4px;
+  background:linear-gradient(180deg,rgba(255,255,255,.45),rgba(255,255,255,0))}
+
+/* --- prose inside a panel --- */
+.quote{font-family:var(--serif);font-size:.95rem;line-height:1.55;color:var(--ink-2);
+  padding:.85rem .95rem;border-bottom:1px solid var(--edge);margin:0;
+  background:linear-gradient(180deg,var(--gloss),transparent 70%)}
+.prose{padding:.8rem .95rem;font-size:.81rem;line-height:1.6;color:var(--ink-3)}
+.prose b{color:var(--ink-2)}
+.prose:not(:last-child){border-bottom:1px solid var(--edge)}
+
+/* ------------------------------------------------------------------
+   Fallbacks for the glass.
+
+   No backdrop-filter, or a viewer who has asked their OS for less transparency: drop back to
+   the opaque surfaces this console shipped with. The layout is identical either way, so
+   nothing depends on the blur being there — the wash is decoration, the panel is the contrast.
+   ------------------------------------------------------------------ */
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))){
+  .glass,.pane,.panel,.stack,.side,.card,.wcard,.collect,.wrap,.lens,.bar{background:var(--glass)}
+  .stack-h,.collect-h,.lens-h,.ph,thead th{background:var(--glass-2)}
+}
+@media (prefers-reduced-transparency: reduce){
+  body::before{display:none}
+  .glass,.pane,.panel,.stack,.side,.card,.wcard,.collect,.wrap,.lens,.bar,.toast{
+    background:var(--glass);
+    -webkit-backdrop-filter:none;backdrop-filter:none;
+  }
+  .stack-h,.collect-h,.lens-h,.ph,thead th{background:var(--glass-2)}
+  .quote,.job:hover,.step[aria-current="page"]{background:var(--glass-2)}
+}
 
 /* ------------------------------------------------------------------
    Readability floor on phones. LAST in the sheet on purpose.
@@ -539,19 +991,48 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
    Scoped to phone widths, so the desktop layout this was designed for is untouched.
    ------------------------------------------------------------------ */
 @media (max-width:560px){
-  .p em,
   .cstats>span,
   .runline .t,
   .collect-h .hint,
   .src-n,
   .whead .st,
   .egs .tagline,
-  .p span,          /* the caption under each headline number on Today */
+  .ticker,          /* the five headline figures in the ledge */
+  .tick,
   .stack-h span,    /* "Waiting for you" and its count */
   .bar-t span,      /* "100 needed" under the karma bar */
   .wtoday h4,       /* the "today" heading on each account card */
-  .pulse .lbl,
   .g-flow span,
+  /* ----------------------------------------------------------------
+     RE-MEASURED 2026-07-28 by the responsive sweep in ui.test.mjs, which walks every screen
+     at 390px and reports the computed size of any element with its own text. The original
+     list above was written from a hand sweep and missed 33 elements on Review, Threads and
+     Results — they were still rendering at 10.32-10.64px, which is under what a person reads
+     on a phone and is exactly the band this block exists to lift.
+
+     What was missing, and what each one tells you:
+       .cm          the queue's "1 thing wrong", and each thread's subreddit/comments/age
+       .cmt .who    who wrote the comment, and whether it was the asker
+       .vd-m        "checked 2h ago · 6 separate statements · 1 shown to be wrong"
+       .rgroup      the finding's rule, in words: "Proven wrong"
+       .rule summary  the "the technical detail" disclosure
+       .stab b      "this one was checked 2 times"
+       .why b       "why this one" / "what it adds that nobody said"
+       .srcgrp      "subreddits to read" / "saved searches"
+       th           every table column heading on Threads and Results
+     ---------------------------------------------------------------- */
+  .cm,
+  .cmt .who,
+  .vd-m,
+  .rgroup,
+  .rule summary,
+  .stab b,
+  .why b,
+  .srcgrp,
+  th,
+  /* the instrument-panel primitives, held to the same floor */
+  .ph h2, .ph h3, .ph .n,
+  .kv, .sr, .ev .s, .runbar, .fun .l,
   .tag, .lbl, .hint, .st, .tagline{
     font-size:.72rem;
     letter-spacing:.06em;   /* uppercase mono needs less tracking once it is bigger */
@@ -580,7 +1061,16 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
     <button class="step" data-v="review">Review <span class="g" id="nRev">0</span></button>
     <button class="step" data-v="discovery">Threads <span class="g" id="nDisc">0</span></button>
     <button class="step" data-v="outcomes">Results <span class="g" id="nOut">0</span></button>
+    <button class="step" data-v="setup">Setup <span class="g" id="nSet">–</span></button>
+    <!-- The log had nowhere to live: it appeared under whichever button you pressed and
+         vanished from view the moment you changed screen. A run you did not personally start
+         (or started before a reload) was unreachable. -->
+    <button class="step" data-v="logs">Log <span class="g" id="nLog">–</span></button>
   </nav>
+  <!-- The five headline figures. They were a row of big-number cards under the banner; as a
+       strip in the ledge they read the same and give back the ~110px of height the panel
+       layout needs. Filled by pulse(). -->
+  <div class="ticker" id="pulse"></div>
   <div class="right">
     <button class="mini" id="pulseChip" title="Connection health">checking…</button>
     <button class="mini q" id="help" aria-expanded="false" aria-controls="guide" title="What is this?">?</button>
@@ -670,7 +1160,6 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 </aside>
 
 <p class="banner" id="banner">Loading…</p>
-<div class="pulse" id="pulse"></div>
 
 <section id="v-review"><div class="work">
   <aside class="stack">
@@ -684,6 +1173,8 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 <section id="v-discovery" class="sheet" hidden></section>
 <section id="v-accounts" class="sheet" hidden></section>
 <section id="v-outcomes" class="sheet" hidden></section>
+<section id="v-logs" class="sheet" hidden></section>
+<section id="v-setup" class="sheet" hidden></section>
 
 <div class="toast" id="toast"></div>
 
@@ -693,6 +1184,34 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const el=(t,c,h)=>{const n=document.createElement(t);if(c)n.className=c;if(h!=null)n.innerHTML=h;return n};
+
+/* ---------------- instrument-panel builders ----------------
+ * The four rows every screen is assembled from. Kept here rather than repeated per screen so
+ * a panel on Today and a panel on Results cannot drift into two different things.
+ */
+const panel=(title,n)=>{
+  const p=el('div','panel'), h=el('div','ph');
+  h.append(el('h2',null,esc(title)));
+  if(n!=null&&n!=='')h.append(el('span','n',esc(String(n))));
+  p.append(h);
+  return p;
+};
+/** A label and its figure, inside an account row. `v` is trusted HTML — callers escape. */
+const kvRow=(k,v)=>el('div','kv',`<span>${esc(k)}</span><b>${v}</b>`);
+/** A label and its figure, as a full-width strip. */
+const barRow=(k,v,tone)=>el('div','runbar',
+  `<span>${esc(k)}</span><b${tone?` style="color:var(--${tone})"`:''}>${v}</b>`);
+/** Something observed: a dot for how it went, what it was, and where it came from. */
+const evRow=(text,src,tone)=>el('div','ev',
+  `<span class="ed${tone?' '+tone:''}"></span><p>${text}`+
+  (src?`<span class="s">${esc(src)}</span>`:'')+`</p>`);
+/** A meter that is only drawn when there is a real measurement to draw. */
+const meter=(pct,tone)=>{
+  const m=el('div','meter'), i=el('i');
+  i.style.width=Math.max(0,Math.min(100,pct))+'%';
+  i.style.background=`var(--${tone})`;
+  m.append(i); return m;
+};
 let S=null, CUR='today', SEL=null, OPS=null;
 async function loadOperators(){ OPS=await fetch('/api/operators').then(r=>r.json()).catch(()=>({operators:[],selected:null})); }
 
@@ -721,30 +1240,136 @@ const RULE={
 };
 const ruleWord=r=>RULE[r]||String(r).replace(/-/g,' ');
 
-const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1900)};
+/**
+ * Two kinds of toast, and the difference matters.
+ *
+ * `toast(m)` announces something that ALREADY happened and leaves after 1.9s.
+ * `busy(m)` announces something that is STILL HAPPENING and does not leave until told.
+ *
+ * The second exists because these actions are slow — a collect drives a real Chrome for
+ * minutes, opening a browser spawns a process, and even reading which program owns a port
+ * costs about six seconds. A message that vanished after two seconds left the operator with
+ * no way to tell "working" from "nothing happened", and pressing again is exactly the wrong
+ * thing to do to a job that is already running.
+ *
+ * A STACK, not a flag: several can overlap (a poll finishing while a run continues), and a
+ * transient toast firing mid-run must not dismiss the run's message. The newest busy message
+ * is the one shown, and the toast only clears when the last one is finished.
+ */
+const BUSY_TOASTS=[];
+let TOAST_TIMER=null;
+
+function paintToast(){
+  const t=$('#toast');
+  if(BUSY_TOASTS.length){
+    const top=BUSY_TOASTS[BUSY_TOASTS.length-1];
+    clearTimeout(TOAST_TIMER);TOAST_TIMER=null;
+    t.textContent='';
+    t.append(el('span','spin'),el('span',null,esc(top.message)));
+    /**
+     * Stop, but only where stopping is a real thing this action can do.
+     *
+     * Offered by the caller, not by this helper — a button that appears on everything and
+     * silently does nothing for half of them is worse than no button. Some work genuinely
+     * cannot be interrupted part-way (a reply mid-send), and for those there is nothing here
+     * to press.
+     */
+    if(top.onStop){
+      const stop=el('button','stopbtn');
+      stop.type='button';
+      stop.textContent=top.stopping?'Stopping…':'Stop';
+      stop.disabled=!!top.stopping;
+      stop.setAttribute('aria-label',`Stop: ${top.message}`);
+      stop.onclick=async()=>{
+        top.stopping=true;paintToast();          /* pressed twice is still one kill */
+        try{ await top.onStop(); }
+        catch(e){ top.stopping=false;paintToast();toast(String(e&&e.message||e)); }
+      };
+      t.append(stop);
+    }
+    t.classList.add('show','busy');
+    t.setAttribute('aria-busy','true');
+    return;
+  }
+  t.classList.remove('busy');
+  t.removeAttribute('aria-busy');
+  if(!t.textContent)t.classList.remove('show');
+}
+
+const toast=m=>{
+  const t=$('#toast');
+  /* A finished-message must never steal the screen from work still in progress. It is shown
+     when the last busy toast clears, or dropped if more work is still running. */
+  if(BUSY_TOASTS.length){BUSY_TOASTS[BUSY_TOASTS.length-1].after=m;return}
+  clearTimeout(TOAST_TIMER);
+  t.classList.remove('busy');t.removeAttribute('aria-busy');
+  t.textContent=m;t.classList.add('show');
+  TOAST_TIMER=setTimeout(()=>{t.classList.remove('show');t.textContent=''},1900);
+};
+
+/**
+ * Show a message for as long as the work lasts.
+ *
+ * Returns a handle. `done()` and `fail()` both END it — call one of them from a `finally`, or
+ * a thrown error leaves a spinner on screen forever, which is a worse lie than no toast at all.
+ */
+function busy(message,opts){
+  const entry={message,after:null,ended:false,onStop:(opts&&opts.onStop)||null,stopping:false};
+  BUSY_TOASTS.push(entry);
+  paintToast();
+  const end=(finalMessage)=>{
+    if(entry.ended)return;               // idempotent: done() in a finally after an explicit one
+    entry.ended=true;
+    const at=BUSY_TOASTS.indexOf(entry);
+    if(at>=0)BUSY_TOASTS.splice(at,1);
+    const say=finalMessage??entry.after;
+    paintToast();
+    if(say&&!BUSY_TOASTS.length)toast(say);
+  };
+  return {
+    /* For work that reports its own steps — "signing in", "reading r/WordPress". */
+    update(m){entry.message=m;paintToast()},
+    done(m){end(m??undefined)},
+    fail(m){end(m?`Failed: ${m}`:'That did not work')}
+  };
+}
 const ago=iso=>{if(!iso)return '';const d=(Date.now()-new Date(iso).getTime())/1000;
   if(d<60)return Math.round(d)+'s ago';if(d<3600)return Math.round(d/60)+'m ago';
   if(d<86400)return Math.round(d/3600)+'h ago';return Math.round(d/86400)+'d ago'};
 /* A measured zero and an absent measurement are different facts, and look different. */
 const num=(v,none)=>v==null?`<b class="none">${esc(none||'never measured')}</b>`:`<b>${v}</b>`;
 
-/* ---------------- pulse ---------------- */
+/* ---------------- the ticker ----------------
+ * The same five facts the big-number row carried, in the ledge. The wording stays long
+ * enough to say what each number MEANS — "sent" alone is not a fact, "replies sent" is —
+ * and the detail that used to sit under each number is kept as the title.
+ */
 function pulse(){
   const p=S.pulse, w=$('#pulse'); w.textContent='';
-  const cell=(cls,val,label,sub)=>{
-    const d=el('div','p '+cls);
-    d.append(el('b',null,String(val)),el('span',null,esc(label)));
-    if(sub)d.append(el('em',null,esc(sub)));
-    return d;
+  const tick=(val,label,sub,cls)=>{
+    const n=el('span','tick'+(cls?' '+cls:''));
+    n.append(el('span',null,esc(label)),el('b',null,String(val)));
+    if(sub)n.title=sub;
+    return n;
   };
+  /* Waiting is the only one that is a control, and only while something is actually waiting. */
+  let waiting;
+  if(p.waitingOnYou){
+    waiting=el('button','tick');
+    waiting.type='button';
+    waiting.append(el('span',null,'waiting'),el('b',null,String(p.waitingOnYou)));
+    waiting.title='written, not sent — open Review';
+    waiting.onclick=()=>go('review');
+  } else {
+    waiting=tick(0,'waiting','nothing is waiting on you');
+  }
   w.append(
-    cell(p.waitingOnYou?'bad act':'',p.waitingOnYou,'waiting for you','written, not sent'),
-    cell('',p.accountsInLogs,'accounts',p.profilesProvisioned+' sign-ins set up'),
-    cell(p.published?'good':'',p.published,'replies sent','all time'),
-    cell(p.operatorDecisions?'':'warn',p.operatorDecisions,'you decided on','approved or turned down'),
-    cell('',p.removals,'taken down','by a moderator')
+    waiting,
+    tick(p.accountsInLogs,'accounts',p.profilesProvisioned+' sign-ins set up'),
+    tick(p.published,'replies sent','all time',p.published?'good':''),
+    tick(p.operatorDecisions,'decided','approved or turned down',p.operatorDecisions?'':'warn'),
+    tick(p.removals,'taken down','by a moderator')
   );
-  w.querySelectorAll('.act').forEach(n=>n.onclick=()=>go('review'));
 }
 
 /* ---------------- review ---------------- */
@@ -753,10 +1378,18 @@ function pulse(){
 let SHOW_IGNORED=false;
 function review(){
   const list=$('#stackList'); list.textContent='';
+  seedPage('review',S.reviewTotal,S.reviewOffset,S.reviewLimit);
   const pending=S.review.filter(d=>d.status==='pending');
   const ignored=pending.filter(d=>d.workflow&&d.workflow.status==='ignored');
   const items=SHOW_IGNORED?pending:pending.filter(d=>!(d.workflow&&d.workflow.status==='ignored'));
-  $('#stackN').textContent=items.length;
+  /**
+   * The QUEUE's size, counted by the database — not this page's.
+   *
+   * `items.length` is what is on screen. Reporting it here would say "3 waiting" while three
+   * hundred were, and this is the one number on this screen a person acts on. Falls back to the
+   * page count only when the server did not send a total (an older server, or no database).
+   */
+  $('#stackN').textContent=(S.reviewPending!=null?S.reviewPending:items.length);
   if(ignored.length){
     const t=el('button','mini');
     t.textContent=SHOW_IGNORED?`hide ${ignored.length} ignored`:`show ${ignored.length} ignored`;
@@ -768,7 +1401,7 @@ function review(){
   if(!SEL||!items.some(d=>d.id===SEL))SEL=items.length?items[0].id:null;
   items.forEach(d=>{
     const c=d.certification;
-    const b=el('button','card-q'); b.dataset.id=d.id;
+    const b=el('button','card-q'+(c&&DOT[c.verdict]?' '+DOT[c.verdict]:'')); b.dataset.id=d.id;
     b.setAttribute('aria-current',String(SEL===d.id));
     const wfs=(d.workflow&&d.workflow.status)||'none';
     const mark=wfs==='ignored'?'<span class="tag">ignored</span> ':wfs==='read'?'<span class="tag">read</span> ':wfs==='actioned'?'<span class="tag ok">actioned</span> ':'';
@@ -778,6 +1411,16 @@ function review(){
     b.onclick=()=>{SEL=d.id;review()};
     list.append(b);
   });
+
+  /* Paging the queue reloads the console rather than swapping rows in place: a review card
+     carries its certification, its thread and its assessment, and those are assembled by
+     /api/state for the drafts on the page — there is no lighter thing to ask for. */
+  list.append(pager('review',async()=>{
+    REVIEW_OFFSET=PAGE_STATE.review.offset;
+    SEL=null;
+    await load();
+    go('review');
+  }));
 
   const d=S.review.find(x=>x.id===SEL);
   const split=$('#split'); split.textContent='';
@@ -931,8 +1574,13 @@ function review(){
       '<div class="tiny">Type <b>SEND</b> to confirm, and say why in a word or two.</div>';
     const cw=el('div');cw.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem';
     const conf=el('input');conf.placeholder='SEND';
+    /* Labelled: a placeholder is not a label — it disappears as soon as you type, and a screen
+       reader announcing an unnamed box on the one irreversible action here is the worst place
+       for it. */
+    conf.setAttribute('aria-label','Type SEND to confirm');
     conf.style.cssText='width:110px;font:inherit;font-family:var(--mono);font-size:.8rem;padding:.45rem .6rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
     const why=el('input');why.placeholder='why you are sending it';
+    why.setAttribute('aria-label','Why you are sending it');
     why.style.cssText='flex:1;min-width:200px;font:inherit;font-size:.83rem;padding:.45rem .6rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
     const goBtn=actionButton('Confirm and send',doAction(async say=>{
       if(conf.value!=='SEND')throw new Error('Type SEND exactly to confirm');
@@ -942,7 +1590,9 @@ function review(){
       if(r.output&&LAST_DETAIL)LAST_DETAIL(r.output);
       if(!r.ok)throw new Error((r.error||'The send did not complete')+(r.recorded?' (your approval was recorded)':''));
       return 'Sent';
-    }));
+    /* No Stop on a send. Submitting and confirming are two steps, and stopping between them
+       leaves a comment on Reddit nothing knows about. The server refuses this too. */
+    },{stoppable:false}));
     cw.append(conf,why,goBtn);panel.append(cw);
     sendBtn.replaceWith(panel);conf.focus();
   };
@@ -969,9 +1619,19 @@ function review(){
  * what is happening while it happens, and a failure is reported in words rather than dropped.
  */
 let BUSY=false;
+/**
+ * Set when the run that just ended was killed by a person rather than by a fault.
+ *
+ * A shared flag rather than a property threaded through every call site: the job callbacks all
+ * `throw new Error(r.error)` and an Error carries no room for it. Safe because `doAction` runs
+ * strictly one at a time (the BUSY guard), so there is never a second run to confuse it with.
+ */
+let LAST_RUN_STOPPED=false;
+
 const runNow=async body=>{
   const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},
     body:JSON.stringify(body)}).then(x=>x.json());
+  LAST_RUN_STOPPED=!!r.stopped;
   /* whatever redbot printed goes on screen, success or failure — this is the only place
      the operator can see why something did not work */
   if(LAST_DETAIL&&(r.output||r.error))LAST_DETAIL(r.output||r.error);
@@ -994,10 +1654,19 @@ function actionButton(label,handler){
  * the time it took, and whatever redbot actually printed is kept on screen — especially
  * when it goes wrong.
  */
-function doAction(job){
+/**
+ * `opts.stoppable:false` for work that must not be interrupted part-way.
+ *
+ * Only the send flow passes it. A reply is submitted and THEN confirmed by re-reading its
+ * permalink, so a kill between the two leaves a live comment on Reddit that redbot has no
+ * record of — the server refuses that too (see ACTIONS.__reply), and offering a button here
+ * that the server would only refuse is a button that lies.
+ */
+function doAction(job,opts){
+  const canStop=!(opts&&opts.stoppable===false);
   return async(bt)=>{
     if(BUSY){toast('Something else is still running');return}
-    BUSY=true;
+    BUSY=true;LAST_RUN_STOPPED=false;
     const original=bt.textContent;
     bt.disabled=true;bt.style.opacity='.6';
 
@@ -1011,23 +1680,94 @@ function doAction(job){
       panel.append(n);panel.scrollTop=panel.scrollHeight;
       return n;
     };
-    const say=m=>{bt.textContent=m;line(m)};
+    /**
+     * The run-log panel below already narrates this, but it scrolls away and it is on ONE
+     * screen — switch tab mid-collect and there was nothing anywhere saying a job was running.
+     * The busy toast is the part that follows you, and it names the step rather than just
+     * spinning, so it says what is taking the time.
+     */
+    /**
+     * Stopping asks the SERVER to kill the child, which is the only thing that can.
+     *
+     * The browser cannot cancel this work by dropping its request: the run is a process on the
+     * machine, and abandoning the fetch would leave it driving Chrome with nothing watching.
+     * So Stop is a request of its own, and the run ends the way it always does — through the
+     * child's close handler, which reports `stopped` so this reads as stopped and not failed.
+     */
+    const held=busy(original,{onStop:!canStop?null:async()=>{
+      const r=await fetch('/api/run/stop',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})
+        .then(x=>x.json()).catch(e=>({ok:false,error:String(e&&e.message||e)}));
+      if(!r.ok)throw new Error(r.error||'could not stop it');
+      line('Stopping…');
+    }});
+    const say=m=>{bt.textContent=m;line(m);held.update(m)};
+
+    /* The command's own output, streamed. It previously arrived only when the child EXITED,
+       and only the last 14 lines of it — so a five-minute collect showed one status line and
+       then nothing, and a run that had wedged looked exactly like a run that was working. */
+    const stream=el('pre','runout');stream.hidden=true;panel.append(stream);
+    let shown=0,seenRun=null;
+    const pump=async()=>{
+      try{
+        const r=await fetch('/api/run/log?since='+shown).then(x=>x.json());
+        /* A different runId means another command owns the log now — show its output fresh
+           instead of appending it onto the previous run's. */
+        if(seenRun!==null&&r.runId!==seenRun){shown=0;stream.textContent='';}
+        seenRun=r.runId;
+        if(r.lines&&r.lines.length){
+          stream.hidden=false;
+          for(const l of r.lines){
+            const ln=document.createElement('div');
+            ln.textContent=(String(Math.round(l.at/1000))+'s').padStart(5,' ')+'  '+l.text;
+            stream.append(ln);
+          }
+          shown+=r.lines.length;
+          stream.scrollTop=stream.scrollHeight;panel.scrollTop=panel.scrollHeight;
+        }
+        if(r.dropped&&!stream.dataset.warned){
+          stream.dataset.warned='1';
+          const w=document.createElement('div');
+          w.className='bad';w.textContent='… '+r.dropped+' earlier line(s) dropped (log is capped)';
+          stream.prepend(w);
+        }
+      }catch{/* best effort: the run matters, the poll does not */}
+    };
+    const pollTimer=setInterval(pump,600);
     const detail=out=>{
-      if(!out)return;
+      /* The live stream already rendered this run, line by line. Appending the buffered blob
+         too would print everything twice. */
+      if(!out||shown>0)return;
       const d=el('pre','runout');
       d.textContent=String(out).replace(/\[[0-9;]*m/g,'').trim().split('\n').slice(-14).join('\n');
       panel.append(d);panel.scrollTop=panel.scrollHeight;
     };
+    /* Only used when a run is too short to be caught by a poll. */
     LAST_DETAIL=detail;
     try{
       const done=await job(say);
+      await pump();                        /* drain what landed after the last tick */
       line(done||'Done','ok');
       bt.textContent=done||'Done';
+      held.done(done||'Done');
       await load();
     }catch(e){
-      line(String(e&&e.message||e),'bad');
-      bt.textContent=original;
+      await pump();                        /* the reason is usually in these lines */
+      /* A run somebody stopped did not fail. Saying "Failed: Stopped." would report their own
+         decision back to them as an error. */
+      if(LAST_RUN_STOPPED){
+        line('Stopped.','');
+        bt.textContent=original;
+        held.done('Stopped');
+      }else{
+        line(String(e&&e.message||e),'bad');
+        bt.textContent=original;
+        held.fail(String(e&&e.message||e));
+      }
     }finally{
+      /* Idempotent, so the two calls above stand — this is the one that runs when neither
+         did, and a spinner left on screen forever is worse than no toast at all. */
+      held.done();
+      clearInterval(pollTimer);
       LAST_DETAIL=null;
       BUSY=false;bt.disabled=false;bt.style.opacity='';
       setTimeout(()=>{bt.textContent=original},4000);
@@ -1043,6 +1783,24 @@ const srcOn=(kind,id,dflt)=>{
   return !!dflt;
 };
 const srcSet=(kind,id,on)=>{try{localStorage.setItem(srcKey(kind,id),on?'1':'0')}catch{}};
+
+/**
+ * Which account collection runs as.
+ *
+ * Not a cosmetic preference: `find-threads` and `find-search` drive a real Chrome, and the
+ * server now refuses either one without an account rather than letting the child fall through
+ * to config.browser's default debug port. Remembered per browser like the source switches, and
+ * re-validated against the configured accounts every render — a handle that has since been
+ * removed must not silently keep being sent.
+ */
+const COLLECT_ACCT_KEY='redbot.collectAccount';
+const collectAcctGet=accts=>{
+  let saved=null;
+  try{saved=localStorage.getItem(COLLECT_ACCT_KEY)}catch{}
+  if(saved&&accts.some(a=>a.handle===saved))return saved;
+  return accts.length?accts[0].handle:null;
+};
+const collectAcctSet=h=>{try{localStorage.setItem(COLLECT_ACCT_KEY,h)}catch{}};
 
 function collecting(root){
   const s=S.collect;
@@ -1072,7 +1830,9 @@ function collecting(root){
       mid.append(el('div','src-t',kind==='sub'?esc('r/'+id):esc('“'+id+'”')));
       mid.append(el('div','src-w',esc(descOf(it))));
       row.append(mid);
-      const n=kind==='sub'?(s.collected[id]||0):null;
+      /* Case-insensitive: a source typed as "wordpress" is stored by Reddit as "Wordpress",
+         and an exact-key lookup read 0 while 16 threads sat in the table below. */
+      const n=kind==='sub'?((s.collectedByKey||{})[String(id).toLowerCase()]||0):null;
       row.append(el('div','src-n',n==null?'':`${n} on file`));
       b.append(row);
     });
@@ -1083,8 +1843,7 @@ function collecting(root){
   /* ---- add a place to look ---- */
   b.append(el('div','srcgrp','add another'));
   const add=el('div');add.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.5rem 0';
-  const kind=el('select');
-  kind.style.cssText='font:inherit;font-size:.8rem;padding:.45rem .6rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+  const kind=el('select','sel');
   [['subreddit','a subreddit'],['search','a search phrase']].forEach(([v,l])=>{
     const o=el('option',null,l);o.value=v;kind.append(o)});
   const val=el('input');
@@ -1096,16 +1855,46 @@ function collecting(root){
   addBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
   addBtn.onclick=async()=>{
     if(!val.value.trim()){toast('Type a name first');return}
-    const r=await fetch('/api/sources/add',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({kind:kind.value,value:val.value.trim()})}).then(x=>x.json());
-    if(!r.ok){toast(r.error);return}
-    val.value='';toast('Added');await load();
+    const held=busy(`Adding ${val.value.trim()}…`);
+    try{
+      const r=await fetch('/api/sources/add',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({kind:kind.value,value:val.value.trim()})}).then(x=>x.json());
+      if(!r.ok){held.fail(r.error);return}
+      val.value='';
+      held.update('Reloading…');
+      await load();
+      held.done('Added');
+    }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
   };
   add.append(kind,val,addBtn);b.append(add);
   b.append(el('div','tiny','A subreddit is read straight through. A search phrase is run as a Reddit search. Either way nothing happens until you press Collect.'));
 
   const run=el('div','runbox');
   const rl=el('div','lbl');rl.textContent='collect';run.append(rl);
+
+  /**
+   * Who collects. Only accounts that are actually configured — the accounts list also carries
+   * handles seen in the logs that nobody set up, and those have no browser to drive.
+   */
+  const accts=(S.accounts||[]).filter(a=>a&&a.configured&&a.handle);
+  let acct=collectAcctGet(accts);
+  if(accts.length){
+    const who=el('div');
+    who.style.cssText='display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;padding:.1rem 0 .45rem';
+    const lab=el('span','tiny');lab.textContent='collect as';
+    const sel=el('select','sel');
+    sel.setAttribute('aria-label','Which account collects');
+    accts.forEach(a=>{
+      const o=el('option',null,a.handle);
+      o.value=a.handle;
+      if(a.handle===acct)o.selected=true;
+      sel.append(o);
+    });
+    sel.onchange=()=>{acct=sel.value;collectAcctSet(acct);renderRun()};
+    who.append(lab,sel);
+    run.append(who);
+  }
+
   const btns=el('div');btns.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap';run.append(btns);
   const note=el('div','tiny');run.append(note);
   b.append(run);
@@ -1116,16 +1905,19 @@ function collecting(root){
     const qs=s.searches.filter(x=>srcOn('q',x.query,x.enabled));
     const total=subs.length+qs.length;
     if(!total){note.textContent='Nothing switched on. Turn on at least one source above.';return}
+    /* Collecting drives an account's own Chrome, so with none set up there is nothing to
+       drive. Said here rather than left to the server's refusal after the click. */
+    if(!acct){note.textContent='No account set up yet. Add one on the Accounts screen — collecting reads Reddit through that account’s own Chrome.';return}
 
     const go=doAction(async(say)=>{
       for(const x of subs){
         say(`Looking through r/${x.name}…`);
-        const r=await runNow({key:'find-threads',subreddit:x.name});
+        const r=await runNow({key:'find-threads',subreddit:x.name,account:acct});
         if(!r.ok)throw new Error(r.error||`r/${x.name} did not work`);
       }
       for(const x of qs){
         say(`Searching “${x.query}”…`);
-        const r=await runNow({key:'find-search',query:x.query});
+        const r=await runNow({key:'find-search',query:x.query,account:acct});
         if(!r.ok)throw new Error(r.error||'that search did not work');
       }
       say('Working out which are worth answering…');
@@ -1135,7 +1927,7 @@ function collecting(root){
     });
 
     btns.append(actionButton(`Collect from ${total} source${total===1?'':'s'}`,go));
-    note.innerHTML=`Opens your signed-in Chrome, reads up to ${esc(String(s.maxPerRun||15))} threads from each place, then works out which are worth answering. Takes a few minutes. ${esc(s.limitNote||'')}`;
+    note.innerHTML=`Opens <strong>${esc(acct)}</strong>’s signed-in Chrome, reads up to ${esc(String(s.maxPerRun||15))} threads from each place, then works out which are worth answering. Takes a few minutes. ${esc(s.limitNote||'')}`;
   }
   renderRun();
 
@@ -1144,10 +1936,41 @@ function collecting(root){
 
 function discovery(){
   const d=S.discovery, r=$('#v-discovery'); r.textContent='';
+  /* The first page arrives inside /api/state so the screen paints without a second round trip;
+     after that PAGE_STATE owns the position and `d.items` is whatever page was last fetched. */
+  seedPage('threads',d.total,d.offset,d.limit);
   r.append(el('h2','sec','Threads redbot found'));
   r.append(el('div','sub',esc(`${d.threadsCollected} collected · ${d.assessed} looked at · ${d.contribute} worth answering · ${d.skip} left alone · ${d.drafted} written`)));
-  collecting(r);
-  const w=el('div','wrap'), tb=el('table');
+
+  /* The funnel and what came back go first; the collect controls sit under them. Reading the
+     result is the frequent task and collecting is the occasional one — leading with the tall
+     sources panel pushed every figure on this screen below the fold. */
+  const grid=el('div','grid3');
+
+  /* ---- left: the funnel, every step read from the record ---- */
+  const fun=panel('Funnel',`${d.threadsCollected} read`);
+  const total=d.threadsCollected||1;
+  const step=(label,n,tone)=>{
+    const f=el('div','fun');
+    f.append(el('div','l',`<span>${esc(label)}</span><b>${n}</b>`));
+    const bar=el('div','fbar'), i=el('i');
+    i.style.width=Math.round((n/total)*100)+'%';
+    if(tone)i.style.background=`var(--${tone})`;
+    bar.append(i); f.append(bar); fun.append(f);
+  };
+  step('collected',d.threadsCollected);
+  step('looked at',d.assessed);
+  step('gap analysed',d.gapsAnalysed);
+  step('worth answering',d.contribute,'jade');
+  step('written',d.drafted);
+  step('published',S.pulse.published);
+  grid.append(fun);
+
+  /* ---- centre: what came back ---- */
+  const list=panel('Collected threads','sorted by score');
+  const w=el('div','wrap');
+  w.style.cssText='border:0;border-radius:0;box-shadow:none;background:none;-webkit-backdrop-filter:none;backdrop-filter:none';
+  const tb=el('table');
   tb.innerHTML='<thead><tr><th class="n">Score</th><th>Thread</th><th>Call</th><th>What it would add</th><th>Reply</th></tr></thead>';
   const body=el('tbody');
   d.items.forEach(i=>{
@@ -1160,7 +1983,59 @@ function discovery(){
       `<td>${i.draftId?`<span class="tag ${i.draftStatus==='pending'?'stop':''}">${esc(i.draftStatus==='pending'?'waiting':i.draftStatus)}</span>`:'<span class="cm">—</span>'}</td>`;
     body.append(tr);
   });
-  tb.append(body);w.append(tb);r.append(w);
+  if(!d.items.length)body.innerHTML='<tr><td colspan="5" class="cm">nothing scored yet</td></tr>';
+  tb.append(body);w.append(tb);list.append(w);
+  /* Re-renders from the fetched page rather than reloading the whole console: paging is a
+     cheap action and rebuilding every screen's figures to answer it would make it expensive. */
+  list.append(pager('threads',async()=>{
+    const rows=await fetchPage('threads');
+    if(rows){ d.items=rows; discovery(); }
+  }));
+  grid.append(list);
+
+  /* ---- right: what never got that far ----
+   * The rule that caught each thread is recorded now (0014_thread_prefilter), so this shows
+   * the real split instead of a total with an apology. What it must NOT do is call the whole
+   * remainder "filtered": threads the prefilter KEPT but that have not been analysed yet live
+   * in the same arithmetic, and attributing them to a rule that never fired would be exactly
+   * the made-up figure this panel used to refuse to print. */
+  const dropped=Math.max(0,d.threadsCollected-d.assessed);
+  const pf=d.prefilter;
+  const filtered=pf?pf.total:0;
+  const notYet=Math.max(0,dropped-filtered);
+  const DROPWORD={
+    'outside-pilot':'outside the pilot subreddits',
+    'too-old':'older than the 72h ceiling',
+    'not-a-question':'not a question — a guide, showcase or announcement',
+    'age-unknown':'age unknown, so recency could not be confirmed'
+  };
+  const drop=panel('Dropped','before any model call');
+  drop.append(barRow('collected',String(d.threadsCollected)));
+  drop.append(barRow('never assessed',String(dropped)));
+  drop.append(barRow('assessed, then skipped',String(d.skip)));
+
+  if(pf&&pf.byKind.length){
+    drop.append(el('div','ph','<h2>Why they were dropped</h2>'));
+    pf.byKind.forEach(k=>drop.append(barRow(DROPWORD[k.kind]||k.kind,String(k.n))));
+    /* Named separately because it is a different fact: nothing rejected these, the analyser
+       has not reached them. `redbot opportunity` takes fifteen at a time. */
+    if(notYet)drop.append(barRow('kept, not looked at yet',String(notYet)));
+  }
+  drop.append(el('div','prose',
+    `The prefilter is mechanical and runs first, so <b>nothing is spent</b> on a thread that `+
+    `was never eligible. A high drop rate here is not waste — it is the cheapest possible `+
+    `refusal.`));
+  if(!pf||!pf.byKind.length){
+    /* Still honest about the empty case: no rows means the filter has not run and recorded
+       itself yet, which is not the same as nothing having been dropped. */
+    drop.append(el('div','prose',
+      `No reasons are on record yet — they are written when <code>redbot opportunity</code> `+
+      `runs. Until then the total is all this screen can honestly show.`));
+  }
+  grid.append(drop);
+  r.append(grid);
+  collecting(r);
+
   r.append(el('div','note',`<b>Leaving threads alone is most of the value.</b> ${d.skip} of the ${d.assessed} threads looked at were dropped before anyone spent time on them — a guide rather than a question, one already solved, or a subject these accounts cannot honestly speak to.`));
 }
 
@@ -1209,12 +2084,470 @@ function renderBilling(container){
   container.append(box);
 }
 
-/* ---------------- accounts ---------------- */
+/* ---------------- accounts ----------------
+ * Which card is open for editing, by handle. Module-level rather than local so a re-render —
+ * which this screen does on every save — does not close the panel out from under someone.
+ */
+let EDITING=null;
+
+/* ---------------- paging ----------------
+ *
+ * Every screen used to render every row it had. That is free at sixteen threads and ruinous at
+ * sixteen thousand: the console cannot paint until the whole table has been serialised, and the
+ * browser then builds a DOM node for each row nobody scrolls to.
+ *
+ * So each list keeps an offset here, the SERVER cuts the page (LIMIT/OFFSET in SQL — see
+ * src/db/pages.ts), and this only asks for the next one. The distinction matters: slicing an
+ * array that has already been loaded is not paging, it is hiding.
+ */
+const PAGE_STATE = {
+  threads:      { offset: 0, limit: 25, total: 0 },
+  observations: { offset: 0, limit: 25, total: 0 },
+  review:       { offset: 0, limit: 25, total: 0 }
+};
+
+/* Review is the one list assembled inside /api/state, so its position is sent with that
+   request rather than fetched separately — see the pager in review(). */
+let REVIEW_OFFSET = 0;
+
+/** Adopt the first page that arrived inside /api/state, so the screen paints without a second trip. */
+function seedPage(list,total,offset,limit){
+  const st=PAGE_STATE[list];
+  if(!st||total==null)return;
+  /* The total is refreshed every time — rows are still being written while a person reads —
+     but the OFFSET is only adopted before the first page has been taken, or a reload would
+     drag the reader back to the top of a list they had paged into. */
+  st.total=total;
+  if(st.limit==null&&limit)st.limit=limit;
+  if(!st.seeded){ st.offset=offset||0; if(limit)st.limit=limit; st.seeded=true; }
+}
+
+async function fetchPage(list){
+  const st=PAGE_STATE[list];
+  const r=await fetch(`/api/page?list=${encodeURIComponent(list)}&offset=${st.offset}&limit=${st.limit}`)
+    .then(x=>x.json()).catch(e=>({error:String(e&&e.message||e)}));
+  if(!r||r.error||!Array.isArray(r.rows))return null;
+  st.total=r.total; st.offset=r.offset; st.limit=r.limit;
+  return r.rows;
+}
+
+/**
+ * "Showing 1–25 of 4,812", with the two controls that move.
+ *
+ * The total is the point. A page of 25 with no count reads as "there are 25", and the whole
+ * reason for paging is that there are not. Buttons disable at the ends rather than disappear,
+ * so the control does not move under the pointer as you reach the last page.
+ */
+function pager(list,onChange){
+  const st=PAGE_STATE[list];
+  const bar=el('div');
+  bar.style.cssText='display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.6rem';
+  if(st.total<=st.limit&&st.offset===0)return bar;      // one page — no controls to offer
+
+  const from=st.total?st.offset+1:0, to=Math.min(st.offset+st.limit,st.total);
+  const label=el('div','tiny');
+  label.textContent=`Showing ${from.toLocaleString()}–${to.toLocaleString()} of ${st.total.toLocaleString()}`;
+  label.setAttribute('aria-label',`${list} page range`);
+
+  const step=(text,delta,disabled,aria)=>{
+    const b=el('button','mini');
+    b.textContent=text;
+    b.setAttribute('aria-label',aria);
+    b.disabled=!!disabled;
+    b.style.cssText='padding:.3rem .7rem;font-size:.75rem'+(disabled?';opacity:.35;cursor:not-allowed':'');
+    if(!disabled)b.onclick=async()=>{
+      st.offset=Math.max(0,st.offset+delta*st.limit);
+      await onChange();
+    };
+    return b;
+  };
+  bar.append(
+    step('‹ Newer',-1,st.offset===0,`Previous page of ${list}`),
+    step('Older ›',1,st.offset+st.limit>=st.total,`Next page of ${list}`),
+    label
+  );
+  return bar;
+}
+
+/* ---------------- the debugging port, and what is actually on it ----------------
+ *
+ * A port is a rendezvous with whatever got there first, so "is anything listening" is the
+ * wrong question — on this machine 9222 is held by Lenovo Vantage's Edge WebView2, which
+ * speaks the debugging protocol fluently. The four states below come from the OWNING PROCESS
+ * (src/ports.ts), and only `running` means "this account's browser".
+ *
+ * Held by reference and repainted on a timer rather than re-rendered, so a poll cannot wipe an
+ * open editor mid-sentence.
+ */
+const PORTNODES = new Map();
+let PORTS = null;
+
+const PORTLOOK = {
+  running: { tag:'ok',   word:'running' },
+  free:    { tag:'',     word:'not running' },
+  foreign: { tag:'stop', word:'taken by something else' },
+  unknown: { tag:'no',   word:'cannot be identified' }
+};
+
+async function loadPorts(){
+  const r=await fetch('/api/ports').then(x=>x.json()).catch(e=>({error:String(e&&e.message||e)}));
+  PORTS=(r&&Array.isArray(r.ports))?r:{ports:[],suggestion:null,error:(r&&r.error)||'this console did not answer /api/ports'};
+  paintPorts();
+}
+
+/** Repaint every card's port line and buttons from the last /api/ports answer. */
+/**
+ * Has this account got a browser on THIS computer?
+ *
+ * `boundHere` is null when the console could not ask (no database) — which is not the same as
+ * "no", so nothing is claimed in that case. An account shared from another machine has a
+ * description here and no session: its port may even look plausible, because the pre-0013
+ * column still answers when no binding exists, but no folder on this disk holds a login.
+ */
+function isBoundHere(handle){
+  if(!PORTS||!Array.isArray(PORTS.boundHere))return true;
+  return PORTS.boundHere.some(h=>String(h).toLowerCase()===String(handle).toLowerCase());
+}
+
+function paintPorts(){
+  if(!PORTS)return;
+  PORTNODES.forEach((node,handle)=>{
+    const s=(PORTS.ports||[]).find(p=>p.handle===handle);
+    if(!isBoundHere(handle)){
+      node.line.innerHTML=
+        `<span class="tag no">not set up on this machine</span>`+
+        `<div style="margin-top:.25rem">This account is shared from another computer. Its Reddit `+
+        `sign-in cannot travel — the session is locked to the machine it was made on — so it `+
+        `needs its own browser folder here, and one sign-in by hand.</div>`;
+      paintSetUpHere(node);
+      return;
+    }
+    const look=PORTLOOK[s?s.state:'unknown']||PORTLOOK.unknown;
+    node.line.innerHTML=
+      `Port <code>${esc(String((s&&s.port)||node.account.debugPort||'—'))}</code> `+
+      `<span class="tag ${look.tag}">${esc(look.word)}</span>`+
+      (s&&s.pid?` · pid ${esc(String(s.pid))}`:'');
+    /* The sentence is shown whenever it is not the boring case: "taken by something else" is
+       useless without naming what took it. */
+    if(s&&s.state!=='free'&&s.state!=='running'){
+      node.line.innerHTML+=`<div style="margin-top:.25rem;color:var(--ember)">${esc(s.detail)}</div>`;
+    }
+    paintPortBar(node,s);
+  });
+}
+
+/** The one button an account shared from another machine can offer: give it a browser here. */
+function paintSetUpHere(node){
+  const {bar,account}=node;
+  if(bar.dataset.editing==='1')return;
+  bar.textContent='';
+  const b=el('button','mini');
+  b.textContent='Set up on this machine';
+  b.setAttribute('aria-label',`Set up ${account.handle} on this machine`);
+  b.style.cssText='padding:.35rem .7rem;font-size:.75rem';
+  b.onclick=async()=>{
+    /* Allocates a folder and bind-tests its way to a free port before writing the binding. */
+    const held=busy(`Setting ${account.handle} up on this machine…`);
+    try{
+      const r=await fetch('/api/account/setup-here',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({handle:account.handle})}).then(x=>x.json());
+      if(!r.ok){
+        node.line.innerHTML+=`<div style="margin-top:.25rem;color:var(--ember)">${esc(r.error||'could not set it up here')}</div>`;
+        held.fail(r.error);
+        return;
+      }
+      held.update('Saving…');
+      await load();await loadPorts();go('accounts');
+      held.done(`Ready on port ${r.port}`);
+    }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+  };
+  bar.append(b);
+}
+
+function paintPortBar(node,s){
+  const {bar,account}=node;
+  if(bar.dataset.editing==='1')return;          // a port is being typed — leave the form alone
+  bar.textContent='';
+  const mini=(text,label,onClick,danger)=>{
+    const b=el('button','mini');
+    b.textContent=text;
+    b.setAttribute('aria-label',label);
+    b.style.cssText='padding:.35rem .7rem;font-size:.75rem'+(danger?';border-color:var(--ember);color:var(--ember)':'');
+    b.onclick=onClick;
+    return b;
+  };
+  const say=(m,bad)=>{node.line.innerHTML+=`<div style="margin-top:.25rem;color:var(--${bad?'ember':'ink-3'})">${esc(m)}</div>`};
+
+  const post=(path,body)=>fetch(path,{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify(body)}).then(r=>r.json());
+
+  /* Both of these spawn or terminate a real process and then re-read who owns the port —
+     several seconds each, with nothing on screen to say so before this. */
+  if(!s||s.state==='free'){
+    bar.append(mini('Start browser',`Start ${account.handle}`,async()=>{
+      const held=busy(`Opening Chrome for ${account.handle}…`);
+      try{
+        const r=await post('/api/account/open',{handle:account.handle});
+        if(!r.ok){say(r.error||'could not start it',true);held.fail(r.error);return}
+        held.update('Checking the port…');
+        await loadPorts();
+        held.done('Chrome is opening');
+      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+    }));
+  }
+  if(s&&s.state==='running'){
+    bar.append(mini('Stop browser',`Stop ${account.handle}`,async()=>{
+      const held=busy(`Stopping ${account.handle}'s browser…`);
+      try{
+        const r=await post('/api/account/stop',{handle:account.handle});
+        if(!r.ok){say(r.error||'could not stop it',true);held.fail(r.error);return}
+        held.update('Waiting for the port to go quiet…');
+        await loadPorts();
+        held.done('Browser stopped');
+      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+    },true));
+  }
+
+  bar.append(mini('Change port',`Change port for ${account.handle}`,()=>{
+    bar.dataset.editing='1';
+    bar.textContent='';
+    const input=el('input');
+    input.value=String((PORTS&&PORTS.suggestion)||'');
+    input.setAttribute('aria-label',`New port for ${account.handle}`);
+    input.style.cssText='width:7rem;font:inherit;font-size:.78rem;padding:.35rem .5rem;border-radius:8px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+    const done=async(body)=>{
+      /* Every candidate port is BIND-tested, and "pick a free one" walks the range until one
+         binds — real work, not a lookup. */
+      const held=busy(body.auto?'Finding a free port…':`Checking port ${body.port}…`);
+      try{
+        const r=await post('/api/account/port',body);
+        if(!r.ok){
+          /* A refusal that offers a working number is the difference between a form you can
+             finish and one that just says no. */
+          say(r.error+(r.suggestion?` Try ${r.suggestion}.`:''),true);
+          if(r.suggestion)input.value=String(r.suggestion);
+          held.fail(r.error);
+          return;
+        }
+        bar.dataset.editing='0';
+        held.update('Saving…');
+        await load();await loadPorts();go('accounts');
+        held.done(`Now on port ${r.port}`);
+      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+    };
+    bar.append(
+      input,
+      mini('Use this port',`Use this port for ${account.handle}`,()=>done({handle:account.handle,port:Number(input.value)})),
+      mini('Pick a free one',`Pick a free port for ${account.handle}`,()=>done({handle:account.handle,auto:true})),
+      mini('Cancel',`Cancel changing the port for ${account.handle}`,()=>{bar.dataset.editing='0';paintPorts()})
+    );
+    input.focus();
+  }));
+}
+
+/**
+ * The edit panel for one account.
+ *
+ * Descriptive fields only. The sign-in folder and the debug port decide WHICH Chrome the
+ * account drives, and repointing a signed-in account does not fail loudly — it attaches to
+ * whatever is on the new port, or nothing, and reads Reddit signed out while the card still
+ * looks configured. They are shown, and the panel says where to change them.
+ *
+ * There is deliberately no "which of MY Chrome profiles" picker here, and none in the wizard
+ * either. It was offered for a while and it drove nothing: redbot attaches to its own Chrome
+ * on `debugPort`, with `--user-data-dir` set to `profileDir`, and no code path has ever read
+ * the everyday-profile answer. A control that changes nothing reads as one that does, which
+ * is worse than its absence — it invites "so is my real login being used?", and the answer
+ * was always no.
+ */
+function accountEditor(a){
+  const box=el('div');
+  box.style.cssText='margin-top:.7rem;border-top:1px solid var(--edge-2);padding-top:.7rem';
+
+  const f=(label,value,ph)=>{
+    const w=el('div');w.style.marginBottom='.55rem';
+    w.append(el('div','tiny',esc(label)));
+    const i=el('input');
+    i.value=value==null?'':String(value);
+    if(ph)i.placeholder=ph;
+    /* Labelled with the handle so two open panels could never address one field, and so a
+       test names the account it is editing rather than guessing at order. */
+    i.setAttribute('aria-label',`${label} for ${a.handle}`);
+    i.style.cssText='width:100%;font:inherit;font-size:.84rem;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+    w.append(i);box.append(w);return i;
+  };
+
+  const eRole  =f('Role',a.role,'Support desk');
+  const eSpeaks=f('What they talk about',a.speaks,'Error messages, plugin conflicts');
+  const eSubs  =f('Subreddits',(a.subreddits||[]).join(', '),'WordPress, Wordpress_Help');
+  const eTz    =f('Timezone',a.timezone,'Asia/Manila');
+  const eQuiet =f('Quiet hours',a.quietHours?`${a.quietHours[0]}-${a.quietHours[1]}`:'','0-8');
+  const eCeil  =f('Daily ceiling',a.dailyCeiling,'1');
+  const eNote  =f('Note',a.note,'');
+
+  box.append(el('div','tiny',
+    'The sign-in folder is not editable here. Pointing a signed-in account at a different '+
+    'Chrome does not fail loudly — it reads Reddit signed out while still looking configured. '+
+    'Change it in <code>data/accounts.json</code>, then run <code>redbot accounts import</code>. '+
+    'The <b>port</b> has its own button on the card: it checks the new one is actually free '+
+    'first, which is the check that makes moving it safe.'));
+
+  const msg=el('div','tiny');msg.style.marginTop='.4rem';
+  const bar=el('div');bar.style.cssText='margin-top:.55rem;display:flex;gap:.5rem;flex-wrap:wrap';
+
+  const save=el('button','mini');
+  save.textContent='Save changes';
+  save.style.cssText='padding:.45rem .85rem;font-size:.78rem';
+  save.onclick=async()=>{
+    const body={
+      handle:a.handle,
+      role:eRole.value, speaks:eSpeaks.value, timezone:eTz.value, note:eNote.value,
+      subreddits:eSubs.value.split(',').map(s=>s.trim()).filter(Boolean)
+    };
+    /* Blank means "leave it alone", not "set it to nothing" — the server treats an absent key
+       as unchanged, so an empty box must not be sent as 0 or as an empty pair. */
+    const q=String(eQuiet.value).split('-').map(s=>s.trim()).filter(s=>s!=='');
+    if(q.length===2)body.quietHours=[Number(q[0]),Number(q[1])];
+    if(String(eCeil.value).trim()!=='')body.dailyCeiling=Number(eCeil.value);
+
+    const held=busy(`Saving ${a.handle}…`);
+    try{
+      const r=await fetch('/api/account/update',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify(body)}).then(x=>x.json());
+      if(!r.ok){msg.innerHTML=`<span style="color:var(--ember)">${esc(r.error||'could not save')}</span>`;held.fail(r.error);return}
+      EDITING=null;
+      held.update('Reloading…');
+      await load();
+      go('accounts');
+      held.done('Saved');
+    }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+  };
+
+  const cancel=el('button','mini');
+  cancel.textContent='Cancel';
+  cancel.style.cssText='padding:.45rem .85rem;font-size:.78rem';
+  cancel.onclick=()=>{EDITING=null;accounts()};
+
+  /**
+   * Removing the account.
+   *
+   * Two things this deliberately does NOT do. It does not delete the sign-in folder: that
+   * folder holds the only copy of the Reddit session — no password is stored anywhere, so
+   * nothing here could sign back in — and a removal you can undo by re-adding is worth more
+   * than a tidy data directory. And it does not ask before it knows: the first press finds
+   * out what the removal would cost (job records are deleted with the account by the database
+   * itself) and only then asks, so the warning is a real count rather than a scary maybe.
+   */
+  const danger=el('div');
+  danger.style.cssText='margin-top:.7rem;border-top:1px solid var(--edge-2);padding-top:.7rem';
+  const rmsg=el('div','tiny');rmsg.style.marginTop='.4rem';
+  const rbar=el('div');rbar.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center';
+
+  const removeReq=async(confirm)=>{
+    /* Counts what the delete would cascade before writing anything — two stores and a
+       dependency count, not an instant operation. */
+    const held=busy(`Removing ${a.handle}…`);
+    let r;
+    try{
+      r=await fetch('/api/account/remove',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify(confirm?{handle:a.handle,confirm:true}:{handle:a.handle})}).then(x=>x.json());
+    }catch(e){held.fail(String(e&&e.message||e));return}
+    /* Ended here rather than in a `finally`: the needs-confirm branch below is a QUESTION, not
+       a result, and leaving a spinner up while somebody reads it would be the same lie. */
+    held.done(r.ok?`${a.handle} removed`:undefined);
+    if(r.ok){
+      EDITING=null;
+      await load();
+      go('accounts');
+      return;
+    }
+    if(r.needsConfirm){
+      rbar.textContent='';
+      rmsg.innerHTML=`<span style="color:var(--ember)">${esc(r.error||'')}</span>`+
+        (a.profileDir?` The sign-in folder <code>${esc(a.profileDir)}</code> is kept either way.`:'');
+      const anyway=el('button','mini');
+      anyway.textContent='Remove anyway';
+      anyway.setAttribute('aria-label',`Remove ${a.handle} anyway`);
+      anyway.style.cssText='padding:.45rem .85rem;font-size:.78rem;border-color:var(--ember);color:var(--ember)';
+      anyway.onclick=()=>removeReq(true);
+      const keep=el('button','mini');
+      keep.textContent='Keep it';
+      keep.style.cssText='padding:.45rem .85rem;font-size:.78rem';
+      keep.onclick=()=>{EDITING=null;accounts()};
+      rbar.append(anyway,keep);
+      return;
+    }
+    rmsg.innerHTML=`<span style="color:var(--ember)">${esc(r.error||'could not remove')}</span>`;
+  };
+
+  const rm=el('button','mini');
+  rm.textContent='Remove account';
+  rm.setAttribute('aria-label',`Remove ${a.handle}`);
+  rm.style.cssText='padding:.45rem .85rem;font-size:.78rem;border-color:var(--ember);color:var(--ember)';
+  rm.onclick=()=>{
+    rbar.textContent='';
+    rmsg.innerHTML='This removes the record only. The sign-in folder '+
+      (a.profileDir?`<code>${esc(a.profileDir)}</code> `:'')+
+      'stays on disk, so the Reddit session is not lost and you can add the account back.';
+    const yes=el('button','mini');
+    yes.textContent=`Yes, remove ${a.handle}`;
+    yes.setAttribute('aria-label',`Confirm removing ${a.handle}`);
+    yes.style.cssText='padding:.45rem .85rem;font-size:.78rem;border-color:var(--ember);color:var(--ember)';
+    yes.onclick=()=>removeReq(false);
+    const no=el('button','mini');
+    no.textContent='Keep it';
+    no.style.cssText='padding:.45rem .85rem;font-size:.78rem';
+    no.onclick=()=>{rbar.textContent='';rmsg.textContent='';rbar.append(rm)};
+    rbar.textContent='';rbar.append(yes,no);
+  };
+  rbar.append(rm);
+  danger.append(rbar,rmsg);
+
+  bar.append(save,cancel);
+  box.append(bar,msg,danger);
+  return box;
+}
+
 function accounts(){
   const r=$('#v-accounts'); r.textContent='';
+  /* The old nodes are about to be thrown away; a stale entry here would have paintPorts()
+     writing into a card that is no longer on the page. */
+  PORTNODES.clear();
   r.append(el('h2','sec','Accounts'));
   r.append(el('div','sub','who redbot would be posting as'));
-  renderBilling(r);
+
+  /* ---- the limits actually in force, as a rail beside the cards ---- */
+  const grid=el('div','grid2');
+  const cardCol=el('div');
+  const rail=el('div');
+
+  const limits=panel('Limits in force','per account, per day');
+  S.accounts.forEach(a=>{
+    const st=STAGE(a.karma);
+    const job=el('div','job'+(a.karma==null?'':st.n===1?' stop':' look'));
+    job.append(el('div','sp'));
+    const b=el('div','jb');
+    b.append(el('div','jmeta',
+      `<span class="tag ${a.karma==null?'stop':st.n===1?'stop':'look'}">${esc(a.karma==null?'never measured':st.label)}</span>`+
+      `<span class="sr">${esc(a.handle)}</span>`));
+    if(a.speaks)b.append(el('p','jt',esc(a.speaks)));
+    b.append(el('p','jw',
+      `${a.dailyCeiling!=null?esc(`Ceiling ${a.dailyCeiling} repl${a.dailyCeiling===1?'y':'ies'}`):'No daily limit set'} · `+
+      `quiet ${a.quietHours?esc(a.quietHours[0]+':00–'+a.quietHours[1]+':00'):'not set'} `+
+      `${esc(a.timezone||'')}`));
+    job.append(b);
+    job.append(el('div','jr',
+      `<span class="score"${a.karma==null?' style="color:var(--ink-3)"':''}>${a.karma==null?'—':esc(String(a.karma))}</span>`));
+    limits.append(job);
+  });
+  limits.append(el('div','prose',
+    '<b>A ceiling is not a target.</b> Reaching it is not progress, and neither number goes up '+
+    'because a day was quiet.'));
+  rail.append(limits);
+  renderBilling(rail);
+  grid.append(cardCol,rail);
+  r.append(grid);
+
   const g=el('div','cards');
   S.accounts.forEach(a=>{
     const c=el('div','card'+(a.stage==='warming'?' attn':''));
@@ -1229,7 +2562,14 @@ function accounts(){
         `${a.dailyCeiling!=null?esc(a.dailyCeiling+' reply a day at most'):'no daily limit set'} · `+
         `quiet ${a.quietHours?esc(a.quietHours[0]+':00–'+a.quietHours[1]+':00'):'not set'} ${esc(a.timezone||'')}`));
       c.append(el('div','tiny',
-        `Sign-in folder <code>${esc(a.profileDir||'—')}</code> ${a.profileExists?'<span class="tag ok">on disk</span>':'<span class="tag stop">missing</span>'} · port ${esc(a.debugPort||'—')}`));
+        `Sign-in folder <code>${esc(a.profileDir||'—')}</code> ${a.profileExists?'<span class="tag ok">on disk</span>':'<span class="tag stop">missing</span>'}`));
+      /* The port line and its buttons are repainted by paintPorts() on a timer, so they are
+         held by reference rather than rebuilt: re-rendering the whole screen every few seconds
+         would wipe whatever is half-typed in an open editor. */
+      const portLine=el('div','tiny');
+      const portBar=el('div');portBar.style.cssText='margin-top:.45rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center';
+      PORTNODES.set(a.handle,{line:portLine,bar:portBar,account:a});
+      c.append(portLine,portBar);
     } else {
       c.append(el('div','tiny','<strong>Not in the accounts file.</strong> This handle appears in the run records but nothing describes it — no subreddits, no daily limit, no quiet hours.'));
     }
@@ -1237,12 +2577,29 @@ function accounts(){
       ? `Karma checked ${esc(ago(a.karmaMeasuredAt))}, while signed in.`
       : 'Karma has never been checked for this account.'));
     if(a.karma!=null&&a.karma<10)c.append(el('div','tiny','<strong>Under 10 karma.</strong> Exactly the kind of account Reddit filters are built to catch — early comments can be removed or held back quietly, still visible to you while signed in and invisible to everyone else.'));
+    /* Only a configured account can be edited: the other kind is a handle seen in the run
+       records with no record behind it, and there is nothing there to change. */
+    if(a.configured){
+      const bar=el('div');bar.style.cssText='margin-top:.6rem;display:flex;gap:.5rem;flex-wrap:wrap';
+      const ed=el('button','mini');
+      ed.textContent=EDITING===a.handle?'Close':'Edit';
+      ed.setAttribute('aria-label',`Edit ${a.handle}`);
+      ed.style.cssText='padding:.4rem .8rem;font-size:.78rem';
+      ed.onclick=()=>{EDITING=EDITING===a.handle?null:a.handle;accounts()};
+      bar.append(ed);
+      c.append(bar);
+      if(EDITING===a.handle)c.append(accountEditor(a));
+    }
     g.append(c);
   });
   if(!S.accounts.length)g.append(el('div','empty','<b>No accounts yet</b><span>Add one below.</span>'));
-  r.append(g);
+  cardCol.append(g);
 
-  addAccount(r);
+  /* Paint from what is already known so the line is never blank, then ask for a fresh answer. */
+  paintPorts();
+  loadPorts();
+
+  addAccount(cardCol);
 
   r.append(el('div','note warn',`<b>${S.profiles.length} sign-in folder${S.profiles.length===1?'':'s'} on disk, ${S.accounts.filter(a=>a.karma!=null).length} account${S.accounts.filter(a=>a.karma!=null).length===1?'':'s'} actually measured.</b> A folder on this machine is not proof of an account, and a name in a config file is an intention rather than a fact. Both are shown separately on purpose.`));
   if(S.accountRules&&S.accountRules.length){
@@ -1282,6 +2639,14 @@ function addAccount(root){
   const fSpeaks=field('What do they talk about?','Error messages, plugin conflicts, getting unstuck');
   const fSubs  =field('Which subreddits? (comma separated)','WordPress, Wordpress_Help','WordPress');
 
+  /**
+   * No "which of YOUR Chrome profiles" picker.
+   *
+   * There was one, and it recorded an answer nothing ever read. Step 2 below opens a Chrome
+   * that redbot launches itself, with `--user-data-dir` pointing at this account's own folder
+   * under data/ — the Reddit session lives there and only there. Offering a list of your real
+   * profiles alongside that reads as "sign in with this one", which was never true.
+   */
   const steps=el('div');b.append(steps);
   const status=el('div','tiny');status.style.marginTop='.5rem';b.append(status);
   let made=null;
@@ -1307,29 +2672,50 @@ function addAccount(root){
     mk('Set the account up','Picks a free port and its own browser folder, and writes it down. Nothing is asked of you but the name.',
       button(made?'Set up ✓':'Set it up',async()=>{
         status.textContent='Setting up…';
-        const r=await post('/api/account/create',{
-          handle:fHandle.value, role:fRole.value, speaks:fSpeaks.value,
-          subreddits:fSubs.value.split(',').map(s=>s.trim()).filter(Boolean)
-        });
-        if(!r.ok){status.innerHTML=`<span style="color:var(--ember)">${esc(r.error)}</span>`;return}
-        made=r.account;status.textContent=`Ready. Its browser folder is ${r.account.profileDir}, on port ${r.account.debugPort}.`;
-        toast('Account set up');draw();
+        /* Walks the port range bind-testing each one, then writes two stores. */
+        const held=busy('Finding a free port and folder…');
+        try{
+          const r=await post('/api/account/create',{
+            handle:fHandle.value, role:fRole.value, speaks:fSpeaks.value,
+            subreddits:fSubs.value.split(',').map(s=>s.trim()).filter(Boolean)
+          });
+          if(!r.ok){status.innerHTML=`<span style="color:var(--ember)">${esc(r.error)}</span>`;held.fail(r.error);return}
+          made=r.account;status.textContent=`Ready. Its browser folder is ${r.account.profileDir}, on port ${r.account.debugPort}.`;
+          draw();
+          held.done('Account set up');
+        }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
       },!!made),!!made);
 
     mk('Open their browser and sign in','A Chrome window opens on the Reddit sign-in page. Type the password there — redbot never sees it and stores no password anywhere. Leave the window open.',
       button('Open the browser',async()=>{
         status.textContent='Opening Chrome…';
-        const r=await post('/api/account/open',{handle:made.handle});
-        status.innerHTML=r.ok?'Chrome is open. Sign in, then come back and press the last button.'
-                            :`<span style="color:var(--ember)">${esc(r.error)}</span>`;
+        const held=busy('Opening Chrome…');
+        try{
+          const r=await post('/api/account/open',{handle:made.handle});
+          status.innerHTML=r.ok?'Chrome is open. Sign in, then come back and press the last button.'
+                              :`<span style="color:var(--ember)">${esc(r.error)}</span>`;
+          if(r.ok)held.done('Chrome is open'); else held.fail(r.error);
+        }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
       },!made),false);
 
     mk('Check it worked','Reads the karma off their profile and writes it down, so Today has a real number to plan against.',
       button('Check the account',async()=>{
         status.textContent='Checking…';
-        const r=await post('/api/run',{key:'check-karma',cdp:`http://127.0.0.1:${made.debugPort}`,operator:'jerome'});
-        status.innerHTML=r.ok?'Done. Reloading…':`<span style="color:var(--ember)">${esc(r.error||'That did not work')}</span>`;
-        if(r.ok){await load();toast('Account added');}
+        /* Sends `account`, not `cdp`. The server deliberately ignores a request-supplied CDP
+           endpoint (H5: a caller could otherwise point redbot at a debugger they control and
+           harvest every scraped thread), so this button used to hand over a field that was
+           discarded and no account at all — the child then fell back to the default debug port
+           and reported "not signed in" no matter which account you had just created. The
+           operator was hardcoded to 'jerome' here too; runAction bills the operator the console
+           has selected, so naming one in the body never did anything. */
+        /* Drives the real browser to read the profile page — the slowest step in the wizard. */
+        const held=busy('Reading their karma…');
+        try{
+          const r=await post('/api/run',{key:'check-karma',account:made.handle});
+          status.innerHTML=r.ok?'Done. Reloading…':`<span style="color:var(--ember)">${esc(r.error||'That did not work')}</span>`;
+          if(r.ok){held.update('Reloading…');await load();held.done('Account added');}
+          else held.fail(r.error||'That did not work');
+        }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
       },!made),false);
   }
   draw();
@@ -1358,64 +2744,105 @@ function today(){
   r.append(el('h2','sec','Growing the accounts'));
   r.append(el('div','sub','what to do today, per account'));
 
-  /* ---- per-account state ---- */
-  const g=el('div','wcards');
+  /* ================= the three zones ================= */
+  const grid=el('div','grid3');
+
+  /* ---- left: where each account stands ---- */
+  const rail=panel('Accounts',S.accounts.length);
   S.accounts.forEach(a=>{
     const st=STAGE(a.karma);
-    const c=el('div','wcard'+(st&&st.n<3?' attn':''));
-    c.append(el('div','whead',`<b>${esc(a.handle)}</b>`+
-      (st?`<span class="tag ${st.n===3?'ok':'no'}">${esc(st.label)}</span><span class="st">${esc(st.weeks)}</span>`
-         :'<span class="tag stop">never measured</span>')));
-
+    const row=el('div','acct');
+    /* An unmeasured account is its own state — never dressed up as stage 1 with a zero. */
+    const tone=a.karma==null?'q':st.n===1?'hold':st.n===2?'warm':'ready';
+    row.append(el('div','h',
+      `<span class="nm">${esc(a.handle)}</span>`+
+      `<span class="st ${tone}">${esc(a.karma==null?'never measured':st.label)}</span>`));
     if(st&&st.target){
-      const pct=Math.max(0,Math.min(100,Math.round((a.karma/st.target)*100)));
-      c.append(el('div','bar-t',`<span><b>${a.karma}</b> karma</span><span>${st.target} needed</span>`));
-      const tr=el('div','track');tr.append(el('i',pct>=100?'done':pct>=50?'mid':''));
-      tr.firstChild.style.width=pct+'%';c.append(tr);
-    } else if(!st){
-      c.append(el('div','tiny','Karma has never been checked for this account, so there is nothing to plan against yet. Check it first.'));
+      const pct=Math.round((a.karma/st.target)*100);
+      row.append(meter(pct,pct>=100?'jade':pct>=50?'amber':'ember'));
+      row.append(kvRow(st.weeks,`${a.karma} / ${st.target} karma`));
+    } else if(st){
+      row.append(meter(100,'jade'));
+      row.append(kvRow(st.weeks,`${a.karma} karma`));
     } else {
-      c.append(el('div','bar-t',`<span><b>${a.karma}</b> karma</span><span>past the warm-up</span>`));
+      row.append(kvRow('karma','<span style="color:var(--ink-3)">never measured</span>'));
     }
+    row.append(kvRow('a day',esc(st?st.daily+' comments':'—')));
+    row.append(kvRow('quiet',esc(a.quietHours?`${a.quietHours[0]}:00–${a.quietHours[1]}:00`:'not set')));
+    rail.append(row);
+  });
+  if(!S.accounts.length)rail.append(el('div','prose',
+    '<b>No account measured yet.</b> Check an account’s karma first — without that there is nothing to plan against.'));
+  grid.append(rail);
 
+  /* ---- centre: what to actually do, per account ---- */
+  const mid=el('div');
+  const work=panel('What to do today','per account');
+  S.accounts.forEach(a=>{
+    const st=STAGE(a.karma);
     const days=a.karmaMeasuredAt?Math.floor((Date.now()-new Date(a.karmaMeasuredAt))/86400000):null;
-    const t=el('div','wtoday');
-    t.append(el('h4',null,'today'));
-    const todo=(txt,note)=>t.append(el('div','todo',`<span class="box">[ ]</span><span>${txt}${note?` <em>— ${esc(note)}</em>`:''}</span>`));
-    if(st){
+    const job=el('div','job'+(st?(st.n===1?' look':' ok'):' stop'));
+    job.append(el('div','sp'));
+    const b=el('div','jb');
+    b.append(el('div','jmeta',
+      `<span class="tag ${st?(st.n===3?'ok':'no'):'stop'}">${esc(st?st.label:'never measured')}</span>`+
+      `<span class="sr">${esc(a.handle)}${st?' · '+esc(st.weeks):''}</span>`));
+    if(!st){
+      b.append(el('p','jw','Karma has never been checked for this account, so there is nothing to plan against yet. Check it first.'));
+    } else {
+      const todo=(txt,note)=>b.append(el('div','todo',
+        `<span class="box">[ ]</span><span>${txt}${note?` <em>— ${esc(note)}</em>`:''}</span>`));
       todo(`Write <b>${st.daily} comments</b>`, st.n===1?'threads under 2 hours old':'questions with few answers');
       if(st.n===1)todo('Comment somewhere <b>outside WordPress</b>','an account that only does support reads as a marketing asset');
       todo('Check your first comments <b>in a signed-out window</b>','the only way to see if they were quietly removed');
+      if(days==null||days>=7)todo('<b>Re-check karma</b>',days==null?'never done':`last checked ${days} days ago`);
     }
-    if(days==null||days>=7)todo('<b>Re-check karma</b>',days==null?'never done':`last checked ${days} days ago`);
     /* the button that replaces "go and type probe-karma somewhere" */
-    const kb=el('div');kb.style.marginTop='.8rem';
+    const kb=el('div');kb.style.marginTop='.7rem';
     kb.append(actionButton('Check karma now',doAction(async say=>{
       say('Reading their profile…');
       const rr=await runNow({key:'check-karma',account:a.handle});
       if(!rr.ok)throw new Error(rr.error||'Could not read the profile — is their browser open?');
       return 'Karma updated';
     })));
-    t.append(kb);
-    c.append(t);
-    g.append(c);
+    b.append(kb);
+    job.append(b);
+    job.append(el('div','jr',`<span class="score"${st?'':' style="color:var(--ink-3)"'}>${st?esc(String(a.karma)):'—'}</span>`));
+    work.append(job);
   });
-  if(!S.accounts.length)g.append(el('div','empty','<b>No account measured yet</b><span>Check an account’s karma first — without that there is nothing to plan against.</span>'));
-  r.append(g);
+  if(!S.accounts.length)work.append(el('div','prose',
+    '<b>Nothing to plan.</b> Add an account on the Accounts screen, then check its karma.'));
+  mid.append(work);
+  grid.append(mid);
+
+  /* ---- right: why this takes six weeks, and what redbot cannot do about it ---- */
+  const why=panel('Why six weeks','policy');
+  why.append(el('p','quote','A new account’s reply is removed before anyone reads it.'));
+  why.append(el('div','prose',
+    'Karma and account age are the only two things that change that outcome, and both take '+
+    'real weeks of <b>ordinary comments written by a person</b>. No part of this system '+
+    'shortens it. The counters exist so nobody tries.'));
+  why.append(barRow('warm-up target','6 weeks'));
+  why.append(barRow('hand-written a day','2–4'));
+  why.append(barRow('replies sent so far',String(S.pulse.published),S.pulse.published?null:'ember'));
+  why.append(barRow('taken down',String(S.pulse.removals)));
+  grid.append(why);
+  r.append(grid);
 
   /* ---- the unattended loop ---- */
   const loop=el('div','collect');
   loop.append(el('div','collect-h','<h3>Run it on its own</h3><span class="hint">never publishes</span>'));
-  const lb=el('div','collect-b');
+  /* `loop-b` marks the one .collect-b that is prose + a control row, so the wide-screen
+     two-column rule below can find it. The other two hold full-width source rows and a form,
+     which both want the whole measure. */
+  const lb=el('div','collect-b loop-b');
   const st=(PULSE_LAST&&PULSE_LAST.auto)||{running:false};
   lb.append(el('div','tiny','Collects threads, works out which are worth answering, writes a reply and fact-checks it — on a loop, without you. It stops there. Approving and sending stays yours, and it will not act during an account’s quiet hours or past its daily limit.'));
 
   const ctl=el('div');ctl.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.8rem';
-  const who=el('select');
-  who.style.cssText='font:inherit;font-size:.8rem;padding:.45rem .6rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+  const who=el('select','sel');
   S.accounts.forEach(a=>{const o=el('option',null,a.handle);o.value=a.handle;who.append(o)});
-  const mins=el('select');
-  mins.style.cssText=who.style.cssText;
+  const mins=el('select','sel');
   [['30','every 30 minutes'],['60','every hour'],['180','every 3 hours'],['360','every 6 hours']].forEach(([v,l])=>{
     const o=el('option',null,l);o.value=v;if(v==='60')o.selected=true;mins.append(o)});
 
@@ -1424,8 +2851,12 @@ function today(){
     stopBtn.textContent='Stop the loop';
     stopBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;border-color:var(--ember);color:var(--ember)';
     stopBtn.onclick=async()=>{
-      const r=await fetch('/api/auto/stop',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(x=>x.json());
-      toast(r.ok?'Stopped':(r.error||'Could not stop'));await pulseCheck();today();
+      const held=busy('Stopping the loop…');
+      try{
+        const r=await fetch('/api/auto/stop',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(x=>x.json());
+        await pulseCheck();today();
+        if(r.ok)held.done('Stopped'); else held.fail(r.error||'Could not stop');
+      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
     };
     ctl.append(el('span','tag ok',`running as ${esc(st.account||'')} · every ${esc(String(st.everyMinutes||''))} min`),stopBtn);
   } else {
@@ -1433,9 +2864,14 @@ function today(){
     startBtn.textContent='Start the loop';
     startBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;border-color:var(--jade);color:var(--jade)';
     startBtn.onclick=async()=>{
-      const r=await fetch('/api/auto/start',{method:'POST',headers:{'content-type':'application/json'},
-        body:JSON.stringify({account:who.value,everyMinutes:Number(mins.value)})}).then(x=>x.json());
-      toast(r.ok?'Started':(r.error||'Could not start'));await pulseCheck();today();
+      /* Spawns the long-lived child that drives a browser for days. */
+      const held=busy('Starting the loop…');
+      try{
+        const r=await fetch('/api/auto/start',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({account:who.value,everyMinutes:Number(mins.value)})}).then(x=>x.json());
+        await pulseCheck();today();
+        if(r.ok)held.done('Started'); else held.fail(r.error||'Could not start');
+      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
     };
     ctl.append(who,mins,startBtn);
   }
@@ -1446,7 +2882,7 @@ function today(){
     st.log.slice(-12).forEach(l=>lg.append(el('div','runline',`<span class="t"></span><span>${esc(l)}</span>`)));
     lb.append(lg);
   }
-  loop.append(lb);r.append(loop);
+  loop.append(lb);
 
   /* ---- the command, since redbot cannot do this for you ---- */
   const cmdBox=el('div','card');
@@ -1458,7 +2894,11 @@ function today(){
   cp.onclick=()=>navigator.clipboard.writeText(cmdText).then(()=>toast('Copied'),()=>toast('Could not copy'));
   cmd.append(cp);cmdBox.append(cmd);
   cmdBox.append(el('div','tiny','Reads the number off the profile page in your own signed-in browser and writes it down. Do it weekly — a measurement that never gets recorded is not evidence.'));
-  r.append(cmdBox);
+  /* Paired rather than stacked: two short panels, each of which alone left most of a
+     full-width band empty. See `.pair`. */
+  const pair=el('div','pair');
+  pair.append(loop,cmdBox);
+  r.append(pair);
 
   /* ---- the routine, for somebody who has never used Reddit ---- */
   const h=el('h2','sec');h.textContent='How to actually do it';h.style.marginTop='2rem';r.append(h);
@@ -1497,31 +2937,414 @@ function today(){
 }
 
 /* ---------------- results ---------------- */
+/**
+ * The four moments a published comment is read back at, from src/health.ts. Named here so the
+ * screen can say which have run and which have NOT — a checkpoint nobody reached is a fact
+ * worth showing, and it is not the same as a reading of zero.
+ */
+const CHECKPOINTS=[
+  ['immediate','signed in / out'],
+  ['1h','still visible'],
+  ['24h','votes · replies'],
+  ['7d','still standing']
+];
+
 function outcomes(){
   const o=S.outcomes, r=$('#v-outcomes'); r.textContent='';
+  seedPage('observations',o.observationsTotal,o.observationsOffset,o.observationsLimit);
   r.append(el('h2','sec','What happened after sending'));
   r.append(el('div','sub','the only question that matters: did the reply help anyone'));
+
+  const grid=el('div','grid3');
+
+  /* ---- left: the checkpoints, and whether each has been reached ----
+   * Counted by the database over EVERY observation, not derived from the page below. A
+   * checkpoint whose readings are all older than one page would otherwise read "not run",
+   * which is the opposite of what the record says. */
+  const tally=Array.isArray(o.checkpoints)?o.checkpoints:[];
+  const takenTotal=tally.reduce((n,c)=>n+(c.taken||0),0);
+  const cp=panel('Checkpoints',takenTotal?`${takenTotal} taken`:'none due');
+  CHECKPOINTS.forEach(([key,what])=>{
+    const mine=tally.find(c=>c.checkpoint===key)||{taken:0,latestTs:null};
+    const row=el('div','acct');
+    row.append(el('div','h',
+      `<span class="nm">${esc(key==='immediate'?'immediate':key)}</span>`+
+      `<span class="st ${mine.taken?'ready':'q'}">${mine.taken?'read':'not run'}</span>`));
+    row.append(kvRow(what,mine.latestTs?esc(ago(mine.latestTs)):'—'));
+    cp.append(row);
+  });
+  grid.append(cp);
+
+  /* ---- centre: published replies, or the honest absence of them ---- */
+  const pub=panel('Published replies',String(o.published));
   if(o.published===0){
-    r.append(el('div','empty','<b>Nothing has been sent yet.</b><span>Everything this screen exists to show — karma on a comment, replies to it, whether a moderator took it down — only exists after something is sent. Nothing has been.</span>'));
+    pub.append(el('div','prose',
+      '<b>No reply has been published.</b> Everything this screen exists to show — votes on a '+
+      'comment, replies to it, whether a moderator took it down — only exists after something '+
+      'is sent. Nothing has been.'));
+    pub.append(el('div','prose',
+      'This screen fills in once one has, and not before. It will never show a projection, a '+
+      'score, or an estimate in the meantime. <b>An empty result is a fact. A predicted one '+
+      'is not</b>, and the difference is the whole reason this screen exists.'));
   }
-  const h=el('h2','sec');h.textContent='What has been measured';h.style.marginTop='2rem';r.append(h);
-  const w=el('div','wrap'), t=el('table');
+  const w=el('div','wrap');
+  w.style.cssText='border:0;border-radius:0;box-shadow:none;background:none;-webkit-backdrop-filter:none;backdrop-filter:none';
+  const t=el('table');
   t.innerHTML='<thead><tr><th>When</th><th>Account</th><th>What</th><th class="n">Value</th><th>How</th></tr></thead>';
   const b=el('tbody');
   o.observations.forEach(x=>{
-    b.innerHTML+=`<tr><td>${esc(ago(x.ts))}</td><td>${esc(x.account||'—')}</td><td><span class="tag">${esc(x.kind)}</span></td><td class="n">${esc(x.value)}</td><td>${esc(x.note||'')}</td></tr>`;
+    b.innerHTML+=`<tr><td>${esc(ago(x.ts))}</td><td>${esc(x.account||'—')}</td>`+
+      `<td><span class="tag">${esc(x.kind)}</span>${x.checkpoint?` <span class="tag">${esc(x.checkpoint)}</span>`:''}</td>`+
+      `<td class="n">${esc(x.value)}</td><td>${esc(x.note||'')}</td></tr>`;
   });
   if(!o.observations.length)b.innerHTML='<tr><td colspan="5" class="cm">nothing measured yet</td></tr>';
-  t.append(b);w.append(t);r.append(w);
+  t.append(b);w.append(t);
+  pub.append(el('div','ph','<h2>What has been measured</h2>'));
+  pub.append(w);
+  pub.append(pager('observations',async()=>{
+    const rows=await fetchPage('observations');
+    if(rows){ o.observations=rows; outcomes(); }
+  }));
+  grid.append(pub);
+
+  /* ---- right: what this console will and will not record ---- */
+  const rec=panel('What gets recorded','observed, never inferred');
+  rec.append(evRow('Visible, signed out','only a third party proves anyone else can see it'));
+  rec.append(evRow('Marked removed or deleted','observation · never a claim about why'));
+  rec.append(evRow('Vote count and child replies','a reading at a moment, not a trend'));
+  rec.append(evRow('Account karma','read before and after'));
+  rec.append(evRow('Would you still put your name on it?','asked of a person at 24 h','mid'));
+  rec.append(barRow('replies decided on',String(o.reviews)));
+  rec.append(barRow('looked at again later',String(o.regret)));
+  grid.append(rec);
+  r.append(grid);
+
   r.append(el('div','note warn',`<b>${o.reviews} replies decided on · ${o.regret} looked at again later.</b> How good the writing is stays unknown until replies are approved or turned down at the prompt — that is the only place a person's actual opinion gets written down, and it has never been used.`));
 }
 
 /* ---------------- routing ---------------- */
-const R={today,accounts,review,discovery,outcomes};
+/* ---------------- the log ----------------
+ * Shows the run the server is holding — the one in flight, or the last one to finish. It
+ * follows a live run without being told to, so opening this screen mid-collect shows the
+ * output arriving rather than a blank panel.
+ *
+ * The server owns the buffer, so this screen reconstructs itself from /api/run/log on every
+ * visit. That is what makes it survive a reload: the page has no memory of the run, and does
+ * not need one. */
+let LOGVIEW = { timer: null, shown: 0, runId: null, file: null };
+
+function logs(){
+  const root = $('#v-logs');
+  root.textContent = '';
+  const card = el('div','panel');
+  const head = el('div','ph');
+  head.innerHTML = '<h3 id="logCmd">No command has run yet</h3><span class="n" id="logMeta"></span>';
+  const body = el('div');
+  body.style.padding = '.9rem 1rem 1.1rem';
+  const pre = el('pre','runout');
+  pre.id = 'logStream';
+  pre.style.maxHeight = '62vh';
+  const note = el('div','note');
+  note.id = 'logNote';
+  note.textContent = 'Press an action anywhere in redbot and its output appears here as it happens.';
+  /* Past runs live on disk; this picker is how you reach one you did not just start. */
+  const picker = el('div');
+  picker.style.cssText = 'display:flex;gap:.5rem;align-items:center;margin-bottom:.6rem;flex-wrap:wrap';
+  const sel = document.createElement('select');
+  sel.id = 'logPick';
+  sel.className = 'sel';
+  /* The only thing left inline: a width ceiling for a run label, which is this picker's alone.
+     Padding and colour now come from `.sel` — set here they would beat it. */
+  sel.style.maxWidth = '60ch';
+  const cap = el('span','hint');
+  cap.id = 'logCap';
+  picker.append(sel, cap);
+  body.append(picker, note, pre);
+  card.append(head, body);
+  root.append(card);
+
+  LOGVIEW.shown = 0; LOGVIEW.runId = null; pre.textContent = '';
+
+  logHistory();
+  sel.onchange = () => {
+    /* Switching runs resets the view: two runs' output interleaved is worse than either. */
+    LOGVIEW.file = sel.value || null;
+    LOGVIEW.shown = 0; LOGVIEW.runId = null;
+    $('#logStream').textContent = '';
+    delete $('#logStream').dataset.warned;
+    logPump();
+  };
+  logPump();
+  clearInterval(LOGVIEW.timer);
+  LOGVIEW.timer = setInterval(() => { if (CUR === 'logs') logPump(); }, 700);
+}
+
+/** Fill the picker. "Live / most recent" stays first so the default is the useful one. */
+async function logHistory(){
+  const sel = $('#logPick'); if (!sel) return;
+  let h;
+  try { h = await fetch('/api/run/history?limit=500').then(x => x.json()); }
+  catch { return; }
+  const keep = sel.value;
+  sel.textContent = '';
+  const live = document.createElement('option');
+  live.value = ''; live.textContent = 'Live / most recent run';
+  sel.append(live);
+  for (const r of h.runs || []) {
+    const o = document.createElement('option');
+    o.value = r.file;
+    const when = r.startedAt ? new Date(r.startedAt).toLocaleString() : '(unknown time)';
+    /* A run with no footer was killed mid-flight. Say so in the list rather than letting a
+       truncated log look like a complete one. */
+    const how = r.done ? ('exit ' + r.code) : 'interrupted';
+    o.textContent = when + ' · ' + (r.command || '(unknown)') + ' · ' + how +
+                    (r.lines != null ? ' · ' + r.lines + ' lines' : '');
+    sel.append(o);
+  }
+  if (keep) sel.value = keep;
+  const cap = $('#logCap');
+  if (cap) cap.textContent = (h.runs ? h.runs.length : 0) + ' kept (newest ' + (h.keep || 500) + ')';
+}
+
+
+async function logPump(){
+  const pre = $('#logStream'); if (!pre) return;
+  let r;
+  const q = '/api/run/log?since=' + LOGVIEW.shown + (LOGVIEW.file ? '&file=' + encodeURIComponent(LOGVIEW.file) : '');
+  try { r = await fetch(q).then(x => x.json()); }
+  catch { return; }                      /* best effort — the run matters, the poll does not */
+
+  /* A different runId means another command owns the log now. Start fresh rather than
+     appending one run's output onto another's. */
+  if (LOGVIEW.runId !== null && r.runId !== LOGVIEW.runId) { LOGVIEW.shown = 0; pre.textContent = ''; }
+  const newRun = LOGVIEW.runId !== null && r.runId !== LOGVIEW.runId;
+  LOGVIEW.runId = r.runId;
+
+  $('#logCmd').textContent = r.command || 'No command has run yet';
+  $('#logMeta').textContent = r.command
+    ? (r.running ? 'running…' : 'finished' + (typeof r.code === 'number' ? ' · exit ' + r.code : ''))
+    : '';
+  const badge = $('#nLog'); if (badge) badge.textContent = r.running ? '●' : (r.total || '–');
+  if (newRun && !LOGVIEW.file) logHistory();   /* a finished run just joined the list */
+  const note = $('#logNote');
+  if (note) note.hidden = !!r.command;
+
+  if (r.dropped && !pre.dataset.warned) {
+    pre.dataset.warned = '1';
+    const w = document.createElement('div');
+    w.className = 'bad';
+    w.textContent = '… ' + r.dropped + ' earlier line(s) dropped (the log is capped)';
+    pre.prepend(w);
+  }
+  if (r.lines && r.lines.length) {
+    /* Only auto-scroll when the reader is already at the bottom — yanking the view away from
+       someone reading back through a long run is worse than not following. */
+    const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+    for (const l of r.lines) {
+      const n = document.createElement('div');
+      n.textContent = (String(Math.round(l.at/1000)) + 's').padStart(5,' ') + '  ' + l.text;
+      pre.append(n);
+    }
+    LOGVIEW.shown += r.lines.length;
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+  }
+}
+
+/* ---------------- setup ----------------
+ * What an install needs before it can run at all: a database, a vault, an operator to bill the
+ * model calls to, and a way to reach the model. Every other screen assumes these; this is the
+ * one that says which of them is missing, in the order you have to fix them.
+ *
+ * Reads /api/setup rather than the shared state poll: it is the only screen that needs any of
+ * it, and a credential summary has no business in the payload every other screen receives.
+ */
+let SETUP=null;
+
+/* The machine's real Chrome profiles were fetched here, for the wizard's profile picker. Both
+   are gone: nothing redbot runs has ever read that answer. The server still ANSWERS
+   /api/chrome/profiles — it is a useful read-only look at what Chrome knows, and what proves
+   the everyday profile cannot be driven — but no screen asks it any more. */
+
+async function loadSetup(){
+  const r=await fetch('/api/setup').then(x=>x.json()).catch(e=>({error:String(e&&e.message||e)}));
+  /**
+   * A payload missing these is not a setup answer — an older server, or a stub. Recorded as an
+   * error rather than destructured: `load()` runs this on every page load, so reading
+   * `.database.ok` off an unexpected shape would take the WHOLE console down, not just this
+   * screen. A screen that cannot describe itself must fail alone.
+   */
+  SETUP=(r&&r.database&&r.vault&&Array.isArray(r.operators))
+    ? r
+    : { error:(r&&r.error)||'this console did not answer /api/setup' };
+}
+
+/** One status line. `state` is 'ok' | 'warn' | 'bad' — the same three the rest of the UI uses. */
+function setupRow(state,title,detail){
+  const row=el('div','src-row');
+  const tag=el('span','tag '+(state==='ok'?'ok':'no'));
+  tag.textContent=state==='ok'?'ready':(state==='warn'?'check':'not set');
+  row.append(tag);
+  const mid=el('div');
+  mid.append(el('div','src-t',esc(title)));
+  if(detail)mid.append(el('div','src-w',esc(detail)));
+  row.append(mid);
+  return row;
+}
+
+function setup(){
+  const root=$('#v-setup'); root.textContent='';
+  if(!SETUP){root.append(el('div','note','Reading setup…'));loadSetup().then(()=>go('setup'));return}
+  if(SETUP.error){root.append(el('div','note warn','<b>Could not read setup.</b> '+esc(SETUP.error)));return}
+  const s=SETUP;
+
+  const again=async()=>{await loadSetup();go('setup')};
+
+  /* ---- what is missing, first ---- */
+  const box=el('div','collect');
+  box.append(el('div','collect-h','<h3>Before redbot can run</h3><span class="hint">everything on this screen is stored on this machine</span>'));
+  const b=el('div','collect-b');
+
+  b.append(el('div','srcgrp','the machine'));
+  b.append(setupRow(s.database.ok?'ok':'bad','Database',
+    s.database.ok?'redbot.* is reachable':(s.database.reason||'not reachable')));
+  b.append(setupRow(s.vault.ok?'ok':'bad','Credentials vault',
+    s.vault.ok?`sealing key ${s.vault.keyId}`:(s.vault.reason||'').split('\n')[0]));
+
+  /* ---- operator ---- */
+  b.append(el('div','srcgrp','who pays for the thinking'));
+  b.append(el('div','tiny','Every model call is billed to a Claude login. redbot refuses to use this machine’s default login, so one operator must be registered and signed in.'));
+
+  const opBox=el('div');opBox.style.cssText='padding:.4rem 0';
+  if(!s.operators.length){
+    opBox.append(el('div','tiny','<strong>None registered yet.</strong> Add one below — it creates the folder its login will live in.'));
+  }else{
+    const pick=el('div');pick.style.cssText='display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;padding:.35rem 0';
+    const lab=el('span','tiny');lab.textContent='run as';
+    const sel=el('select','sel');
+    sel.setAttribute('aria-label','Which operator pays');
+    const none=el('option',null,'— choose —');none.value='';sel.append(none);
+    s.operators.forEach(o=>{
+      const o2=el('option',null,`${o.name}${o.ready?'':' (not signed in)'}${o.shared?' (shared login)':''}`);
+      o2.value=o.name;
+      if(o.name===s.selectedOperator)o2.selected=true;
+      sel.append(o2);
+    });
+    sel.onchange=async()=>{
+      const r=await fetch('/api/operator/select',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({name:sel.value||null})}).then(x=>x.json());
+      if(!r.ok){toast(r.error||'could not select');return}
+      toast(sel.value?`Running as ${sel.value}`:'Cleared');await again();
+    };
+    pick.append(lab,sel);opBox.append(pick);
+    opBox.append(el('div','tiny',s.selectedOperator
+      ? (s.operatorReady?`<span class="tag ok">signed in</span> Runs are billed to ${esc(s.selectedOperator)}.`
+                        :`<span class="tag no">not signed in</span> ${esc(s.selectedOperator)} has no login folder yet — sign in with the command below.`)
+      : '<span class="tag no">nobody selected</span> Runs that need the model will refuse until you choose one.'));
+    /* The selection lives in the server's memory, so say so rather than let a restart look
+       like a bug. */
+    opBox.append(el('div','tiny','This choice is remembered until the console restarts. To make it permanent, start the console with <code>REDBOT_OPERATOR</code> set.'));
+  }
+  b.append(opBox);
+
+  /* add an operator */
+  const addOp=el('div');addOp.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.5rem 0';
+  const opName=el('input');
+  opName.placeholder='your-name';
+  opName.setAttribute('aria-label','New operator name');
+  opName.style.cssText='flex:1;min-width:200px;font:inherit;font-size:.85rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+  const opBtn=el('button','mini');opBtn.textContent='Register operator';
+  opBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+  const signIn=el('div','tiny');
+  opBtn.onclick=async()=>{
+    if(!opName.value.trim()){toast('Type a name first');return}
+    const r=await fetch('/api/operator/create',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({name:opName.value.trim()})}).then(x=>x.json());
+    if(!r.ok){toast(r.error||'could not register');signIn.textContent=r.error||'';return}
+    /* The console cannot do the sign-in — it is an interactive Claude session. Show the exact
+       command instead of pretending the job is done. */
+    signIn.innerHTML='<strong>Registered.</strong> Now sign in once, in a terminal — redbot never sees your password:<br>'+
+      `<code>${esc(r.signIn.powershell)}</code><br>then type <code>/login</code> inside it.`;
+    opName.value='';await again();
+  };
+  addOp.append(opName,opBtn);b.append(addOp);b.append(signIn);
+
+  /* ---- how the model is reached ---- */
+  b.append(el('div','srcgrp','how redbot reaches the model'));
+  const prov=el('div');prov.style.cssText='display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;padding:.35rem 0';
+  const plab=el('span','tiny');plab.textContent='use';
+  const psel=el('select','sel');
+  psel.setAttribute('aria-label','How redbot reaches the model');
+  [['cli','the signed-in Claude login'],['api','an Anthropic API key']].forEach(([v,l])=>{
+    const o=el('option',null,l);o.value=v;if(v===s.provider)o.selected=true;psel.append(o);
+  });
+  psel.onchange=async()=>{
+    const r=await fetch('/api/llm/provider',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({provider:psel.value})}).then(x=>x.json());
+    if(!r.ok){toast(r.error||'could not change');return}
+    toast('Saved');await again();
+  };
+  prov.append(plab,psel);b.append(prov);
+
+  if(s.provider==='api'){
+    b.append(setupRow(s.apiKeyStored||s.apiKeyFromEnv?'ok':'bad','Anthropic API key',
+      s.apiKeyFromEnv?'set in this console’s environment — that wins over a stored key'
+        :(s.apiKeyStored?`stored, sealed, ending ${(s.secrets.find(x=>x.name===s.apiKeyName)||{}).hint||''}`
+                        :'no key stored — API calls will refuse')));
+    if(!s.vault.ok){
+      b.append(el('div','tiny','The vault must be openable before a key can be stored. '+esc((s.vault.reason||'').split('\n')[0])));
+    }else{
+      const keyRow=el('div');keyRow.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.5rem 0';
+      const keyIn=el('input');
+      keyIn.type='password';
+      keyIn.autocomplete='off';
+      keyIn.placeholder='sk-ant-…';
+      keyIn.setAttribute('aria-label','Anthropic API key');
+      keyIn.style.cssText='flex:1;min-width:240px;font:inherit;font-size:.85rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+      const keyBtn=el('button','mini');keyBtn.textContent='Store it';
+      keyBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+      keyBtn.onclick=async()=>{
+        if(!keyIn.value.trim()){toast('Paste the key first');return}
+        const r=await fetch('/api/vault/key',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({value:keyIn.value})}).then(x=>x.json());
+        /* Cleared whatever the answer: a key must not sit in a form field afterwards. The
+           re-render below replaces this input anyway; both are cheap and neither is the only
+           thing standing between a pasted key and a screenshot. */
+        keyIn.value='';
+        if(!r.ok){toast(r.error||'could not store');return}
+        toast(`Stored — ends ${r.hint}`);await again();
+      };
+      keyRow.append(keyIn,keyBtn);
+      if(s.apiKeyStored){
+        const rm=el('button','mini');rm.textContent='Remove stored key';
+        rm.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+        rm.onclick=async()=>{
+          const r=await fetch('/api/vault/key/remove',{method:'POST',headers:{'content-type':'application/json'},
+            body:JSON.stringify({})}).then(x=>x.json());
+          if(!r.ok){toast(r.error||'could not remove');return}
+          toast('Removed');await again();
+        };
+        keyRow.append(rm);
+      }
+      b.append(keyRow);
+      b.append(el('div','tiny','The key is sealed with AES-256-GCM before it reaches the database, and is never shown again — only the last four characters.'));
+    }
+  }else{
+    b.append(el('div','tiny','Model calls run through the selected operator’s own Claude login. No API key is needed.'));
+  }
+
+  /* ---- the rest lives on its own screen ---- */
+  b.append(el('div','srcgrp','set up elsewhere'));
+  b.append(el('div','tiny','Reddit accounts are on <strong>Accounts</strong>. Where redbot looks is on <strong>Threads</strong>. Both are part of running it, not part of installing it.'));
+
+  box.append(b);root.append(box);
+}
+
+const R={today,accounts,review,discovery,outcomes,logs,setup};
 function go(v){
   CUR=v;
   document.querySelectorAll('.steps .step').forEach(b=>b.setAttribute('aria-current',b.dataset.v===v?'page':'false'));
   Object.keys(R).forEach(k=>{$('#v-'+k).hidden=(k!==v)});
+  if(v!=='logs')clearInterval(LOGVIEW.timer);   /* no polling for a screen nobody is looking at */
   R[v]();
   scrollTo({top:0,behavior:'instant'});
 }
@@ -1615,9 +3438,18 @@ function argusRecord(){
 }
 
 async function load(){
-  const res=await fetch('/api/state');
+  const res=await fetch(`/api/state?reviewOffset=${REVIEW_OFFSET}`);
   S=await res.json();
   await loadOperators();
+  /**
+   * The install-time read happens HERE, before anything is painted, and not later.
+   *
+   * Everything below this point is synchronous, so the moment the first badge lands the whole
+   * shell has landed with it. Awaiting it further down instead split the paint in two: the
+   * bar showed its counts while the headline strip underneath still read "loading…", which is
+   * a real flash for a person and was a real race for the UI suite.
+   */
+  await loadSetup();
   /* Today's badge counts the actions actually outstanding, not a total — it is the only
      number in the bar that should make you click. */
   const due=S.accounts.reduce((n,a)=>{
@@ -1630,6 +3462,15 @@ async function load(){
   $('#nDisc').textContent=S.discovery.assessed;
   $('#nAcc').textContent=S.accounts.length;
   $('#nOut').textContent=S.outcomes.published;
+  if(SETUP&&!SETUP.error){
+    const missing=[
+      !SETUP.database.ok,
+      !SETUP.vault.ok,
+      !SETUP.operatorReady,
+      SETUP.provider==='api'&&!SETUP.apiKeyStored&&!SETUP.apiKeyFromEnv
+    ].filter(Boolean).length;
+    $('#nSet').textContent=missing?String(missing):'ok';
+  }
   $('#banner').innerHTML=S.pulse.published===0
     ? '<b>Nothing has been sent yet.</b> Threads, scores and replies below are real output from live runs. Results is empty because there are no results.'
     : `<b>${S.pulse.published} sent.</b> Every figure is read fresh from the run records.`;
@@ -1640,6 +3481,29 @@ async function load(){
 }
 load().catch(e=>{$('#banner').textContent='Could not load: '+e.message});
 pulseCheck(); setInterval(pulseCheck,15000);
+
+/* What is on each port is the one thing here that changes without anybody clicking — a browser
+   can be closed from its own window, or a port taken by another program. Polled only while the
+   Accounts screen is actually being looked at, because it asks the OS who owns a socket.
+   FIFTEEN seconds, not six: identifying the owning process costs a WMI session, measured at
+   ~5.8s, so a six-second poll left a shell running almost continuously for a fact that changes
+   when somebody opens or closes a browser. Every action that changes it refreshes immediately
+   anyway, so the timer is only there to catch a change made outside this console. */
+setInterval(()=>{ if(CUR==='accounts')loadPorts(); },15000);
+
+/* Re-attach to a run already in flight.
+ *
+ * The log buffer lives on the server, so a reload does not lose it — but nothing on a fresh
+ * page knew to look. Refreshing during a five-minute collect showed an idle console, which
+ * reads as "it stopped". Ask once at startup; if something is running, land on the Log screen
+ * and follow it. */
+(async()=>{
+  try{
+    const r=await fetch('/api/run/log?since=0').then(x=>x.json());
+    const badge=$('#nLog'); if(badge)badge.textContent=r.running?'●':(r.total||'–');
+    if(r.running){go('logs');toast('A command is still running — following it');}
+  }catch{/* no log endpoint, nothing to re-attach to */}
+})();
 })();
 </script>
 </body>

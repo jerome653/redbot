@@ -9,10 +9,20 @@
  * on screen, the command is wrong — there is no second implementation here that
  * could disagree with the first.
  *
- * The engine is frozen. This process reads and displays. It never writes to
- * data/, never touches Reddit, and cannot publish: every command capable of
- * changing Reddit state is absent from the allowlist, and the allowlist is an
- * allowlist precisely so that a future command is excluded by default.
+ * The engine is frozen. There are TWO surfaces here and each has its own allowlist,
+ * because for a while the second one had none:
+ *
+ *   GET            reads and displays, and runs only the read-only commands in
+ *                  COMMANDS. Nothing on this surface changes Reddit state.
+ *   POST /api/job  the queue. It writes data/accounts/<handle>/jobs.jsonl through
+ *                  the CLI, and `work` runs a scheduler pass that drives the chosen
+ *                  account's Chrome. Only the kinds in JOB_KINDS may be queued.
+ *
+ * Publishing is still impossible from here. `reply` — the command that sends one —
+ * is in neither allowlist, and `publish`, `reply-comment` and `post` are
+ * PUBLISH_KINDS in src/scheduler.ts, so a pass parks them at "waiting" for a person
+ * instead of running them. Both lists are allowlists precisely so that a command or
+ * a job kind added later is excluded by default.
  * ---------------------------------------------------------------------------
  *
  * Zero dependencies: node:http + node:child_process. No framework, no build
@@ -32,6 +42,32 @@ const ROOT = resolve(HERE, '..', '..');
 const portArg = process.argv.indexOf('--port');
 const PORT = portArg > -1 ? Number(process.argv[portArg + 1]) : 7890;
 
+/**
+ * The domain, from Postgres.
+ *
+ * `jobsFor` already made this move and said why: "a reader left pointing at the old file does
+ * not fail — it reports an empty queue, which on this page reads as 'no work pending' and is
+ * the most dangerous possible wrong answer." The same was still true of drafts, threads,
+ * certifications, reviews, regret, interactions and observations, which this file went on
+ * reading out of data/*.json and data/*.jsonl after src/store.ts stopped writing them.
+ *
+ * Shared with the product console through dist/console-data.js so the two cannot drift.
+ */
+let domain = null, consoleAccounts = null, logRows = null;
+try {
+  const d = await import('../../dist/console-data.js');
+  domain = d.loadConsoleDomain;
+  consoleAccounts = d.loadConsoleAccounts;
+  logRows = d.loadLogRows;
+} catch (e) {
+  console.error(
+    '\n  This console reads the database through the compiled build, which is missing or stale.\n' +
+    '    npm run build\n' +
+    `  (${e && e.message ? e.message : e})\n`
+  );
+  process.exit(1);
+}
+
 /** Sibling repository holding the extracted engine. Optional. */
 const ARGUS = resolve(ROOT, '..', '..', '..', '..', 'argus');
 
@@ -48,6 +84,9 @@ const ARGUS = resolve(ROOT, '..', '..', '..', '..', 'argus');
  *   observe  drives the operator's browser against a live thread
  *   read · search · session · login    drive the browser
  *   draft · opportunity · certify      spend model calls and write evidence
+ *
+ * This list governs the GET surface only. Several of the names above are reachable as QUEUED
+ * WORK — see JOB_KINDS below, which is the other half of the boundary and says so out loud.
  */
 const COMMANDS = {
   doctor:   { args: ['doctor'],            label: 'Doctor',    group: 'validation', blurb: 'install health — build, auth, data, secrets, backup' },
@@ -69,6 +108,27 @@ const SCRIPTS = {
   replay:     { cmd: 'node', args: ['qa/ARE-001-argus-replay.mjs'],  label: 'Replay',     blurb: 'ARE-001 — deterministic verdict replay' },
   extraction: { cmd: 'node', args: ['tools/verify-extraction.mjs'],  label: 'Extraction', blurb: 'byte-identity of the extracted engine', cwd: ARGUS }
 };
+
+/**
+ * Job kinds `POST /api/job` may queue. The second half of this console's boundary.
+ *
+ * COMMANDS above governs what runs on GET and says nothing about the queue — and until this
+ * list existed, `/api/job` enforced nothing but /^[a-z-]{1,20}$/ on the kind before handing it
+ * to `job add`, which accepts every kind in src/commands/job.ts, `reply` included. An allowlist
+ * a second endpoint walks straight around is not a boundary, it is a decoration.
+ *
+ * These are exactly the kinds the Jobs page offers, so the form and the server cannot drift.
+ *
+ * `reply` is absent. It has no runner, so a queued one could only ever reach "waiting", and a
+ * row that looks like a pending publish would suggest this console has a path to sending one.
+ * It has none: sending a reply is `redbot reply` at a terminal, with the approval prompt.
+ *
+ * `publish`, `reply-comment` and `post` ARE queueable, deliberately. They are PUBLISH_KINDS in
+ * src/scheduler.ts, so a pass stops them at "waiting" for a person rather than running them —
+ * queueing the decision is not making it.
+ */
+const JOB_KINDS = ['read', 'search', 'opportunity', 'draft', 'certify',
+                   'vote', 'save', 'follow', 'post', 'reply-comment', 'publish'];
 
 const READABLE_ROOTS = ['ground-truth', 'reports', 'docs', 'qa'];
 const READABLE_FILES = [
@@ -105,26 +165,34 @@ function resolveCmd(cmd, args) {
   return [cmd, args];
 }
 
-function run(cmd, args, timeoutMs = 180_000, cwd = ROOT) {
+/**
+ * `opts.env`   extra variables for the child, merged over this process's own environment.
+ * `opts.slot`  claim the single run slot (ACTIVE) under this key for the child's lifetime, so
+ *              a buffered command serialises against the streaming ones instead of alongside them.
+ */
+function run(cmd, args, timeoutMs = 180_000, cwd = ROOT, opts = {}) {
   return new Promise((res) => {
     const started = Date.now();
     const [bin, argv] = resolveCmd(cmd, args);
     let child;
     try {
-      child = spawn(bin, argv, { cwd, shell: false, env: { ...process.env } });
+      child = spawn(bin, argv, { cwd, shell: false, env: { ...process.env, ...opts.env } });
     } catch (e) {
       return res({ ok: false, code: -1, out: '', err: String(e.message), ms: 0 });
     }
+    // Claimed in the same synchronous step as the spawn. A caller checks ACTIVE and calls this
+    // with no await in between, so two requests cannot both pass that check and both start a child.
+    if (opts.slot) claimSlot(opts.slot, child, started, null);
     let out = '', err = '';
     const timer = setTimeout(() => { child.kill(); out += '\n[timed out]'; }, timeoutMs);
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { err += d; });
-    child.on('error', (e) => { clearTimeout(timer); res({ ok: false, code: -1, out: '', err: String(e.message), ms: Date.now() - started }); });
-    child.on('close', (code) => { clearTimeout(timer); res({ ok: code === 0, code, out, err, ms: Date.now() - started }); });
+    child.on('error', (e) => { clearTimeout(timer); releaseSlot(child); res({ ok: false, code: -1, out: '', err: String(e.message), ms: Date.now() - started }); });
+    child.on('close', (code) => { clearTimeout(timer); releaseSlot(child); res({ ok: code === 0, code, out, err, ms: Date.now() - started }); });
   });
 }
 
-const runCli = (args) => run('node', [join(ROOT, 'dist', 'cli.js'), ...args]);
+const runCli = (args, opts) => run('node', [join(ROOT, 'dist', 'cli.js'), ...args], 180_000, ROOT, opts);
 
 /* ------------------------------------------------------------------ *
  * Small readers — I/O for display, never computation
@@ -150,11 +218,63 @@ const readJson = (p) => {
 
 const HANDLE_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
-function accounts() {
-  const cfg = readJson('data/accounts.json');
-  const list = Array.isArray(cfg?.accounts) ? cfg.accounts : [];
+/* ------------------------------------------------------------------ *
+ * Postgres — read-only, for the queue
+ *
+ * This console had no dependencies. `pg` is now one of redbot's two, and reading the
+ * queue needs it: the alternative is shelling out to the CLI per page load, or reading a
+ * file that no longer holds the queue. Nothing here writes — every mutation still goes
+ * through `node dist/cli.js job ...`.
+ *
+ * The pool is created lazily so the console still starts, and still serves every other
+ * page, when Postgres is down.
+ * ------------------------------------------------------------------ */
+
+let pgPool = null;
+
+function dbSettings() {
+  const file = join(ROOT, 'db', '.env');
+  const env = {};
+  if (existsSync(file)) {
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      const s = line.trim();
+      if (!s || s.startsWith('#')) continue;
+      const eq = s.indexOf('=');
+      if (eq > 0) env[s.slice(0, eq).trim()] = s.slice(eq + 1).trim();
+    }
+  }
+  const pick = (k, d) => process.env[k] ?? env[k] ?? d;
   return {
-    available: Boolean(cfg),
+    host: pick('POSTGRES_HOST', '127.0.0.1'),
+    port: Number(pick('POSTGRES_PORT', 5432)),
+    database: pick('POSTGRES_DB', 'redbot'),
+    user: pick('POSTGRES_USER', 'redbot'),
+    password: pick('POSTGRES_PASSWORD', '')
+  };
+}
+
+async function dbQuery(text, values) {
+  if (!pgPool) {
+    const { default: pg } = await import('pg');
+    pgPool = new pg.Pool({
+      ...dbSettings(),
+      max: 2,
+      connectionTimeoutMillis: 3000,
+      options: '-c search_path=redbot,public'
+    });
+    pgPool.on('error', () => { /* surfaced at the next query */ });
+  }
+  return pgPool.query(text, values);
+}
+
+async function accounts() {
+  // redbot.accounts is the system of record; the seed file answers only when the database is
+  // empty or unreachable. `source` says which, so a stale seed cannot pass for the record.
+  const { accounts: list, from, unavailable } = await consoleAccounts();
+  return {
+    available: list.length > 0,
+    source: from,
+    unavailable,
     accounts: list.map((a) => ({
       handle: a.handle,
       role: a.role ?? null,
@@ -168,23 +288,55 @@ function accounts() {
   };
 }
 
-/** Fold the append-only job log to current state. Last write per id wins. */
-function jobsFor(handle) {
+/**
+ * The queue, read from Postgres.
+ *
+ * This used to fold data/accounts/<handle>/jobs.jsonl last-write-wins. The store moved to
+ * Postgres, and a reader left pointing at the old file does not fail — it reports an empty
+ * queue, which on this page reads as "no work pending" and is the most dangerous possible
+ * wrong answer. Hence a real query, and an explicit `available: false` when the database
+ * cannot be reached rather than an empty list.
+ *
+ * Still read-only: every mutation goes back through `node dist/cli.js job ...`, so the
+ * queue keeps exactly one writer.
+ */
+async function jobsFor(handle) {
   if (!HANDLE_RE.test(handle ?? '')) return { available: false, reason: 'not a usable account handle', jobs: [] };
-  const abs = join(ROOT, 'data', 'accounts', handle, 'jobs.jsonl');
-  if (!existsSync(abs)) {
-    return { available: true, jobs: [], counts: emptyCounts(), reason: 'no jobs yet' };
+  try {
+    const { rows } = await dbQuery(
+      `SELECT id, account, kind, state, args, run_at, after_id, max_attempts, every_minutes,
+              note, attempts, created_at, updated_at, started_at, finished_at, detail, code
+         FROM redbot.jobs WHERE account = $1 ORDER BY created_at, id`,
+      [handle]
+    );
+    const jobs = rows.map((r) => ({
+      id: r.id, account: r.account, kind: r.kind, state: r.state,
+      args: r.args ?? {},
+      runAt: r.run_at?.toISOString() ?? null,
+      after: r.after_id ?? undefined,
+      maxAttempts: r.max_attempts,
+      everyMinutes: r.every_minutes ?? undefined,
+      note: r.note ?? undefined,
+      attempts: r.attempts,
+      createdAt: r.created_at.toISOString(),
+      updatedAt: r.updated_at.toISOString(),
+      startedAt: r.started_at?.toISOString() ?? undefined,
+      finishedAt: r.finished_at?.toISOString() ?? undefined,
+      detail: r.detail ?? undefined,
+      code: r.code ?? undefined
+    }));
+    const counts = emptyCounts();
+    for (const j of jobs) if (j.state in counts) counts[j.state]++;
+    return { available: true, jobs, counts, ...(jobs.length ? {} : { reason: 'no jobs yet' }) };
+  } catch (e) {
+    return {
+      available: false,
+      jobs: [],
+      counts: emptyCounts(),
+      reason: `the queue is in Postgres and it is not reachable — ${String(e.message).split('\n')[0]}. ` +
+              `Start it with: docker compose -f db/docker-compose.yml up -d`
+    };
   }
-  const byId = new Map();
-  for (const line of readFileSync(abs, 'utf8').split('\n')) {
-    const s = line.trim();
-    if (!s) continue;
-    try { const j = JSON.parse(s); byId.set(j.id, j); } catch { /* torn line */ }
-  }
-  const jobs = [...byId.values()];
-  const counts = emptyCounts();
-  for (const j of jobs) if (j.state in counts) counts[j.state]++;
-  return { available: true, jobs, counts };
 }
 
 function emptyCounts() {
@@ -212,7 +364,11 @@ async function jobMutate(body) {
 
   if (op === 'add') {
     const kind = String(body?.kind ?? '');
-    if (!/^[a-z-]{1,20}$/.test(kind)) return { ok: false, error: 'that is not a job kind' };
+    // A shape check is not an allowlist. `reply` matches /^[a-z-]{1,20}$/ and so did every other
+    // kind src/commands/job.ts accepts, which is how this endpoint used to reach past COMMANDS.
+    if (!JOB_KINDS.includes(kind)) {
+      return { ok: false, error: `"${kind}" is not a job kind this console may queue. One of: ${JOB_KINDS.join(', ')}` };
+    }
     const args = ['job', 'add', kind, '--account', handle];
     // Only known flags are forwarded, and each value is passed as its own argv entry — never
     // interpolated into a string — so nothing here can become a second command.
@@ -231,9 +387,29 @@ async function jobMutate(body) {
   }
 
   if (op === 'work') {
-    // One pass, on demand. The looping worker is started from a terminal on purpose: a
-    // long-running browser-driving process should not be owned by a web request.
-    const r = await runCli(['work', '--account', handle]);
+    /**
+     * One pass, on demand. The looping worker is started from a terminal on purpose: a
+     * long-running browser-driving process should not be owned by a web request.
+     *
+     * REDBOT_ACCOUNT, not just --account. `--account` only chooses which jobs.jsonl is read;
+     * WHICH Chrome the runners drive is config.browser.cdpEndpoint, and src/config.ts resolves
+     * that from REDBOT_ACCOUNT once, at module load. Spawning with this console's own
+     * environment therefore ran the SELECTED account's queue against whatever browser this
+     * process happened to point at — account B's votes, saves and follows landing in account
+     * A's signed-in session, with nothing on screen to say so. Passing both is what makes the
+     * queue and the browser agree, and a handle that is not in accounts.json now fails closed
+     * in the child rather than quietly borrowing someone else's login.
+     *
+     * The slot is the one streamRun already refuses on. A pass drives that Chrome for as long
+     * as its jobs take, so two passes drive it at once — which is what two clicks on "Run one
+     * pass" did, because this branch consulted no lock at all.
+     */
+    if (ACTIVE) {
+      return { ok: false, status: 409,
+               error: `"${ACTIVE.key}" is already running. One command at a time — cancel it first.` };
+    }
+    const r = await runCli(['work', '--account', handle],
+                           { env: { REDBOT_ACCOUNT: handle }, slot: `work:${handle}` });
     return { ok: r.code === 0, cli: `redbot work --account ${handle}`, ...r };
   }
 
@@ -251,19 +427,23 @@ async function chromeStatus() {
 }
 
 /** Why replay can or cannot run — never surfaced as an error. */
-function replayAvailability() {
-  const p = 'data/certifications.jsonl';
-  const n = lineCount(p);
-  if (n === null) {
+async function replayAvailability() {
+  // Certifications are rows in redbot.certifications now. Counting the old JSONL file made
+  // replay report itself unavailable on a machine that had certified plenty.
+  const dom = await domain();
+  if (dom.unavailable) {
+    return { available: false, reason: `The database could not be read, so replay cannot know what exists. ${dom.unavailable}` };
+  }
+  const n = dom.certifications.length;
+  if (n === 0) {
     return {
       available: false,
-      reason: `${p} does not exist. ARE-001 replays a real certification through the deterministic ` +
-              `verdict layer, so it needs at least one certification on disk. Run \`redbot certify <draftId>\` ` +
-              `first — that requires operator model credentials but no browser.`
+      reason: 'Nothing has been certified yet. ARE-001 replays a real certification through the ' +
+              'deterministic verdict layer, so it needs at least one on record. Run `redbot certify <draftId>` ' +
+              'first — that requires operator model credentials but no browser.'
     };
   }
-  if (n === 0) return { available: false, reason: `${p} exists but is empty. Nothing has been certified yet.` };
-  return { available: true, records: n, reason: `${n} certification record(s) on disk.` };
+  return { available: true, records: n, reason: `${n} certification record(s) on record.` };
 }
 
 function freezeState() {
@@ -285,13 +465,15 @@ function freezeState() {
  * Certifications · ground truth · reports
  * ------------------------------------------------------------------ */
 
-function certifications() {
-  const abs = join(ROOT, 'data/certifications.jsonl');
-  if (!existsSync(abs)) return { available: false, reason: 'data/certifications.jsonl does not exist — nothing has been certified on this machine', records: [] };
+async function certifications() {
+  const dom = await domain();
+  if (dom.unavailable) return { available: false, reason: dom.unavailable, records: [] };
+  if (!dom.certifications.length) {
+    return { available: false, reason: 'nothing has been certified on this machine', records: [] };
+  }
   const records = [];
-  readFileSync(abs, 'utf8').split('\n').filter((l) => l.trim()).forEach((l, i) => {
-    try {
-      const c = JSON.parse(l);
+  dom.certifications.forEach((c, i) => {
+    {
       records.push({
         index: i, draftId: c.draftId, threadId: c.threadId, verdict: c.verdict,
         certifiedAt: c.certifiedAt, model: c.model,
@@ -303,17 +485,16 @@ function certifications() {
         resolved: Boolean(c.resolution?.resolved),
         rules: [...new Set((c.reasons ?? []).map((r) => r.rule))]
       });
-    } catch { /* skip unparseable */ }
+    }
   });
   return { available: true, records };
 }
 
-function certification(i) {
-  const abs = join(ROOT, 'data/certifications.jsonl');
-  if (!existsSync(abs)) return null;
-  const lines = readFileSync(abs, 'utf8').split('\n').filter((l) => l.trim());
-  if (!(i >= 0 && i < lines.length)) return null;
-  try { return JSON.parse(lines[i]); } catch { return null; }
+/** One full certification record, by the index `certifications()` handed out. */
+async function certification(i) {
+  const dom = await domain();
+  if (!(i >= 0 && i < dom.certifications.length)) return null;
+  return dom.certifications[i] ?? null;
 }
 
 function groundTruth() {
@@ -389,18 +570,62 @@ function readable(rel) {
   return readFileSync(abs, 'utf8');
 }
 
-function logTail(name, n = 400) {
+/**
+ * A log's tail.
+ *
+ * **What was wrong.** These six logs were `data/*.jsonl` files, and `src/store.ts` stopped
+ * writing them when the store moved to Postgres. This function then reported, verbatim,
+ * "data/history.jsonl does not exist yet — nothing has written to it. No command has produced
+ * this log." on a machine whose `redbot.history` table held rows. Not a missing feature: a
+ * false statement, and the most misleading kind — an operator checking whether anything ran
+ * was told nothing had.
+ *
+ * The rows are the log now. The legacy file is still read when a table is empty and a
+ * pre-migration file is on disk, because that file is real evidence somebody collected and
+ * `redbot backup` treats data/ as exactly that; it is labelled so it cannot be mistaken for
+ * live output.
+ *
+ * Shape is unchanged — {available, path, total, lines, reason} — so the log page renders it
+ * without knowing any of this happened. `lines` are JSON strings, as they were when they were
+ * file lines.
+ */
+async function logTail(name, n = 400) {
   const rel = LOGS[name];
   if (!rel) return { available: false, reason: `unknown log "${name}"` };
-  const abs = join(ROOT, rel);
-  if (!existsSync(abs)) {
-    const why = name === 'reviews' || name === 'regret'
-      ? 'No draft has been decided at the approval prompt.'
-      : name === 'interactions' ? 'No reply has been published.' : 'No command has produced this log.';
-    return { available: false, path: rel, reason: `${rel} does not exist yet — nothing has written to it. ${why}` };
+
+  const { table, rows, unavailable } = await logRows(name, n);
+
+  if (unavailable) {
+    // NEVER "nothing has written to it" — that is a claim about the log, and this is a
+    // failure to read it. Conflating the two is the bug this whole function had.
+    return { available: false, path: table ?? rel, reason: `${table} could not be read. ${unavailable}` };
   }
-  const lines = readFileSync(abs, 'utf8').split('\n').filter((l) => l.trim());
-  return { available: true, path: rel, total: lines.length, lines: lines.slice(-n) };
+
+  if (rows.length) {
+    return {
+      available: true, path: table, source: 'database', total: rows.length,
+      lines: rows.map((r) => JSON.stringify(r))
+    };
+  }
+
+  // Nothing in the table. A pre-migration file may still hold real history.
+  const abs = join(ROOT, rel);
+  if (existsSync(abs)) {
+    const lines = readFileSync(abs, 'utf8').split('\n').filter((l) => l.trim());
+    if (lines.length) {
+      return {
+        available: true, path: rel, source: 'legacy-file', total: lines.length,
+        lines: lines.slice(-n),
+        note: `${table} is empty; showing ${rel}, written before the store moved to Postgres. ` +
+              'Nothing appends to this file any more.'
+      };
+    }
+  }
+
+  const why = name === 'reviews' || name === 'regret'
+    ? 'No draft has been decided at the approval prompt.'
+    : name === 'interactions' ? 'No reply has been published.' : 'No command has produced this log.';
+  return { available: false, path: table, reason: `${table} is empty — nothing has written to it. ${why}` };
 }
 
 /* ------------------------------------------------------------------ *
@@ -416,9 +641,9 @@ async function dashboard() {
   ]);
   const field = (re) => (corpus.out.match(re) ?? [])[1] ?? null;
 
-  const certs = certifications();
+  const certs = await certifications();
   const latestCert = certs.available && certs.records.length ? certs.records[certs.records.length - 1] : null;
-  const drafts = readJson('data/drafts.json') ?? [];
+  const { drafts, threads: allThreads, reviews, regret: regrets, observations, interactions } = await domain();
   const last = readJson('qa/benchmark/last-run.json');
   const rep = reports();
 
@@ -434,7 +659,7 @@ async function dashboard() {
     git: { commit: git.out.trim() || null, branch: branch.out.trim() || null },
     chrome,
     freeze: freezeState(),
-    replay: replayAvailability(),
+    replay: await replayAvailability(),
     extraction: existsSync(join(ARGUS, 'tools', 'verify-extraction.mjs'))
       ? { available: true, repo: ARGUS, note: 'Extraction verification is a gate of the extracted repository, not of redbot.' }
       : { available: false, note: 'No extracted repository found alongside this one. Extraction verification is not a redbot gate.' },
@@ -452,16 +677,16 @@ async function dashboard() {
       calibration: last.calibration, stages: last.stages
     } : null,
     counts: {
-      certificationRecords: lineCount('data/certifications.jsonl') ?? 0,
+      certificationRecords: certs.available ? certs.records.length : 0,
       certificationDrafts: new Set(certs.records.map((r) => r.draftId)).size,
-      threads: (readJson('data/threads.json') ?? []).length,
+      threads: allThreads.length,
       drafts: drafts.length,
       draftsPending: drafts.filter((d) => d.status === 'pending').length,
       draftsPublished: drafts.filter((d) => d.status === 'published').length,
-      reviews: lineCount('data/reviews.jsonl') ?? 0,
-      regret: lineCount('data/regret.jsonl') ?? 0,
-      interactions: lineCount('data/interactions.jsonl') ?? 0,
-      observations: lineCount('data/observations.jsonl') ?? 0,
+      reviews: reviews.length,
+      regret: regrets.length,
+      interactions: interactions.length,
+      observations: observations.length,
       reports: rep.available ? rep.files.length : 0
     },
     latestCert,
@@ -493,6 +718,19 @@ async function benchmarkRun() {
  * ------------------------------------------------------------------ */
 
 let ACTIVE = null;   // { key, child, started, res }
+
+/**
+ * One slot, one assignment site.
+ *
+ * `run` above claims it too — function declarations hoist, so both spawn paths share this one
+ * piece of state rather than each keeping a private idea of "busy". That is the whole point:
+ * the queue's `work` pass and a streamed command drive the same Chrome and the same data files,
+ * so they must contend for the same lock.
+ */
+function claimSlot(key, child, started, res) { ACTIVE = { key, child, started, res }; }
+
+/** Release only if this child still holds it — a late exit must not free someone else's slot. */
+function releaseSlot(child) { if (ACTIVE && ACTIVE.child === child) ACTIVE = null; }
 
 function activeStatus() {
   if (!ACTIVE) return { running: false };
@@ -528,7 +766,7 @@ function streamRun(res, key, cmd, args, cwd) {
     send('exit', { code: -1, ms: 0, error: String(e.message) });
     return res.end();
   }
-  ACTIVE = { key, child, started, res };
+  claimSlot(key, child, started, res);
   send('start', { key, cli: `${cmd} ${args.join(' ')}`, startedAt: new Date(started).toISOString() });
 
   const beat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 15_000);
@@ -539,7 +777,7 @@ function streamRun(res, key, cmd, args, cwd) {
     clearInterval(beat);
     const ms = Date.now() - started;
     recordRun(key, code, ms);
-    ACTIVE = null;
+    releaseSlot(child);
     send('exit', { code, ms, ...extra });
     res.end();
   };
@@ -558,7 +796,13 @@ const TREE_ROOTS = [
   { key: 'ground-truth', path: 'ground-truth',       label: 'ground-truth' },
   { key: 'qa',           path: 'qa',                 label: 'qa' },
   { key: 'docs',         path: 'docs',               label: 'docs' },
-  { key: 'logs',         path: 'data',               label: 'logs', only: /\.jsonl$/ }
+  /**
+   * Pre-migration files only. The live logs are rows in redbot.* and are read on the Logs
+   * page; this root browses whatever .jsonl a machine collected BEFORE the store moved, which
+   * is still evidence. Labelled so an empty tree reads as "no legacy files" rather than
+   * "redbot has no logs".
+   */
+  { key: 'logs',         path: 'data',               label: 'logs (legacy files)', only: /\.jsonl$/ }
 ];
 const TREE_SKIP = new Set(['node_modules', '.git', 'dist', 'chrome-profile', 'chrome-profile-b', 'operators']);
 const TEXTUAL = /\.(md|json|jsonl|mjs|js|ts|txt|yml|yaml)$/i;
@@ -588,11 +832,20 @@ function tree(rootKey) {
     }
     return out.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
   };
-  return { available: true, root: spec.path, label: spec.label, children: walk(base, '', 0) };
+  const children = walk(base, '', 0);
+  // An empty legacy-log tree is the normal state on any machine installed after the move to
+  // Postgres. Saying where the logs actually are stops it reading as "redbot has no logs".
+  if (!children.length && rootKey === 'logs') {
+    return {
+      available: false, root: spec.path, label: spec.label, children: [],
+      reason: 'No pre-migration log files on this machine. The live logs are rows in redbot.* — open the Logs page.'
+    };
+  }
+  return { available: true, root: spec.path, label: spec.label, children };
 }
 
 /** Grep across the readable surface. Returns file, line number and the matching line. */
-function search(q, limit = 200) {
+async function search(q, limit = 200) {
   if (!q || q.length < 2) return { available: false, reason: 'enter at least two characters', hits: [] };
   const needle = q.toLowerCase();
   const hits = [];
@@ -631,8 +884,16 @@ function search(q, limit = 200) {
     const base = join(ROOT, spec.path);
     if (existsSync(base)) walk(base, spec.path, 0, spec.only);
   }
-  const certs = join(ROOT, 'data', 'certifications.jsonl');
-  if (existsSync(certs)) scanFile(certs, 'data/certifications.jsonl');
+  // Certifications live in redbot.certifications. Scanning the old file found nothing, so a
+  // search for a claim or a rule name silently reported "no matches" on a machine full of them.
+  const dom = await domain();
+  dom.certifications.forEach((c, i) => {
+    if (hits.length >= limit) { truncated = true; return; }
+    const text = JSON.stringify(c);
+    if (!text.toLowerCase().includes(needle)) return;
+    scanned++;
+    hits.push({ path: 'redbot.certifications', line: i + 1, text: text.trim().slice(0, 300) });
+  });
 
   const byFile = {};
   hits.forEach((h) => { (byFile[h.path] = byFile[h.path] || []).push(h); });
@@ -644,8 +905,8 @@ function search(q, limit = 200) {
 }
 
 /** Certification timeline — durations joined from the trace log by runId. */
-function timeline() {
-  const certs = certifications();
+async function timeline() {
+  const certs = await certifications();
   if (!certs.available) return { available: false, reason: certs.reason, events: [] };
 
   const durations = new Map();   // draftId -> [{ms, at}]
@@ -689,9 +950,11 @@ function timeline() {
 }
 
 /** Certification queue — which drafts are done, which are not. */
-function queue() {
-  const drafts = readJson('data/drafts.json') ?? [];
-  const certs = certifications();
+async function queue() {
+  // Drafts are rows now. Reading the old file here reported an empty certification queue,
+  // which on this page reads as "everything is certified" — the dangerous direction to be wrong in.
+  const { drafts } = await domain();
+  const certs = await certifications();
   const done = new Map();
   if (certs.available) certs.records.forEach((r) => done.set(r.draftId, r));
 
@@ -751,21 +1014,25 @@ function runHistory() {
 }
 
 /** Recent activity, newest first. Sources: the engine's own history log + artefact mtimes. */
-function activity(limit = 40) {
+async function activity(limit = 40) {
   const out = [];
-  const hp = join(ROOT, 'data', 'history.jsonl');
-  if (existsSync(hp)) {
-    readFileSync(hp, 'utf8').split('\n').filter((l) => l.trim()).forEach((l) => {
-      try {
-        const e = JSON.parse(l);
-        out.push({ at: e.ts, kind: e.kind, summary: e.summary, source: 'data/history.jsonl' });
-      } catch { /* skip */ }
-    });
+  // The engine's history is a table now, not data/history.jsonl. Reading the file left this
+  // feed showing only artefact mtimes — it looked like redbot had done nothing but run scripts.
+  const dom = await domain();
+  for (const e of dom.history) {
+    out.push({ at: e.ts, kind: e.kind, summary: e.summary, source: 'redbot.history' });
+  }
+  // Certifications are rows too, and the newest one's own timestamp is a truer event than
+  // the mtime of a file nothing writes any more.
+  const lastCert = dom.certifications[dom.certifications.length - 1];
+  if (lastCert) {
+    out.push({ at: lastCert.certifiedAt, kind: 'certify',
+               summary: `certification recorded — ${lastCert.draftId} (${lastCert.verdict})`,
+               source: 'redbot.certifications' });
   }
   // Artefacts whose mtime IS the event: when they were last produced.
   const artefacts = [
     ['qa/benchmark/last-run.json', 'benchmark', 'benchmark completed'],
-    ['data/certifications.jsonl', 'certify', 'certification record written'],
     ['ground-truth/cases/HRC-001/case.json', 'ground-truth', 'ground truth case updated'],
     ['ground-truth/cases/CERT-002/case.json', 'ground-truth', 'ground truth case updated']
   ];
@@ -787,27 +1054,25 @@ function activity(limit = 40) {
   return out.filter((x) => x.at).sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
 }
 
-/** Chart series. Each one is derived from a file on disk, or declared unavailable. */
-function charts() {
+/** Chart series. Each one is derived from the database, or declared unavailable. */
+async function charts() {
   // Corpus growth: cumulative threads ADDED by collection runs, from the engine's history log.
   // NOTE: this is not the same as the current corpus size — threads are deduplicated and
   // dropped downstream. Both numbers are shown, and they are allowed to differ.
   const growth = [];
-  const hp = join(ROOT, 'data', 'history.jsonl');
-  if (existsSync(hp)) {
+  {
+    // From redbot.history, not data/history.jsonl — the file stopped being written when the
+    // store moved, which left this chart permanently empty and reading as "nothing collected".
     let cum = 0;
-    readFileSync(hp, 'utf8').split('\n').filter((l) => l.trim()).forEach((l) => {
-      try {
-        const e = JSON.parse(l);
-        if (e.kind === 'read' && e.data && typeof e.data.added === 'number') {
-          cum += e.data.added;
-          growth.push({ at: e.ts, added: e.data.added, cumulative: cum });
-        }
-      } catch { /* skip */ }
-    });
+    for (const e of (await domain()).history) {
+      if (e.kind === 'read' && e.data && typeof e.data.added === 'number') {
+        cum += e.data.added;
+        growth.push({ at: e.ts, added: e.data.added, cumulative: cum });
+      }
+    }
   }
 
-  const certs = certifications();
+  const certs = await certifications();
   const dist = { CERTIFIED: 0, ESCALATE: 0, REJECT: 0 };
   if (certs.available) certs.records.forEach((r) => { if (dist[r.verdict] != null) dist[r.verdict]++; });
 
@@ -817,14 +1082,14 @@ function charts() {
     corpusGrowth: {
       available: growth.length > 0,
       series: growth,
-      currentThreads: (readJson('data/threads.json') ?? []).length,
-      note: 'Cumulative threads added by collection runs (data/history.jsonl). The current corpus is smaller because threads are deduplicated and dropped downstream — both figures are real.'
+      currentThreads: (await domain()).threads.length,
+      note: 'Cumulative threads added by collection runs (redbot.history). The current corpus is smaller because threads are deduplicated and dropped downstream — both figures are real.'
     },
     verdictDistribution: {
       available: certs.available,
       counts: dist,
       total: certs.available ? certs.records.length : 0,
-      note: 'Verdicts across every certification record on disk.'
+      note: 'Verdicts across every certification record in redbot.certifications.'
     },
     confusion: last?.confusion
       ? { available: true, matrix: last.confusion, note: 'Benchmark expected|actual pairs from qa/benchmark/last-run.json.' }
@@ -901,7 +1166,16 @@ async function settings() {
     operator: process.env.REDBOT_OPERATOR ?? null,
     platform: `${process.platform} ${process.arch}`,
     consolePort: PORT,
-    readOnly: true
+    /**
+     * Was `readOnly: true`, which the Jobs page has made untrue since the queue arrived. The
+     * settings screen is where a person goes to check what a tool is allowed to do, so it is
+     * the last place that may flatter itself. Reported as separate facts because they are:
+     * the GET surface really is read-only, the queue really is not, and neither can publish.
+     */
+    readOnly: false,
+    canQueueJobs: true,
+    canRunWorkPass: true,
+    canPublish: false
   };
 }
 
@@ -988,7 +1262,9 @@ const server = createServer(async (req, res) => {
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
       catch { return json(res, 400, { error: 'body is not readable JSON' }); }
       const r = await jobMutate(body);
-      return json(res, r.ok ? 200 : 400, r);
+      // A refusal carries its own status when "bad request" would be the wrong word for it —
+      // a work pass declined because one is already running is 409, the same as /api/stream.
+      return json(res, r.ok ? 200 : (r.status ?? 400), r);
     }
 
     if (req.method !== 'GET') {
@@ -1008,7 +1284,18 @@ const server = createServer(async (req, res) => {
         { cmd: 'observe', why: 'drives the operator\'s browser against a live thread' },
         { cmd: 'read · search · session · login', why: 'drive the operator\'s browser' },
         { cmd: 'draft · opportunity · certify',   why: 'spend model calls and write evidence' }
-      ]
+      ],
+      // Stated here because the table above, read alone, overstates what this console refuses:
+      // several of those names ARE reachable as queued work, and the honest boundary is two
+      // allowlists rather than one.
+      queue: {
+        kinds: JOB_KINDS,
+        note: 'The Jobs page queues work through POST /api/job and runs it with `redbot work`. ' +
+              'That is how read, search, draft, opportunity and certify reach the engine from here ' +
+              'despite being absent from the command allowlist — as queued jobs, one pass at a time, ' +
+              'against the selected account\'s own browser. publish, reply-comment and post can be ' +
+              'queued but stop at "waiting" for a person. reply is in neither allowlist.'
+      }
     });
     if (p === '/api/stream') {
       const k = u.searchParams.get('cmd');
@@ -1018,7 +1305,7 @@ const server = createServer(async (req, res) => {
         if (s.cwd && !existsSync(join(s.cwd, s.args[0])))
           return json(res, 200, { key: k, unavailable: true, err: `${s.label} is a gate of the extracted repository (${s.cwd}), which is not present alongside this one.` });
         if (k === 'replay') {
-          const a = replayAvailability();
+          const a = await replayAvailability();
           if (!a.available) return json(res, 200, { key: k, unavailable: true, err: a.reason });
         }
         return streamRun(res, k, s.cmd, s.args, s.cwd ?? ROOT);
@@ -1029,14 +1316,14 @@ const server = createServer(async (req, res) => {
     if (p === '/api/status')    return json(res, 200, activeStatus());
     if (p === '/api/tree')      return json(res, 200, tree(u.searchParams.get('root') ?? 'reports'));
     if (p === '/api/roots')     return json(res, 200, { roots: TREE_ROOTS.map(({ key, path, label }) => ({ key, path, label })) });
-    if (p === '/api/search')    return json(res, 200, search(u.searchParams.get('q') ?? '', Number(u.searchParams.get('limit') ?? 200)));
-    if (p === '/api/timeline')  return json(res, 200, timeline());
-    if (p === '/api/queue')     return json(res, 200, queue());
-    if (p === '/api/accounts')  return json(res, 200, accounts());
-    if (p === '/api/jobs')      return json(res, 200, jobsFor(u.searchParams.get('account') ?? ''));
+    if (p === '/api/search')    return json(res, 200, await search(u.searchParams.get('q') ?? '', Number(u.searchParams.get('limit') ?? 200)));
+    if (p === '/api/timeline')  return json(res, 200, await timeline());
+    if (p === '/api/queue')     return json(res, 200, await queue());
+    if (p === '/api/accounts')  return json(res, 200, await accounts());
+    if (p === '/api/jobs')      return json(res, 200, await jobsFor(u.searchParams.get('account') ?? ''));
     if (p === '/api/run-history') return json(res, 200, runHistory());
-    if (p === '/api/activity')  return json(res, 200, { events: activity(Number(u.searchParams.get('n') ?? 40)) });
-    if (p === '/api/charts')    return json(res, 200, charts());
+    if (p === '/api/activity')  return json(res, 200, { events: await activity(Number(u.searchParams.get('n') ?? 40)) });
+    if (p === '/api/charts')    return json(res, 200, await charts());
     if (p === '/api/readiness') return json(res, 200, await readiness());
     if (p === '/api/settings')  return json(res, 200, await settings());
     if (p === '/api/run') {
@@ -1058,7 +1345,7 @@ const server = createServer(async (req, res) => {
             err: `Not available here. ${s.label} is a gate of the extracted repository (${s.cwd}), which is not present alongside this one.` });
         }
         if (k === 'replay') {
-          const a = replayAvailability();
+          const a = await replayAvailability();
           if (!a.available) return json(res, 200, { key: k, cli: `${s.cmd} ${s.args.join(' ')}`, ok: false, code: null, unavailable: true, ms: 0, out: '', err: a.reason });
         }
         const r = await run(s.cmd, s.args, 300_000, s.cwd ?? ROOT);
@@ -1067,9 +1354,9 @@ const server = createServer(async (req, res) => {
       }
       return json(res, 400, { error: `"${k}" is not in the allowlist. This console can only run commands it was told about, and never one that can change Reddit state.` });
     }
-    if (p === '/api/certifications') return json(res, 200, certifications());
+    if (p === '/api/certifications') return json(res, 200, await certifications());
     if (p === '/api/certification') {
-      const c = certification(Number(u.searchParams.get('index')));
+      const c = await certification(Number(u.searchParams.get('index')));
       return c ? json(res, 200, c) : json(res, 404, { error: 'no such certification record' });
     }
     if (p === '/api/ground-truth') return json(res, 200, groundTruth());
@@ -1080,7 +1367,7 @@ const server = createServer(async (req, res) => {
         ? json(res, 403, { error: 'refused — outside the read-only surface, missing, or too large' })
         : json(res, 200, { path: u.searchParams.get('path'), body: b });
     }
-    if (p === '/api/log') return json(res, 200, logTail(u.searchParams.get('name') ?? '', Number(u.searchParams.get('n') ?? 400)));
+    if (p === '/api/log') return json(res, 200, await logTail(u.searchParams.get('name') ?? '', Number(u.searchParams.get('n') ?? 400)));
 
     res.writeHead(404, { 'content-type': 'text/plain' });
     return res.end('not found');
@@ -1093,7 +1380,11 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('\n  redbot operator console');
   console.log('  -----------------------');
   console.log(`  http://127.0.0.1:${PORT}\n`);
-  console.log('  Read-only. Runs existing commands and shows their output verbatim.');
-  console.log('  Cannot publish: reply, regret, observe, read, search, session and login');
-  console.log('  are absent from the allowlist.\n  Ctrl+C to stop.\n');
+  console.log('  Runs existing commands and shows their output verbatim.');
+  console.log('  GET is read-only: reply, regret, observe, read, search, session and login');
+  console.log('  are absent from the command allowlist.');
+  console.log('  The Jobs page is not: it queues work and can run one scheduler pass, which');
+  console.log('  drives the selected account\'s Chrome.');
+  console.log('  Cannot publish: publish, reply-comment and post stop at "waiting" for a');
+  console.log('  person, and reply is in neither allowlist.\n  Ctrl+C to stop.\n');
 });

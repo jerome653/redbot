@@ -304,7 +304,9 @@ mark{background:rgba(210,153,34,.3);color:var(--fg);border-radius:2px;padding:0 
       <button class="searchbtn" id="openPalette" style="min-width:150px"><span>Commands</span><kbd>Ctrl K</kbd></button>
       <span class="chip" id="c-op"></span>
       <span class="chip" id="c-freeze"></span>
-      <span class="chip bad"><i class="dot"></i>read-only</span>
+      <!-- Said "read-only" while the Jobs page queued work and ran scheduler passes. The chip a
+           person glances at is the worst place to be approximately right about what a tool can do. -->
+      <span class="chip bad" title="Reading is read-only. The Jobs page queues work and can run one scheduler pass against the selected account's browser. Publishing is not possible: publish, reply-comment and post stop at &quot;waiting&quot; for a person, and reply is in neither allowlist."><i class="dot"></i>cannot publish</span>
     </div>
     <div class="wrap" id="wrap"></div>
   </main>
@@ -720,7 +722,7 @@ R.dashboard=async root=>{
   pc.append(pb);root.append(sec('Pipeline',''),pc);
 
   const dist=ch.verdictDistribution.counts,r3=el('div','grid c4');
-  [['Total certifications',c.certificationRecords,'records on disk',c.certificationRecords?'':'zero'],
+  [['Total certifications',c.certificationRecords,'rows in redbot.certifications',c.certificationRecords?'':'zero'],
    ['CERTIFIED',dist.CERTIFIED,'never produced on real input',dist.CERTIFIED?'good':'zero'],
    ['ESCALATE',dist.ESCALATE,'never produced on real input',dist.ESCALATE?'warnv':'zero'],
    ['REJECT',dist.REJECT,'every verdict so far',dist.REJECT?'warnv':''],
@@ -729,24 +731,24 @@ R.dashboard=async root=>{
    ['Published',c.draftsPublished,'nothing has been posted',c.draftsPublished?'good':'zero'],
    ['Operator reviews',c.reviews,'no draft decided at the prompt',c.reviews?'good':'zero']]
    .forEach(([k,v,dd,cls])=>{const m=metric(k,0,dd,cls);r3.append(m);countTo(m.querySelector('.v'),v)});
-  root.append(sec('Live metrics','every figure read from disk'),r3);
+  root.append(sec('Live metrics','every figure read from the database'),r3);
 
   const cw=el('div','grid c2');
   const cg=ch.corpusGrowth,c1=el('div','card');
-  c1.append(html('div','card-h','<h3>Corpus growth</h3><span class="hint">data/history.jsonl</span>'));
+  c1.append(html('div','card-h','<h3>Corpus growth</h3><span class="hint">redbot.history</span>'));
   const cb1=el('div','card-b');
   if(cg.available){cb1.append(sparkArea(cg.series,{color:'var(--info)',key:'cumulative'}));
     cb1.append(html('div','tiny fnt',`cumulative added <strong style="color:var(--fg)">${cg.series.at(-1).cumulative}</strong> · current corpus <strong style="color:var(--fg)">${cg.currentThreads}</strong> — ${esc(cg.note)}`))}
   else cb1.append(html('div','note warn','No collection history.'));
   c1.append(cb1);
   const c2=el('div','card');
-  c2.append(html('div','card-h','<h3>Certification distribution</h3><span class="hint">data/certifications.jsonl</span>'));
+  c2.append(html('div','card-h','<h3>Certification distribution</h3><span class="hint">redbot.certifications</span>'));
   const cb2=el('div','card-b');
   cb2.append(barsH([{k:'CERTIFIED',v:dist.CERTIFIED,note:'never produced'},{k:'ESCALATE',v:dist.ESCALATE,note:'never produced'},{k:'REJECT',v:dist.REJECT,note:'every record'}],
     r=>r.k==='CERTIFIED'?'var(--ok)':r.k==='ESCALATE'?'var(--warn)':'var(--bad)'));
   cb2.append(html('div','note bad','<strong>Every verdict on real input is REJECT.</strong> An engine that has only ever said no is not yet distinguishable from one that always says no.'));
   c2.append(cb2);cw.append(c1,c2);
-  root.append(sec('Trends','series derived from files on disk'),cw);
+  root.append(sec('Trends','series derived from the database'),cw);
 
   const ac=el('div','card');
   ac.append(html('div','card-h','<h3>Recent activity</h3><span class="hint">newest first</span>'));
@@ -973,7 +975,11 @@ R.jobs=async root=>{
     '<div class="note" style="margin-top:10px">The fields map to what the kind needs — '+
     '<code>read</code> takes a subreddit, <code>vote</code> takes a permalink and a direction, '+
     '<code>post</code> takes a subreddit and a title. A wrong field fails the job with the reason, '+
-    'it does not guess. <strong>Running a pass never publishes.</strong></div>';
+    'it does not guess. The server accepts only the kinds in this list; anything else is refused '+
+    'before the CLI is called.<br><strong>Running a pass never publishes</strong> — <code>publish</code>, '+
+    '<code>reply-comment</code> and <code>post</code> stop at “waiting” for a person. It does drive '+
+    '<strong>'+esc(curAccount())+'</strong>’s own Chrome, <strong>one pass at a time</strong>: the '+
+    'button disables itself while a pass is in flight and the server refuses a second one.</div>';
   root.append(form);
 
   $('#jadd').onclick=async()=>{
@@ -995,11 +1001,25 @@ R.jobs=async root=>{
     if(r.out)termWrite(esc(r.out));
     const rt=ensurePage('jobs');rt.dataset.loaded='';rt.textContent='';R.jobs(rt);rt.dataset.loaded='1';
   };
-  $('#jwork').onclick=async()=>{
+  /**
+   * A pass drives the account's browser for as long as its jobs take. Two clicks used to start
+   * two schedulers on the same Chrome — the server now refuses the second with 409, and the
+   * button goes with it so the operator is not left guessing which click counted.
+   */
+  const workBtn=$('#jwork');
+  workBtn.onclick=async()=>{
+    const was=workBtn.textContent;
+    workBtn.disabled=true;workBtn.textContent='running…';
     termOpen();termSys(`running one pass for ${curAccount()}…`);
-    const r=await jobPost({op:'work',account:curAccount()});
-    termWrite(esc(r.out||r.err||''));
-    termSys(r.ok?'pass finished — nothing was published':'pass failed');
+    try{
+      const r=await jobPost({op:'work',account:curAccount()});
+      termWrite(esc(r.out||r.err||''));
+      termSys(r.ok?'pass finished — nothing was published':`pass refused or failed: ${r.error||'see the output above'}`);
+    }catch(e){
+      termSys('pass failed: '+esc(String(e&&e.message||e)));
+    }finally{
+      workBtn.disabled=false;workBtn.textContent=was;
+    }
     const rt=ensurePage('jobs');rt.dataset.loaded='';rt.textContent='';R.jobs(rt);rt.dataset.loaded='1';
   };
 };
@@ -1151,9 +1171,11 @@ let LOG_STATE={name:'history',auto:false,paused:false,timer:null,filter:''};
 R.logs=async root=>{
   root.innerHTML='<div class="note">Loading…</div>';
   const cmds=CMDS||await api('/api/commands');root.textContent='';
-  const FILES=[['history','history.jsonl','every command that ran'],['observations','observations.jsonl','checkpoint readings'],
-    ['reviews','reviews.jsonl','operator decisions at the approval prompt'],['regret','regret.jsonl','the two human questions'],
-    ['interactions','interactions.jsonl','immutable publish rows'],['trace','trace.jsonl','pipeline telemetry']];
+  /* Named for the tables they now are. Labelling these "history.jsonl" sent an operator
+     looking for a file nothing has written since the store moved to Postgres. */
+  const FILES=[['history','redbot.history','every command that ran'],['observations','redbot.observations','checkpoint readings'],
+    ['reviews','redbot.reviews','operator decisions at the approval prompt'],['regret','redbot.regret','the two human questions'],
+    ['interactions','redbot.interactions','immutable publish rows'],['trace','redbot.trace','pipeline telemetry']];
   const bar=el('div','bar-row');
   const auto=el('button','btn sm','Auto-refresh: off');
   const pause=el('button','btn sm','Pause');pause.disabled=true;
@@ -1169,7 +1191,7 @@ R.logs=async root=>{
       exec(c.key,c.cli);view.textContent='';view.append(html('div','note','Output is streaming to the terminal drawer below.'))};
     idx.append(b);
   });
-  idx.append(html('div','tiny fnt','<div style="padding:14px 10px 6px;text-transform:uppercase;letter-spacing:.09em">Append-only files</div>'));
+  idx.append(html('div','tiny fnt','<div style="padding:14px 10px 6px;text-transform:uppercase;letter-spacing:.09em">Append-only logs</div>'));
   FILES.forEach(([k,name,blurb])=>{
     const b=el('button');b.dataset.log=k;
     b.innerHTML=`<span class="t">${esc(name)}</span><span class="s">${esc(blurb)}</span>`;
@@ -1185,11 +1207,11 @@ R.logs=async root=>{
     auto.classList.toggle('pri',LOG_STATE.auto);pause.disabled=!LOG_STATE.auto;
     clearInterval(LOG_STATE.timer);
     if(LOG_STATE.auto)LOG_STATE.timer=setInterval(()=>{
-      if(!LOG_STATE.paused&&CUR==='logs')paintLog(LOG_STATE.name,LOG_STATE.name+'.jsonl',view,true)},5000);
+      if(!LOG_STATE.paused&&CUR==='logs')paintLog(LOG_STATE.name,'redbot.'+LOG_STATE.name,view,true)},5000);
   };
   pause.onclick=()=>{LOG_STATE.paused=!LOG_STATE.paused;pause.textContent=LOG_STATE.paused?'Resume':'Pause';pause.classList.toggle('pri',LOG_STATE.paused)};
   jump.onclick=()=>{const p=view.querySelector('pre');if(p)p.scrollTop=p.scrollHeight};
-  filt.oninput=()=>{LOG_STATE.filter=filt.value;paintLog(LOG_STATE.name,LOG_STATE.name+'.jsonl',view,true)};
+  filt.oninput=()=>{LOG_STATE.filter=filt.value;paintLog(LOG_STATE.name,'redbot.'+LOG_STATE.name,view,true)};
 
   const target=idx.querySelector(`[data-log="${LOG_STATE.name}"]`)||idx.querySelector('[data-log]');
   target?.click();
@@ -1200,10 +1222,17 @@ async function paintLog(k,name,view,quiet){
   const prevTop=view.querySelector('pre')?.scrollTop;
   view.textContent='';
   const card=el('div','card');
-  card.append(html('div','card-h',`<h3>${esc(name)}</h3><span class="hint">${r.available?`${r.total} lines`:'absent'}</span>`));
+  /* The logs are rows now, so the heading names where this actually came from —
+     "redbot.history", not "history.jsonl". A viewer that labels a table with a filename is
+     how you end up hunting for a file nothing writes. */
+  const where=r.path||name;
+  card.append(html('div','card-h',`<h3>${esc(where)}</h3><span class="hint">${r.available?`${r.total} lines`:'absent'}</span>`));
   const cb=el('div','card-b');
   if(!r.available)cb.append(html('div','note warn',esc(r.reason)));
   else{
+    /* Set when the table was empty and a pre-migration file answered instead. Rendering it
+       is the whole point of returning it: stale evidence must not pass for live output. */
+    if(r.note)cb.append(html('div','note warn',esc(r.note)));
     let lines=r.lines;
     if(LOG_STATE.filter)lines=lines.filter(l=>l.toLowerCase().includes(LOG_STATE.filter.toLowerCase()));
     cb.append(html('p','tiny fnt',`${lines.length} of ${r.total} line(s)${LOG_STATE.filter?` matching “${esc(LOG_STATE.filter)}”`:''}${LOG_STATE.auto?` · auto-refresh ${LOG_STATE.paused?'paused':'on'}`:''}`));
@@ -1615,6 +1644,11 @@ R.validation=async root=>{
   cmds.excluded.forEach(x=>tb.append(html('tr','',`<td class="mono">${esc(x.cmd)}</td><td class="mut">${esc(x.why)}</td>`)));
   t.append(tb);tw.append(t);cb.append(tw);
   cb.append(html('div','note','<strong>This is an allowlist, not a denylist.</strong> A denylist admits every future command by default, and one of them publishes.'));
+  // The table above, read alone, overstates the refusal: several of those names are reachable as
+  // queued work. Both halves are shown together so neither can be quoted as the whole boundary.
+  if(cmds.queue)cb.append(html('div','note',
+    '<strong>The queue is a second allowlist.</strong> '+esc(cmds.queue.note)+
+    '<div style="margin-top:8px"><code>'+cmds.queue.kinds.map(esc).join('</code> · <code>')+'</code></div>'));
   c.append(cb);root.append(c);
 };
 
@@ -1681,7 +1715,10 @@ R.settings=async root=>{
    ['Freeze',s.freeze.frozen?`<span class="chip info"><i class="dot"></i>frozen ${esc(s.freeze.version??'')}</span>`:'<span class="chip warn"><i class="dot"></i>not frozen</span>'],
    ['Repository',`<span class="mono">${esc(s.repoPath)}</span>`],
    ['Publication repo',s.publicationRepo?`<span class="mono">${esc(s.publicationRepo)}</span>`:'<span class="fnt">none found</span>'],
-   ['Mode','<span class="chip bad"><i class="dot"></i>read-only · cannot publish</span>']]
+   // Rendered from the server's own answer rather than hard-coded, so this row cannot go on
+   // claiming "read-only" after the queue made that false a second time.
+   ['Mode',`<span class="chip warn"><i class="dot"></i>${s.readOnly?'read-only':'reads · queues jobs · runs one pass'}</span>`],
+   ['Publishing',`<span class="chip ${s.canPublish?'warn':'bad'}"><i class="dot"></i>${s.canPublish?'possible from here':'not possible from this console'}</span>`]]
    .forEach(([k,v])=>cb.append(html('div','kv',`<span class="k">${esc(k)}</span><span class="v">${v}</span>`)));
   c.append(cb);root.append(c);
 
@@ -1716,10 +1753,21 @@ about whether a draft is certified, neither is authoritative.
 
 ## What it cannot do
 
-\`reply\` · \`regret\` · \`observe\` · \`read\` · \`search\` · \`session\` · \`login\` · \`draft\` ·
-\`opportunity\` · \`certify\` are absent from the allowlist. Publishing requires a person at a real
-terminal — routing the approval prompt through a web page would destroy the property that makes every
+**It cannot publish.** \`reply\` — the command that sends one — is in neither allowlist, and
+\`publish\` · \`reply-comment\` · \`post\` stop at **"waiting"** when a pass reaches them, because the
+scheduler guards on the kind before it looks for a runner. Approval requires a person at a real
+terminal — routing that prompt through a web page would destroy the property that makes every
 published word attributable to a human.
+
+## What it does that is not reading
+
+There are two allowlists, and only the first is read-only. \`reply\` · \`regret\` · \`observe\` ·
+\`read\` · \`search\` · \`session\` · \`login\` · \`draft\` · \`opportunity\` · \`certify\` are absent
+from the **command** allowlist, so no button runs them directly. The **queue** is the other one:
+\`read\` · \`search\` · \`opportunity\` · \`draft\` · \`certify\` · \`vote\` · \`save\` · \`follow\` ·
+\`post\` · \`reply-comment\` · \`publish\` may be queued for an account, and **Run one pass** runs the
+eligible ones — spending model calls, writing evidence and driving that account's own Chrome. One
+pass at a time; a second is refused while the first is running.
 
 There is also no control that writes a ground-truth label. Ground truth never originates from a
 language model, and a form that set a label would let a click become an answer key.
