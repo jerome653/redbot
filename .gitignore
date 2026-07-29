@@ -27,6 +27,24 @@ data/**/*.png
 # Console-written approval tokens and decision records — local, single-use, never committed.
 data/approvals/
 
+# ---------------------------------------------------------------------------
+# EVERYTHING under data/, including files with no extension.
+#
+# The rules above match by EXTENSION and by directory, which left extensionless local state
+# tracked-able. Found 2026-07-30 when `data/machine-id` — the file that decides which computer
+# this clone believes it is (src/machine.ts, db/migrations/0013) — turned up as an untracked
+# file about to be committed, alongside `data/accounts/**/*.claim`. Committing the machine id
+# would give a second clone this machine's identity, which is precisely what its own comment
+# says must never happen ("two clones on two machines must not agree about which machine they
+# are"). Nothing under data/ has ever been tracked, so this asserts the intent the comments
+# already claimed rather than changing what is stored.
+# ---------------------------------------------------------------------------
+data/
+
+# Database credentials. db/.env holds POSTGRES_PASSWORD; db/.env.example is the
+# committed template and carries no secret.
+db/.env
+
 # Build output
 dist/
 node_modules/
@@ -35,3 +53,7 @@ node_modules/
 *.tmp
 *.log
 qa/evidence/*.png
+
+# Console UI captures. Written by tools/product/ui.test.mjs when REDBOT_UI_SHOTS is unset;
+# they are evidence for one run, not something to keep in step with the code.
+tools/product/.ui-shots/
