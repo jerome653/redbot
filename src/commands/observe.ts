@@ -192,7 +192,7 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
     return 1;
   }
 
-  const published = loadDrafts().filter((d) => d.status === 'published');
+  const published = (await loadDrafts()).filter((d) => d.status === 'published');
   const targets = draftIdArg ? published.filter((d) => d.id === draftIdArg) : published;
 
   if (!targets.length) {
@@ -211,7 +211,7 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
 
   const s = await attach();
   const out = await openSignedOut(s.browser);
-  const threads = loadThreads();
+  const threads = await loadThreads();
 
   try {
     for (const draft of targets) {
@@ -227,13 +227,13 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
       /* ---- signed in ---- */
       await s.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
       if (await isRateLimited(s.page)) {
-        record('ratelimit', `429 during observe of ${draft.id}`);
+        await record('ratelimit', `429 during observe of ${draft.id}`);
         say.fail('  rate-limited — stopping so the account is not pushed further');
         return 1;
       }
       const blocked = await isBlocked(s.page);
       if (blocked) {
-        record('login.fail', `block page during observe of ${draft.id}`);
+        await record('login.fail', `block page during observe of ${draft.id}`);
         say.fail('  Reddit served a block page — cannot observe right now');
         return 1;
       }
@@ -248,7 +248,7 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
         `${inView.score != null ? ` — score ${inView.score}` : ''}` +
         `${inView.childReplies != null ? ` — ${inView.childReplies} repl${inView.childReplies === 1 ? 'y' : 'ies'}` : ''}`);
 
-      recordObservation({
+      await recordObservation({
         account: me.username,
         kind: inView.present ? 'reply-visible-signed-in' : 'reply-absent-signed-in',
         vector: 'signed-in',
@@ -259,7 +259,7 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
       });
 
       if (inView.removalNotice) {
-        recordObservation({
+        await recordObservation({
           account: me.username,
           kind: /deleted/i.test(inView.removalNotice) ? 'reply-marked-deleted' : 'reply-marked-removed',
           vector: 'signed-in',
@@ -270,13 +270,13 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
         });
       }
       if (inView.score != null) {
-        recordObservation({
+        await recordObservation({
           account: me.username, kind: 'reply-vote-count', vector: 'signed-in',
           permalink: url, checkpoint, value: inView.score
         });
       }
       if (inView.childReplies != null) {
-        recordObservation({
+        await recordObservation({
           account: me.username, kind: 'reply-child-count', vector: 'signed-in',
           permalink: url, checkpoint, value: inView.childReplies
         });
@@ -296,7 +296,7 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
         say.step(`  signed out: ${outView.present ? 'visible' : 'NOT VISIBLE'}` +
           `${outView.removalNotice ? ` — notice: "${outView.removalNotice}"` : ''}`);
 
-        recordObservation({
+        await recordObservation({
           account: me.username,
           kind: outView.present ? 'reply-visible-signed-out' : 'reply-absent-signed-out',
           vector: 'signed-out',
@@ -314,7 +314,7 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
         }
       }
 
-      record('observe', `checkpoint ${checkpoint} for ${draft.id}`, {
+      await record('observe', `checkpoint ${checkpoint} for ${draft.id}`, {
         draftId: draft.id,
         checkpoint,
         elapsedMinutes,
@@ -329,7 +329,7 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
        */
       try {
         const author = (threadRec?.author ?? '').toLowerCase();
-        const row = (vector: 'signed-in' | 'signed-out', sight: CommentSighting, note: string) =>
+        const row = async (vector: 'signed-in' | 'signed-out', sight: CommentSighting, note: string) =>
           appendInteraction({
             schemaVersion: INTERACTION_SCHEMA_VERSION,
             ts: new Date().toISOString(),
@@ -370,9 +370,9 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
             note
           });
 
-        row('signed-in', inView, `${inView.via}; elapsed ${elapsedMinutes} min`);
+        await row('signed-in', inView, `${inView.via}; elapsed ${elapsedMinutes} min`);
         if (out && outSight) {
-          row('signed-out', outSight, `${outSight.via}; logged-out context; elapsed ${elapsedMinutes} min`);
+          await row('signed-out', outSight, `${outSight.via}; logged-out context; elapsed ${elapsedMinutes} min`);
         }
       } catch (e) {
         say.warn(`interaction rows not written: ${e instanceof Error ? e.message : String(e)}`);

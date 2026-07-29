@@ -16,8 +16,8 @@ import { say } from '../log.js';
 
 /* ------------------------------------------------------------------ */
 
-export function healthCmd(account?: string): number {
-  const v = health(account ?? null);
+export async function healthCmd(account?: string): Promise<number> {
+  const v = await health(account ?? null);
   say.head(`redbot health — ${v.state}`);
 
   const c = v.counters;
@@ -42,8 +42,8 @@ export function healthCmd(account?: string): number {
 
 /* ------------------------------------------------------------------ */
 
-export function metricsCmd(asJson = false): number {
-  const m = computeMetrics();
+export async function metricsCmd(asJson = false): Promise<number> {
+  const m = await computeMetrics();
   if (asJson) {
     console.log(JSON.stringify(m, null, 2));
     return 0;
@@ -111,8 +111,8 @@ export function policyCmd(): number {
 
 /* ------------------------------------------------------------------ */
 
-export function reviewCmd(): number {
-  const reviews = loadReviews();
+export async function reviewCmd(): Promise<number> {
+  const reviews = await loadReviews();
   const s = summarizeReviews(reviews);
 
   say.head(`redbot review — ${s.total} decision(s) on record`);
@@ -138,8 +138,8 @@ export function reviewCmd(): number {
   return 0;
 }
 
-export function insightsCmd(): number {
-  const i = computeInsights();
+export async function insightsCmd(): Promise<number> {
+  const i = await computeInsights();
   say.head('redbot insights — where the pipeline is losing candidates');
 
   say.step('Funnel');
@@ -174,17 +174,17 @@ export function insightsCmd(): number {
   return 0;
 }
 
-export function reportCmd(): number {
+export async function reportCmd(): Promise<number> {
   say.head('redbot report');
-  const paths = generateAll();
+  const paths = await generateAll();
   for (const p of paths) say.ok(p.replace(/.*[/\\]reports[/\\]/, 'reports/'));
   say.info('');
   say.step('Reports are regenerated from the files on disk every run — never hand-edited.');
   return 0;
 }
 
-export function selectCmd(showAll = false): number {
-  const candidates = rankCandidates(loadThreads(), loadAssessments());
+export async function selectCmd(showAll = false): Promise<number> {
+  const candidates = rankCandidates(await loadThreads(), await loadAssessments());
   if (!candidates.length) {
     say.warn('Nothing assessed yet. Run `redbot read` then `redbot opportunity`.');
     return 1;

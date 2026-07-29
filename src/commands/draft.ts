@@ -43,16 +43,16 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 export async function draft(threadIdArg?: string): Promise<number> {
   say.head('redbot draft');
 
-  const threads = loadThreads();
-  const gaps = loadGaps();
-  const assessments = loadAssessments();
+  const threads = await loadThreads();
+  const gaps = await loadGaps();
+  const assessments = await loadAssessments();
 
   if (!assessments.length) {
     say.warn('No opportunity assessments on record. Run `redbot opportunity` first.');
     return 1;
   }
 
-  const drafted = new Set(loadDrafts().map((d) => d.threadId));
+  const drafted = new Set((await loadDrafts()).map((d) => d.threadId));
 
   const candidates = assessments
     .filter((a) => a.verdict === 'contribute')
@@ -126,7 +126,7 @@ export async function draft(threadIdArg?: string): Promise<number> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     say.fail(msg);
-    record('error', `draft failed for ${thread.id}: ${msg}`);
+    await record('error', `draft failed for ${thread.id}: ${msg}`);
     return 1;
   }
 
@@ -135,7 +135,7 @@ export async function draft(threadIdArg?: string): Promise<number> {
     parsed = extractJson<RawDraft>(raw);
   } catch {
     say.fail('The model did not return the required JSON. Nothing saved.');
-    record('error', `draft for ${thread.id} returned unparseable output`, { head: raw.slice(0, 200) });
+    await record('error', `draft for ${thread.id} returned unparseable output`, { head: raw.slice(0, 200) });
     return 1;
   }
 
@@ -145,7 +145,7 @@ export async function draft(threadIdArg?: string): Promise<number> {
     say.ok('The model declined to draft — it could not make the case for replying.');
     say.step(`Reason: ${why}`);
     say.step('That is a result, not a failure. Nothing was saved.');
-    record('draft.declined', `model declined to draft for ${thread.id}`, {
+    await record('draft.declined', `model declined to draft for ${thread.id}`, {
       threadId: thread.id, why, opportunityScore: pick.score
     });
     trace('draft', 'draft.declined', {
@@ -182,7 +182,7 @@ export async function draft(threadIdArg?: string): Promise<number> {
     ...(selectedAccount()?.handle ? { account: selectedAccount()!.handle } : {}),
     status: 'pending'
   };
-  saveDraft(saved);
+  await saveDraft(saved);
 
   say.info('\n--- the case for replying ---');
   say.info(`  why this thread : ${contribution.whyThread}`);
@@ -212,7 +212,7 @@ export async function draft(threadIdArg?: string): Promise<number> {
   say.step(`Draft id: ${saved.id}`);
   say.step('Next: redbot reply');
 
-  record('draft', `drafted for "${thread.title.slice(0, 60)}"`, {
+  await record('draft', `drafted for "${thread.title.slice(0, 60)}"`, {
     draftId: saved.id,
     threadId: thread.id,
     lintOk: lint.ok,

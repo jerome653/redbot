@@ -14,7 +14,7 @@
  */
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT, DATA, paths, config, claudeConfigDir, OperatorAuthError } from '../config.js';
+import { ROOT, DATA, paths, config, claudeConfigDir, OperatorAuthError, NoAccountError } from '../config.js';
 import { isBrowserUp } from '../browser.js';
 import { policy, limitsByProvenance } from '../policy.js';
 import { loadDrafts, loadThreads, loadGaps, loadAssessments } from '../store.js';
@@ -162,9 +162,27 @@ export async function doctor(): Promise<number> {
   }
 
   /* ---- browser ---- */
-  const up = await isBrowserUp();
-  add('debuggable chrome', up ? 'PASS' : 'WARN',
-    up ? `reachable at ${config.browser.cdpEndpoint}` : `nothing at ${config.browser.cdpEndpoint} — reading and publishing will refuse`);
+  /**
+   * Resolved behind a guard, because it can now REFUSE.
+   *
+   * `config.browser.cdpEndpoint` used to answer 127.0.0.1:9222 whenever no account was
+   * selected — a port a real, unrelated browser often holds. It throws a `NoAccountError`
+   * instead now, and reporting that is precisely doctor's job: an install that cannot say
+   * which Chrome it drives is broken, and dying here would report nothing at all.
+   */
+  let endpoint: string | null = null;
+  try {
+    endpoint = config.browser.cdpEndpoint;
+  } catch (e) {
+    add('debuggable chrome', e instanceof NoAccountError ? 'FAIL' : 'WARN',
+      e instanceof Error ? e.message.split('\n')[0]! : String(e));
+  }
+
+  const up = endpoint ? await isBrowserUp(endpoint) : false;
+  if (endpoint) {
+    add('debuggable chrome', up ? 'PASS' : 'WARN',
+      up ? `reachable at ${endpoint}` : `nothing at ${endpoint} — reading and publishing will refuse`);
+  }
 
   /**
    * Is that browser HEADED?
@@ -187,7 +205,7 @@ export async function doctor(): Promise<number> {
   if (up) {
     let ua: string | null = null;
     try {
-      const r = await fetch(`${config.browser.cdpEndpoint}/json/version`, { signal: AbortSignal.timeout(2500) });
+      const r = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(2500) });
       if (r.ok) ua = ((await r.json()) as { 'User-Agent'?: string })['User-Agent'] ?? null;
     } catch { /* unreachable is already reported by the check above */ }
 
@@ -204,7 +222,7 @@ export async function doctor(): Promise<number> {
   }
 
   /* ---- pipeline staleness ---- */
-  const drafts = loadDrafts();
+  const drafts = await loadDrafts();
   const pending = drafts.filter((d) => d.status === 'pending');
   const stalePending = pending.filter((d) => Date.now() - Date.parse(d.createdAt) > 24 * 3_600_000);
   add(
@@ -215,7 +233,7 @@ export async function doctor(): Promise<number> {
       : 'none pending'
   );
 
-  const threads = loadThreads();
+  const threads = await loadThreads();
   const freshThreads = threads.filter(
     (t) => t.ageMinutes != null && t.ageMinutes / 60 <= policy.maxThreadAgeHoursToPublish.value
   ).length;
@@ -227,7 +245,7 @@ export async function doctor(): Promise<number> {
 
   /* ---- observation debt ---- */
   const published = drafts.filter((d) => d.status === 'published');
-  const observations = loadObservations();
+  const observations = await loadObservations();
   if (published.length) {
     const due = published.filter((d) => {
       const hours = (Date.now() - Date.parse(d.decidedAt ?? d.createdAt)) / 3_600_000;
@@ -243,7 +261,7 @@ export async function doctor(): Promise<number> {
   /* ---- operator-judgement debt ---- */
   // The 24h regret check is the highest-value signal in the system and the easiest to forget,
   // because nothing breaks when it is skipped. Surfacing it here is the only reminder there is.
-  const regrets = loadRegrets();
+  const regrets = await loadRegrets();
   const regretDue = published.filter((d) => {
     const hours = (Date.now() - Date.parse(d.decidedAt ?? d.createdAt)) / 3_600_000;
     return hours >= 24 && !regrets.some((r) => r.draftId === d.id && r.kind === 'regret');
@@ -290,7 +308,7 @@ export async function doctor(): Promise<number> {
     `${prov.measured.length} measured · ${prov.declared.length} declared · ${prov.provisional.length} provisional placeholders`
   );
 
-  const reviews = loadReviews();
+  const reviews = await loadReviews();
   add(
     'review dataset',
     reviews.length === 0 ? 'WARN' : 'PASS',
@@ -300,7 +318,7 @@ export async function doctor(): Promise<number> {
   );
 
   /* ---- telemetry ---- */
-  const events = loadTrace();
+  const events = await loadTrace();
   add('telemetry', events.length ? 'PASS' : 'WARN',
     events.length ? `${events.length} trace event(s) across ${new Set(events.map((e) => e.runId)).size} run(s)` : 'no trace events yet');
 

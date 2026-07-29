@@ -83,14 +83,28 @@ export interface ConfirmationRecord extends Evidence {
   error?: string;
 }
 
+import { getPool } from './db.js';
+import { insertConfirmation, selectConfirmations } from './db/logs.js';
+
 export const confirmationsPath = (): string => {
   mkdirSync(DATA, { recursive: true });
   return join(DATA, 'confirmations.jsonl');
 };
 
 /** Append-only. A confirmation is an observation, and observations are never rewritten. */
-export function recordConfirmation(rec: ConfirmationRecord): void {
-  appendFileSync(confirmationsPath(), JSON.stringify(rec) + '\n', 'utf8');
+export async function recordConfirmation(rec: ConfirmationRecord): Promise<void> {
+  await insertConfirmation(getPool(), rec);
+}
+
+/**
+ * Every confirmation, oldest first.
+ *
+ * The JSONL era had no loader — the file was written and read by eye. A log nothing
+ * can read is a log nobody checks, and "was that action actually confirmed?" is the
+ * question this module exists to answer.
+ */
+export async function loadConfirmations(): Promise<ConfirmationRecord[]> {
+  return selectConfirmations(getPool());
 }
 
 export class UnconfirmedError extends Error {
@@ -138,7 +152,7 @@ export async function act<T>(spec: ActSpec<T>): Promise<{ result: T; evidence: E
     result = await spec.perform();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    recordConfirmation({
+    await recordConfirmation({
       ts: new Date().toISOString(),
       action: spec.action,
       account: spec.account,
@@ -155,7 +169,7 @@ export async function act<T>(spec: ActSpec<T>): Promise<{ result: T; evidence: E
 
   const evidence = await spec.confirm(result);
 
-  recordConfirmation({
+  await recordConfirmation({
     ts: new Date().toISOString(),
     action: spec.action,
     account: spec.account,

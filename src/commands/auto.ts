@@ -23,27 +23,16 @@ import { opportunity } from './opportunity.js';
 import { draft } from './draft.js';
 import { certifyCmd } from './certify.js';
 import { record, say } from '../log.js';
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-
-interface SourcesFile {
-  subreddits?: Array<{ name: string; enabled?: boolean }>;
-  searches?: Array<{ query: string; enabled?: boolean }>;
-}
-
-function enabledSources(): { subs: string[]; queries: string[] } {
-  const f = join(DATA, 'sources.json');
-  if (!existsSync(f)) return { subs: [], queries: [] };
-  try {
-    const parsed = JSON.parse(readFileSync(f, 'utf8')) as SourcesFile;
-    return {
-      subs: (parsed.subreddits ?? []).filter((s) => s.enabled !== false).map((s) => s.name),
-      queries: (parsed.searches ?? []).filter((s) => s.enabled !== false).map((s) => s.query)
-    };
-  } catch {
-    return { subs: [], queries: [] };
-  }
-}
+/**
+ * Sources come from redbot.sources through src/sources.ts, which is also where "the file is
+ * absent" stopped meaning the same thing as "the file is corrupt".
+ *
+ * This file used to hold its own reader that caught every parse error and returned
+ * `{subs: [], queries: []}`. A typo in sources.json therefore produced "Nothing switched on —
+ * nothing to collect" on every cycle: an unattended loop that looked configured, ran forever,
+ * and collected nothing. That reader is gone; a corrupt list now stops the cycle and says why.
+ */
+import { enabledSources, SourcesError } from '../sources.js';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -58,23 +47,43 @@ async function cycle(): Promise<number> {
 
   const verdict = checkWindow({
     account,
-    repliesToday: account ? counters(account.handle).repliesToday : 0
+    repliesToday: account ? (await counters(account.handle)).repliesToday : 0
   });
 
   if (!verdict.allowed) {
     say.warn(`Skipping this cycle — ${verdict.detail}`);
-    record('auto.skip', verdict.detail, { rule: verdict.rule ?? null, account: account?.handle ?? null });
+    await record('auto.skip', verdict.detail, { rule: verdict.rule ?? null, account: account?.handle ?? null });
     return 0;
   }
   say.ok(verdict.detail);
 
-  const { subs, queries } = enabledSources();
+  /**
+   * A source list that cannot be read STOPS the cycle. It does not become an empty list.
+   *
+   * Returning 1 rather than 0 matters: the loop's caller treats a non-zero cycle as a real
+   * failure, so a broken config surfaces instead of scrolling past as a routine "nothing to do".
+   */
+  let subs: string[], queries: string[], from: string;
+  try {
+    ({ subs, queries, from } = await enabledSources());
+  } catch (e) {
+    const detail = e instanceof SourcesError ? e.message : String(e);
+    say.fail(`Refusing to run a cycle: the source list could not be read.\n  ${detail}`);
+    // `auto.error`, not `auto.skip` — a skip is a legitimate decision not to run, and health
+    // and reliability metrics read these. A broken config must not be counted as a quiet hour.
+    await record('auto.error', 'source list unreadable — refused to run a cycle', { detail });
+    return 1;
+  }
+
   if (!subs.length && !queries.length) {
-    say.warn('Nothing switched on in data/sources.json — nothing to collect.');
+    // Naming WHERE the empty answer came from: "nothing configured" and "the database is
+    // empty and the seed file is too" send a person to different places.
+    say.warn(`Nothing switched on (source of truth: ${from}) — nothing to collect.`);
+    say.step('Add one in the console, or: redbot sources import');
     return 0;
   }
 
-  const before = loadThreads().length;
+  const before = (await loadThreads()).length;
   for (const s of subs) {
     say.step(`Reading r/${s}…`);
     await read(s);
@@ -83,19 +92,19 @@ async function cycle(): Promise<number> {
     say.step(`Searching “${q}”…`);
     await search(q);
   }
-  const collected = loadThreads().length - before;
+  const collected = (await loadThreads()).length - before;
   say.step(`Collected ${collected} new thread(s).`);
 
   say.step('Working out which are worth answering…');
   await opportunity();
 
-  const draftsBefore = loadDrafts().length;
+  const draftsBefore = (await loadDrafts()).length;
   say.step('Writing a reply for the best one…');
   await draft();
-  const written = loadDrafts().length - draftsBefore;
+  const written = (await loadDrafts()).length - draftsBefore;
 
   if (written > 0) {
-    const newest = loadDrafts()[loadDrafts().length - 1];
+    const newest = (await loadDrafts())[(await loadDrafts()).length - 1];
     if (newest) {
       say.step(`Fact-checking ${newest.id}…`);
       await certifyCmd(newest.id);
@@ -104,7 +113,7 @@ async function cycle(): Promise<number> {
     say.step('Nothing worth writing this cycle — that is a normal outcome.');
   }
 
-  record('auto.cycle', `unattended cycle finished`, {
+  await record('auto.cycle', `unattended cycle finished`, {
     account: account?.handle ?? null, collected, drafted: written
   });
   say.ok('Cycle finished. Nothing was published — that still needs you.');
@@ -127,7 +136,7 @@ export async function auto(opts?: { once?: boolean; everyMinutes?: number }): Pr
       // A failed cycle must not kill the loop — the next one may well succeed.
       const msg = e instanceof Error ? e.message : String(e);
       say.fail(`Cycle failed: ${msg}`);
-      record('auto.error', msg, { level: 'error' });
+      await record('auto.error', msg, { level: 'error' });
     }
     say.step(`Sleeping ${minutes} minutes…`);
     await sleep(minutes * 60_000);

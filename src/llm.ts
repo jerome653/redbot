@@ -167,7 +167,7 @@ function completeViaCli(opts: CompleteOpts): Promise<string> {
  * Provider: Anthropic API
  * ------------------------------------------------------------------ */
 async function completeViaApi(opts: CompleteOpts): Promise<string> {
-  const key = anthropicKey();
+  const key = await anthropicKey();
   const { prompt, model, maxTokens = 1600, temperature = 0.4 } = opts;
   let lastError: Error | null = null;
 

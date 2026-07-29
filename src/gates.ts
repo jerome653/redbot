@@ -19,6 +19,7 @@ import { assessQuality, type QualityReport } from './quality.js';
 import { policy } from './policy.js';
 import { isQuestionShaped, currentAgeHours } from './select.js';
 import { MIN_OPPORTUNITY_SCORE } from './opportunity.js';
+import { checkWarmingComment, checkWarmingPace, isWarmingTarget, warmingStage } from './warming.js';
 import type { HealthVerdict } from './health.js';
 import type { WindowVerdict } from './window.js';
 import type { ThreadState } from './reddit/thread-state.js';
@@ -216,6 +217,67 @@ export function evaluateGates(input: GateInput): GateResult {
     }
   } else if (input.thread) {
     warnings.push('thread age unknown — could not check recency');
+  }
+
+  /* ---- 6b. warming: while the account is new, ACCOUNT-WARMING stage 1 IS the gate ---- */
+  /**
+   * Until 2026-07-27 `src/warming.ts` was a header and three exported functions with no caller
+   * outside their own test file, and `warming.ts` says in as many words that a rule nothing
+   * enforces is a note. This is where it stops being one — the rules now refuse a publish.
+   *
+   * Deliberately strict, and deliberately not opt-in. `warmingStage` keys off the acting
+   * account's measured state, so while that account is new EVERY comment it sends is judged by
+   * stage-1 rules, including one the contribution pipeline wrote. A 200-word answer carrying a
+   * link, from a two-day-old account, is the exact artefact the protocol exists to prevent, and
+   * it does not become safe because a different part of this repository produced it. The way out
+   * is to warm the account, not to route around the gate.
+   *
+   * The pace check reads `health.counters` rather than `health.mayPublish`: the verdict is a
+   * conclusion the caller computed, the counters are the facts it computed it from, and this
+   * gate declines to inherit someone else's conclusion about the same numbers.
+   */
+  const stage = warmingStage({
+    karma: input.health.counters.karma,
+    accountAgeDays: input.health.counters.accountAgeDays
+  });
+
+  if (stage.warming) {
+    const comment = checkWarmingComment(input.draft.body);
+    for (const i of comment.issues) {
+      blocks.push({ gate: `warming:${i.rule}`, reason: `${stage.why} — ${i.detail}` });
+    }
+    for (const w of comment.warnings) warnings.push(`warming — ${w}`);
+
+    // An unreadable `lastReplyAt` is not "long ago". Date.parse gives NaN and every comparison
+    // against NaN is false, so the spacing rule would have been silently satisfied by the one
+    // input that means "we cannot tell". Treated as this instant instead, which trips it.
+    const lastMs = input.health.counters.lastReplyAt
+      ? Date.parse(input.health.counters.lastReplyAt)
+      : null;
+    const minutesSinceLast =
+      lastMs === null ? null : Number.isFinite(lastMs) ? (now.getTime() - lastMs) / 60_000 : 0;
+
+    const pace = checkWarmingPace({
+      publishedToday: input.health.counters.repliesToday,
+      minutesSinceLast,
+      karma: input.health.counters.karma
+    });
+    for (const i of pace.issues) blocks.push({ gate: `warming:${i.rule}`, reason: i.detail });
+    for (const w of pace.warnings) warnings.push(`warming — ${w}`);
+
+    // Stage 1 picks threads for being READ, which is a tighter question than the 72h publish
+    // ceiling above answers: a 6h-old thread is well inside that ceiling and still buried.
+    if (input.thread) {
+      const target = isWarmingTarget({
+        ageHours: hours,
+        commentCount: input.thread.commentCount,
+        subreddit: input.thread.subreddit,
+        title: input.thread.title
+      });
+      if (!target.ok) {
+        blocks.push({ gate: 'warming:target', reason: `${stage.why} — ${target.why}` });
+      }
+    }
   }
 
   /* ---- 6-9. live page state ---- */

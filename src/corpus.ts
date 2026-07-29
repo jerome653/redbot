@@ -142,7 +142,7 @@ export const BUILT_IN_CORPORA: CorpusConfig[] = [
    * theme slug — but they are held here on the authority of the published sources they quote,
    * never on Argus's. Model output as ground truth is HRC-001 one level up.
    *
-   * `src/test/corpus-jurisdiction.test.ts` fails if any pattern here matches no card.
+   * `src/test/corpus-standing.test.ts` fails if any pattern here matches no card.
    */
   {
     id: 'wordpress-primary',
@@ -299,8 +299,19 @@ export function corpora(): LoadedCorpus[] {
   return cache;
 }
 
-/** Test seam — reload after writing a config in a temp directory. */
-export function resetCorpora(): void { cache = null; }
+/**
+ * Test seam — reload after writing a config in a temp directory.
+ *
+ * The idf weights below are derived from the loaded cards, so they are part of what a reload
+ * replaces. Left behind, the new corpus is scored with the OLD corpus's document frequencies:
+ * every term the old set never held weighs 0, so every card scores 0, drops under
+ * REFERENCE_MIN_SCORE, and findReference returns an empty list while reporting no error at
+ * all — the silent-empty outcome `unavailable` exists to make impossible everywhere else.
+ */
+export function resetCorpora(): void {
+  cache = null;
+  idfCache = null;
+}
 
 /* ------------------------------------------------------------------ *
  * Support lookup

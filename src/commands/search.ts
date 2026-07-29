@@ -93,7 +93,7 @@ async function preview(query: string, max: number): Promise<number> {
     // A block page renders as a normal document; collecting from it scrapes an interstitial and
     // keeps hitting Reddit. `isBlocked` was imported but never called here (evaluation L4).
     if (await isBlocked(s.page)) {
-      record('login.fail', `block page while searching "${query}"`, { query });
+      await record('login.fail', `block page while searching "${query}"`, { query });
       say.fail('Reddit served a block page. Open reddit.com by hand in that Chrome window once, then retry.');
       return 1;
     }
@@ -133,14 +133,14 @@ async function preview(query: string, max: number): Promise<number> {
     say.step(`Collect what you want:  redbot search --commit ${candidates.filter((c) => c.clean).slice(0, 3).map((c) => c.n).join(',') || '1,2'}`);
     say.step(`Or everything:          redbot search --commit all`);
 
-    record('search.preview', `"${query}": ${candidates.length} candidates, ${clean} unflagged`, {
+    await record('search.preview', `"${query}": ${candidates.length} candidates, ${clean} unflagged`, {
       query, candidates: candidates.length, clean
     });
     return 0;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     say.fail(msg);
-    record('error', `search preview "${query}" failed: ${msg}`);
+    await record('error', `search preview "${query}" failed: ${msg}`);
     return 1;
   } finally {
     await s.close();
@@ -224,9 +224,9 @@ async function commit(spec: string): Promise<number> {
     }
     if (skipped) say.warn(`${skipped} thread(s) skipped and not counted.`);
 
-    const added = saveThreads(threads);
+    const added = await saveThreads(threads);
     say.ok(`Collected ${threads.length} threads (${added} new). Next: redbot opportunity`);
-    record('search', `"${file.query}": committed ${threads.length} of ${file.candidates.length}, ${added} new`, {
+    await record('search', `"${file.query}": committed ${threads.length} of ${file.candidates.length}, ${added} new`, {
       query: file.query,
       previewed: file.candidates.length,
       picked: picked.length,
@@ -238,7 +238,7 @@ async function commit(spec: string): Promise<number> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     say.fail(msg);
-    record('error', `search commit failed: ${msg}`);
+    await record('error', `search commit failed: ${msg}`);
     return 1;
   } finally {
     await s.close();

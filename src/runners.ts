@@ -95,7 +95,7 @@ async function withPage(job: Job, fn: (page: import('playwright').Page) => Promi
       }
     });
 
-    record('job.action', `${job.kind} for ${job.account}`, {
+    await record('job.action', `${job.kind} for ${job.account}`, {
       account: job.account,
       jobId: job.id,
       kind: job.kind,
@@ -117,9 +117,9 @@ async function withPage(job: Job, fn: (page: import('playwright').Page) => Promi
  * Fails closed on a thread we have no record of. A vote on an unknown target cannot be shown to
  * be safe, and the cost of skipping one vote is nothing.
  */
-export function voteTargetIsOurs(permalink: string): { blocked: boolean; why?: string } {
+export async function voteTargetIsOurs(permalink: string): Promise<{ blocked: boolean; why?: string }> {
   const ours = new Set(loadAccounts().map((a) => a.handle.toLowerCase()));
-  const thread = loadThreads().find((t) => t.permalink === permalink);
+  const thread = (await loadThreads()).find((t) => t.permalink === permalink);
   if (!thread) {
     return { blocked: true, why: `no thread on record for ${permalink} — cannot establish who wrote it` };
   }
@@ -178,7 +178,7 @@ export function registerAllRunners(): void {
     if (!permalink) throw new Error('a vote job needs a permalink');
     if (direction !== 'up' && direction !== 'down') throw new Error('direction must be "up" or "down"');
 
-    const guard = voteTargetIsOurs(permalink);
+    const guard = await voteTargetIsOurs(permalink);
     if (guard.blocked) throw new Error(`refused: ${guard.why}`);
 
     await withPage(job, (page) => votePost(page, permalink, direction));
@@ -212,10 +212,18 @@ export function registerAllRunners(): void {
    * Submitting a post.
    *
    * A `post` job carries an already-written title and body, and it is created by an operator
-   * action, never by the pipeline. It is not in PUBLISH_KINDS because it has no draft, no
-   * certification and no approval token to consume — but it does reach Reddit, so the
-   * workstation only ever creates one from an explicit form submission by a person. There is
-   * no path that generates post text and queues it in the same motion.
+   * action, never by the pipeline.
+   *
+   * `post` IS in PUBLISH_KINDS (`scheduler.ts`), added 2026-07-27 to close an unattended-publish
+   * gap: a working runner plus a queue is a publish path whatever the kind is called, and a post
+   * is a public statement rather than a reversible relationship change. So `runOne` drives a
+   * `post` job to `waiting` before it ever looks this runner up — it runs only when a person
+   * authorises that specific job. This comment previously claimed the opposite as current fact,
+   * which is the more dangerous direction to be wrong in: it reads as "the scheduler may run
+   * this".
+   *
+   * The workstation additionally only creates one from an explicit form submission by a person.
+   * There is no path that generates post text and queues it in the same motion.
    */
   registerRunner('post', async (job) => {
     const subreddit = arg(job, 'subreddit');

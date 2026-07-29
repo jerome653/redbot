@@ -21,6 +21,9 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DATA, ensureData } from './config.js';
 
+import { getPool } from './db.js';
+import { insertTrace, selectTrace } from './db/logs.js';
+
 export const tracePath = join(DATA, 'trace.jsonl');
 
 export type Stage =
@@ -70,11 +73,25 @@ export function trace(
     ...(opts?.ms != null ? { ms: opts.ms } : {}),
     ...(data && Object.keys(data).length ? { data } : {})
   };
-  try {
-    appendFileSync(tracePath, JSON.stringify(e) + '\n', 'utf8');
-  } catch {
-    // Telemetry must never take the run down with it.
-  }
+  // Fire-and-forget on purpose. `trace()` is called from dozens of synchronous places and
+  // its whole contract is that telemetry never takes the run down with it — making it async
+  // would push an await into every one of those call sites and change control flow to record
+  // a debug line. The write is tracked instead, and `flushTrace()` waits for it before exit,
+  // so nothing is lost to a process that finishes faster than the round trip.
+  const p = insertTrace(getPool(), e).catch(() => { /* telemetry is never fatal */ });
+  pending.add(p);
+  void p.finally(() => pending.delete(p));
+}
+
+/** Writes still in flight. */
+const pending = new Set<Promise<unknown>>();
+
+/**
+ * Wait for outstanding trace writes. Called once at CLI exit — without it a short
+ * command can exit with its own telemetry still on the wire.
+ */
+export async function flushTrace(): Promise<void> {
+  await Promise.allSettled([...pending]);
 }
 
 /** Time an operation and record how long it took, whether it succeeded or threw. */
@@ -100,11 +117,6 @@ export async function timed<T>(
   }
 }
 
-export function loadTrace(): TraceEvent[] {
-  if (!existsSync(tracePath)) return [];
-  return readFileSync(tracePath, 'utf8')
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => { try { return JSON.parse(l) as TraceEvent; } catch { return null; } })
-    .filter((e): e is TraceEvent => e !== null);
+export async function loadTrace(): Promise<TraceEvent[]> {
+  return selectTrace(getPool());
 }

@@ -23,16 +23,33 @@ export interface Session {
   close: () => Promise<void>;
 }
 
+/**
+ * The port this endpoint names, for the copy-paste command below.
+ *
+ * Exported so a test can pin it: the message used to hardcode 9222 while reporting whatever
+ * endpoint actually failed, so an account on 9223 was told "no Chrome at 9223" and handed a
+ * command that starts Chrome on 9222 — which could never satisfy the check it was printed to
+ * fix. An instruction that cannot work is worse than no instruction; you follow it twice
+ * before you doubt it.
+ */
+export function endpointPort(endpoint: string): string {
+  try {
+    const p = new URL(endpoint).port;
+    if (p) return p;
+  } catch { /* not a URL — fall through to the default below */ }
+  return '9222';
+}
+
 export class NoBrowserError extends Error {
   constructor(endpoint: string) {
     super(
       `No debuggable Chrome at ${endpoint}.\n\n` +
       `Start one (once per session), then re-run:\n\n` +
       `  & "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" \`\n` +
-      `      --remote-debugging-port=9222 \`\n` +
+      `      --remote-debugging-port=${endpointPort(endpoint)} \`\n` +
       `      --user-data-dir="${config.browser.profileDir}" \`\n` +
       `      --no-first-run --no-default-browser-check\n\n` +
-      `Then run \`redbot login\` and sign in to Reddit in that window.`
+      `Then run \`node dist/cli.js login\` and sign in to Reddit in that window.`
     );
     this.name = 'NoBrowserError';
   }
@@ -133,11 +150,39 @@ export async function whoAmI(page: Page): Promise<Identity> {
   }
 
   if (result.flag === 'true') {
-    return {
-      loggedIn: true,
-      username: result.name,
-      via: result.name ? 'shreddit-app[user-logged-in] + header profile link' : 'shreddit-app[user-logged-in]'
-    };
+    /**
+     * The header link is gone (measured 2026-07-28, release 2026-07-27T22:22Z~812f56f9).
+     *
+     * All five selectors above returned null on a signed-in frontpage, and the ONLY
+     * `a[href^="/user/"]` on the page belonged to a post author in the feed. Scraping that
+     * would have reported somebody else's name as the operator's own — the failure the
+     * comment above already warns about, arriving by a new route.
+     *
+     * `/api/me.json` is answered with the browser's own session cookies, so it names the
+     * account that is actually signed in. That makes it not merely a fallback but the more
+     * trustworthy source: a DOM scrape can pick up the wrong `/user/` link, and this cannot.
+     * The DOM path stays first because it costs no request when it works.
+     */
+    let name = result.name;
+    let via = name ? 'shreddit-app[user-logged-in] + header profile link' : 'shreddit-app[user-logged-in]';
+
+    if (!name) {
+      const fromApi = await page.evaluate(async () => {
+        try {
+          const r = await fetch('/api/me.json', { credentials: 'include' });
+          if (!r.ok) return null;
+          const j = await r.json() as { data?: { name?: string } };
+          return j?.data?.name ?? null;
+        } catch { return null; }
+      }).catch(() => null);
+
+      if (fromApi) {
+        name = fromApi;
+        via = 'shreddit-app[user-logged-in] + /api/me.json';
+      }
+    }
+
+    return { loggedIn: true, username: name, via };
   }
   if (result.flag === 'false') {
     return { loggedIn: false, username: null, via: 'shreddit-app[user-logged-in]=false' };

@@ -38,10 +38,10 @@ function write(name: string, body: string): string {
 
 /* ------------------------------------------------------------------ */
 
-export function opportunityReport(): string {
-  const threads = loadThreads();
+export async function opportunityReport(): Promise<string> {
+  const threads = await loadThreads();
   const { keep, dropped } = prefilter(threads);
-  const assessments = loadAssessments();
+  const assessments = await loadAssessments();
   const contribute = assessments.filter((a) => a.verdict === 'contribute');
 
   const dropReasons = new Map<string, number>();
@@ -99,8 +99,8 @@ and a system that found an opportunity everywhere would have found none.
 
 /* ------------------------------------------------------------------ */
 
-export function knowledgeGapReport(): string {
-  const gaps = loadGaps();
+export async function knowledgeGapReport(): Promise<string> {
+  const gaps = await loadGaps();
   const kinds = new Map<string, number>();
   let fillable = 0;
   let answered = 0;
@@ -179,10 +179,10 @@ ${gaps.length ? gaps.map(detail).join('\n') : '_No gap analyses on record._'}
 
 /* ------------------------------------------------------------------ */
 
-export function draftQualityReport(): string {
-  const drafts = loadDrafts();
-  const threads = loadThreads();
-  const reviews = loadReviews();
+export async function draftQualityReport(): Promise<string> {
+  const drafts = await loadDrafts();
+  const threads = await loadThreads();
+  const reviews = await loadReviews();
   const summary = summarizeReviews(reviews);
 
   const withContribution = drafts.filter((d) => d.contribution?.whatNew);
@@ -254,8 +254,8 @@ ${rows || '| — | — | — | — | — | — | — | — | — |'}
 
 /* ------------------------------------------------------------------ */
 
-export function operatorReviewDataset(): string {
-  const reviews = loadReviews();
+export async function operatorReviewDataset(): Promise<string> {
+  const reviews = await loadReviews();
   const s = summarizeReviews(reviews);
 
   const vocab = (name: string, r: Record<string, string>) =>
@@ -322,9 +322,9 @@ ${reviews.length === 0
 
 /* ------------------------------------------------------------------ */
 
-export function firstLiveInteractionReport(): string {
-  const published = loadDrafts().filter((d) => d.status === 'published');
-  const observations = loadObservations();
+export async function firstLiveInteractionReport(): Promise<string> {
+  const published = (await loadDrafts()).filter((d) => d.status === 'published');
+  const observations = await loadObservations();
 
   if (!published.length) {
     return write('first-live-interaction.md', `# First Live Interaction Report
@@ -429,14 +429,14 @@ decision — those are not visible from outside and are not recorded as if they 
  * reviewed, and that future work must cite a case here. So the count at the top of this file
  * is the gate, and it is computed rather than asserted.
  */
-export function evidenceLog(): string {
-  const drafts = loadDrafts();
-  const threads = loadThreads();
-  const gaps = loadGaps();
-  const assessments = loadAssessments();
-  const reviews = loadReviews();
-  const regrets = loadRegrets();
-  const observations = loadObservations();
+export async function evidenceLog(): Promise<string> {
+  const drafts = await loadDrafts();
+  const threads = await loadThreads();
+  const gaps = await loadGaps();
+  const assessments = await loadAssessments();
+  const reviews = await loadReviews();
+  const regrets = await loadRegrets();
+  const observations = await loadObservations();
   const rs = summarizeRegret(regrets);
 
   // A case is any draft a person decided on — published or not. A rejection is evidence too.
@@ -542,14 +542,14 @@ ${body}
 `);
 }
 
-export function generateAll(): string[] {
+export async function generateAll(): Promise<string[]> {
   return [
-    opportunityReport(),
-    knowledgeGapReport(),
-    draftQualityReport(),
-    operatorReviewDataset(),
-    firstLiveInteractionReport(),
-    evidenceLog()
+    await opportunityReport(),
+    await knowledgeGapReport(),
+    await draftQualityReport(),
+    await operatorReviewDataset(),
+    await firstLiveInteractionReport(),
+    await evidenceLog()
   ];
 }
 

@@ -30,20 +30,17 @@ import { FALSIFIABLE_TYPES } from './types.js';
 import type { Certification } from './types.js';
 import type { Draft, Thread } from '../types.js';
 
+import { getPool } from '../db.js';
+import { insertCertification, selectCertifications } from '../db/certifications.js';
+
 export const certificationsPath = join(DATA, 'certifications.jsonl');
 
-export function recordCertification(c: Certification): void {
-  ensureData();
-  appendFileSync(certificationsPath, JSON.stringify(c) + '\n', 'utf8');
+export async function recordCertification(c: Certification): Promise<void> {
+  await insertCertification(c);
 }
 
-export function loadCertifications(): Certification[] {
-  if (!existsSync(certificationsPath)) return [];
-  return readFileSync(certificationsPath, 'utf8')
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => { try { return JSON.parse(l) as Certification; } catch { return null; } })
-    .filter((c): c is Certification => c !== null);
+export async function loadCertifications(): Promise<Certification[]> {
+  return selectCertifications(getPool());
 }
 
 export interface RunOptions {
@@ -92,7 +89,7 @@ export async function runCertification(
       model: config.llm.analyzeModel,
       models: { analyze: config.llm.analyzeModel, draft: config.llm.draftModel }
     };
-    recordCertification(c);
+    await recordCertification(c);
     trace('gate', 'argus.verdict', { verdict: c.verdict, rule: 'thread-resolved' }, { draftId: draft.id });
     return c;
   }
@@ -205,7 +202,7 @@ export async function runCertification(
     citations
   };
 
-  recordCertification(certification);
+  await recordCertification(certification);
   trace('gate', 'argus.verdict', {
     verdict: result.verdict,
     rules: result.reasons.map((r) => r.rule),

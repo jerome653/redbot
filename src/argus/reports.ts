@@ -207,8 +207,8 @@ opinion on whether this reply is worth posting. Those remain human judgements:
  * Ledgers and aggregate reports
  * ------------------------------------------------------------------ */
 
-export function claimLedger(): string {
-  const certs = loadCertifications();
+export async function claimLedger(): Promise<string> {
+  const certs = await loadCertifications();
   const all = certs.flatMap((c) => c.claims.map((cl) => ({ cert: c, claim: cl })));
   const byType = new Map<string, number>();
   for (const { claim } of all) byType.set(claim.type, (byType.get(claim.type) ?? 0) + 1);
@@ -235,8 +235,8 @@ ${all.map(({ cert, claim }) => `| \`${cert.draftId.slice(0, 16)}\` | \`${claim.i
 `);
 }
 
-export function evidenceLedger(): string {
-  const certs = loadCertifications();
+export async function evidenceLedger(): Promise<string> {
+  const certs = await loadCertifications();
   const claims = certs.flatMap((c) => c.claims);
   const byClass = new Map<string, number>();
   for (const c of claims) byClass.set(c.evidenceClass, (byClass.get(c.evidenceClass) ?? 0) + 1);
@@ -269,8 +269,8 @@ ${[...byClass.entries()].sort((a, b) => b[1] - a[1])
 `);
 }
 
-export function contradictionReport(): string {
-  const certs = loadCertifications();
+export async function contradictionReport(): Promise<string> {
+  const certs = await loadCertifications();
   const all = certs.flatMap((c) => c.contradictions.map((x) => ({ draftId: c.draftId, x })));
   const fatal = all.filter(({ x }) => x.fatal);
 
@@ -289,8 +289,8 @@ ${esc(x.statement)}
 `);
 }
 
-export function confidenceReport(): string {
-  const certs = loadCertifications();
+export async function confidenceReport(): Promise<string> {
+  const certs = await loadCertifications();
   const claims = certs.flatMap((c) => c.claims);
   const byConf = new Map<string, number>();
   for (const c of claims) byConf.set(c.confidence, (byConf.get(c.confidence) ?? 0) + 1);
@@ -317,8 +317,8 @@ ${epistemic.length
 `);
 }
 
-export function certificationReport(): string {
-  const certs = loadCertifications();
+export async function certificationReport(): Promise<string> {
+  const certs = await loadCertifications();
   const counts = { CERTIFIED: 0, ESCALATE: 0, REJECT: 0 };
   for (const c of certs) counts[c.verdict]++;
 
@@ -347,12 +347,12 @@ ${certs.length ? certs.map((c) => `- ${c.verdict === 'CERTIFIED' ? '✅' : c.ver
 `);
 }
 
-export function generateArgusReports(): string[] {
+export async function generateArgusReports(): Promise<string[]> {
   return [
-    claimLedger(),
-    evidenceLedger(),
-    certificationReport(),
-    contradictionReport(),
-    confidenceReport()
+    await claimLedger(),
+    await evidenceLedger(),
+    await certificationReport(),
+    await contradictionReport(),
+    await confidenceReport()
   ];
 }

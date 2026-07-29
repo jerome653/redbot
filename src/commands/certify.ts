@@ -16,7 +16,7 @@ import { autoBackup } from '../backup.js';
 export async function certifyCmd(draftIdArg?: string, opts?: { override?: boolean }): Promise<number> {
   say.head('redbot certify — Argus');
 
-  const drafts = loadDrafts();
+  const drafts = await loadDrafts();
   const pending = drafts.filter((d) => d.status === 'pending');
   const target = draftIdArg ? drafts.find((d) => d.id === draftIdArg) : pending[pending.length - 1];
 
@@ -25,7 +25,7 @@ export async function certifyCmd(draftIdArg?: string, opts?: { override?: boolea
     return 1;
   }
 
-  const thread = loadThreads().find((t) => t.id === target.threadId);
+  const thread = (await loadThreads()).find((t) => t.id === target.threadId);
   if (!thread) {
     say.fail(`Thread ${target.threadId} is missing from threads.json — cannot certify without it.`);
     return 1;
@@ -52,10 +52,10 @@ export async function certifyCmd(draftIdArg?: string, opts?: { override?: boolea
     claims: cert.claims.length,
     fatalContradictions: cert.contradictions.filter((c) => c.fatal).length
   };
-  saveDraft(target);
+  await saveDraft(target);
 
   const pkg = reviewPackage(cert, target, thread.title);
-  generateArgusReports();
+  await generateArgusReports();
 
   say.info('');
   // say.ok/warn/fail already prefix their own marker — adding another produced "X   X   REJECT".
@@ -77,7 +77,7 @@ export async function certifyCmd(draftIdArg?: string, opts?: { override?: boolea
   say.info('');
   say.ok(pkg.replace(/.*[/\\]reports[/\\]/, 'reports/'));
 
-  record('gate.block', `argus ${cert.verdict} for ${target.id}`, {
+  await record('gate.block', `argus ${cert.verdict} for ${target.id}`, {
     draftId: target.id,
     verdict: cert.verdict,
     rules: cert.reasons.map((r) => r.rule),

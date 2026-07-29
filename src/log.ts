@@ -12,7 +12,7 @@ const KNOWN = ['account', 'subreddit', 'threadUrl', 'permalink', 'status'] as co
  * Anything not a known HistoryEntry field is tucked into `data`, so callers can pass
  * whatever context is useful without the log schema fighting them.
  */
-export function record(kind: HistoryKind, summary: string, extra: Record<string, unknown> = {}): void {
+export async function record(kind: HistoryKind, summary: string, extra: Record<string, unknown> = {}): Promise<void> {
   const entry: HistoryEntry = {
     ts: new Date().toISOString(),
     kind,
@@ -26,7 +26,7 @@ export function record(kind: HistoryKind, summary: string, extra: Record<string,
     else data[k] = v;
   }
   if (Object.keys(data).length) entry.data = data;
-  appendHistory(entry);
+  await appendHistory(entry);
 }
 
 export const say = {

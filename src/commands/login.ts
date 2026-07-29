@@ -26,7 +26,7 @@ export async function login(): Promise<number> {
     if (await isBlocked(s.page)) {
       say.fail('Reddit served a block page to this browser profile.');
       say.step('Open reddit.com in that Chrome window by hand once, then re-run `redbot login`.');
-      record('error', 'login blocked by Reddit bot protection');
+      await record('error', 'login blocked by Reddit bot protection');
       return 1;
     }
 
@@ -34,7 +34,7 @@ export async function login(): Promise<number> {
     if (me.loggedIn) {
       say.ok(`Signed in as: ${me.username ?? '(username not readable)'}`);
       say.step(`confirmed via ${me.via}`);
-      record('login', `signed in as ${me.username ?? 'unknown'}`, { username: me.username, via: me.via });
+      await record('login', `signed in as ${me.username ?? 'unknown'}`, { username: me.username, via: me.via });
       return 0;
     }
 
@@ -49,7 +49,7 @@ export async function login(): Promise<number> {
     if (!after.loggedIn) {
       say.fail('Logged in: false');
       say.step(`checked via ${after.via}`);
-      record('error', 'login not confirmed', { via: after.via });
+      await record('error', 'login not confirmed', { via: after.via });
       return 1;
     }
 
@@ -57,7 +57,7 @@ export async function login(): Promise<number> {
     say.step(`confirmed via ${after.via}`);
     say.step('The session lives in your Chrome profile and persists across runs.');
     say.step('Next: redbot read <subreddit>');
-    record('login', `signed in as ${after.username ?? 'unknown'}`, { username: after.username });
+    await record('login', `signed in as ${after.username ?? 'unknown'}`, { username: after.username });
     return 0;
   } finally {
     await s.close();

@@ -46,7 +46,7 @@ export async function session(opts?: { kind?: string; sub?: string }): Promise<n
   let abandoned = 0;
   let completed = true;
 
-  record('session.start', `${plan.kind} session on r/${subreddit}`, {
+  await record('session.start', `${plan.kind} session on r/${subreddit}`, {
     kind: plan.kind, seed: plan.seed, budgetMs: plan.budgetMs,
     maxThreads: plan.maxThreadsToOpen, mayReply: plan.mayReply, subreddit
   });
@@ -59,25 +59,25 @@ export async function session(opts?: { kind?: string; sub?: string }): Promise<n
     setAccount(me.username);
     say.step(`Account: ${me.username ?? '(signed out)'}`);
 
-    const verdict = health(me.username);
+    const verdict = await health(me.username);
     say.step(`Health : ${verdict.state}`);
     for (const r of verdict.reasons.slice(0, 3)) say.step(`         ${r}`);
 
     await openSubreddit(s.page, subreddit);
     if (await isRateLimited(s.page)) {
-      record('ratelimit', `429 opening r/${subreddit}`);
+      await record('ratelimit', `429 opening r/${subreddit}`);
       say.fail('Rate-limited on arrival. Ending the session rather than pushing.');
       return 1;
     }
     if (await isBlocked(s.page)) {
-      record('login.fail', `block page opening r/${subreddit}`);
+      await record('login.fail', `block page opening r/${subreddit}`);
       say.fail('Reddit served a block page. Ending the session.');
       return 1;
     }
 
     const links = await collectPermalinks(s.page, plan.maxThreadsToOpen * 2, sel.feedScope);
     if (!links.length) {
-      record('selector.miss', `no post links found on r/${subreddit}`, { selectors: 'sel.postLink' });
+      await record('selector.miss', `no post links found on r/${subreddit}`, { selectors: 'sel.postLink' });
       say.fail('No post links found — Reddit markup may have changed. Recorded as a selector miss.');
       return 1;
     }
@@ -120,7 +120,7 @@ export async function session(opts?: { kind?: string; sub?: string }): Promise<n
       try {
         thread = await collectThread(s.page, link, 'read');
       } catch (e) {
-        record('error', `thread fetch failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+        await record('error', `thread fetch failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
       }
       opened++;
 
@@ -137,7 +137,7 @@ export async function session(opts?: { kind?: string; sub?: string }): Promise<n
         `${view.idled ? ', idled' : ''}${view.abandoned ? ', left early' : ''}`
       );
 
-      record('session.view', `viewed ${thread.id}`, {
+      await record('session.view', `viewed ${thread.id}`, {
         threadId: thread.id, dwellMs: view.dwellMs, steps: view.steps,
         idled: view.idled, abandoned: view.abandoned
       });
@@ -146,7 +146,7 @@ export async function session(opts?: { kind?: string; sub?: string }): Promise<n
       await humanPause(rng);
     }
 
-    const added = saveThreads(collected);
+    const added = await saveThreads(collected);
     const elapsed = Date.now() - started;
 
     say.ok(
@@ -165,10 +165,10 @@ export async function session(opts?: { kind?: string; sub?: string }): Promise<n
     completed = false;
     const msg = e instanceof Error ? e.message : String(e);
     say.fail(msg);
-    record('error', `session failed: ${msg}`);
+    await record('error', `session failed: ${msg}`);
     return 1;
   } finally {
-    record('session.end', `session ended after ${Math.round((Date.now() - started) / 1000)}s`, {
+    await record('session.end', `session ended after ${Math.round((Date.now() - started) / 1000)}s`, {
       completed, opened, abandoned, kept: collected.length, seed: plan.seed
     });
     await s.close();

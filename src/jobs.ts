@@ -19,12 +19,21 @@
  * - **Append-only.** A job's history is a sequence of appended states, not a mutated row. The
  *   current state is a fold over the log, so a crash mid-write loses at most the last append
  *   and never rewrites an earlier truth.
+ * - **One job, one worker.** A job is not moved into `running` by writing a row; it is CLAIMED
+ *   through `claimJob()`, and the claim is decided by a single atomic filesystem operation.
+ *   This project genuinely ships two drivers for the same account queue — the `redbot work`
+ *   terminal loop and the console's job endpoint, which spawns its own CLI process — so
+ *   "read the state, then append running" was two processes running the same irreversible
+ *   browser action.
  * - **Publishing is not a job type that runs unattended.** `publish` jobs reach `waiting` and
  *   stop there. A person still approves in the console and the existing single-use token still
  *   authorises the send. The scheduler cannot complete a publish on its own, and there is a
  *   test that says so.
  */
-import { appendFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
+import {
+  appendFileSync, readFileSync, writeFileSync, unlinkSync, renameSync, existsSync, mkdirSync
+} from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { DATA } from './config.js';
 
@@ -86,6 +95,10 @@ export interface Job extends JobSpec {
  * Store — one append-only log per account
  * ------------------------------------------------------------------ */
 
+import { getPool } from './db.js';
+import { insertJob, selectJobs, selectJob, transitionJob, claimJobRow, countsByState } from './db/jobs.js';
+import { loadAccounts } from './config.js';
+
 export function accountDir(account: string): string {
   // The handle comes from accounts.json, but it reaches here through HTTP bodies and CLI
   // arguments too. Anything that is not a plain handle would escape the data directory.
@@ -101,60 +114,58 @@ export function jobsPath(account: string): string {
   return join(accountDir(account), 'jobs.jsonl');
 }
 
-/** Every appended record, oldest first. Unreadable lines are skipped, never guessed at. */
-function readLog(account: string): Job[] {
-  const p = jobsPath(account);
-  if (!existsSync(p)) return [];
-  const out: Job[] = [];
-  for (const line of readFileSync(p, 'utf8').split('\n')) {
-    const s = line.trim();
-    if (!s) continue;
-    try { out.push(JSON.parse(s) as Job); } catch { /* a torn line is not a job */ }
-  }
-  return out;
-}
-
 /**
- * Current state of every job: the last append wins.
+ * Current state of every job, in creation order.
  *
- * Insertion order is preserved so the workstation shows jobs in the order they were created
- * rather than the order they were last touched — a list that reorders itself while you read it
- * is unusable.
+ * The JSONL era folded an append-only log last-write-wins per id; the table holds that
+ * folded state directly. Creation order is preserved for the same reason it always was:
+ * a queue that reorders itself while you read it is unusable.
  */
-export function loadJobs(account: string): Job[] {
-  const byId = new Map<string, Job>();
-  for (const rec of readLog(account)) byId.set(rec.id, rec);
-  return [...byId.values()];
+export async function loadJobs(account: string): Promise<Job[]> {
+  accountDir(account);                       // validates the handle, as it always did
+  return selectJobs(getPool(), account);
 }
 
-export function getJob(account: string, id: string): Job | undefined {
-  return loadJobs(account).find((j) => j.id === id);
-}
-
-function append(account: string, job: Job): Job {
-  appendFileSync(jobsPath(account), JSON.stringify(job) + '\n', 'utf8');
-  return job;
+export async function getJob(account: string, id: string): Promise<Job | undefined> {
+  return selectJob(getPool(), account, id);
 }
 
 let seq = 0;
+
+/**
+ * What makes an id unique BETWEEN processes, not just within one.
+ *
+ * The id used to be `j_<millis>_<seq>` with `seq` starting at 0 in every process. The console
+ * spawns a fresh CLI process per job-add, so every console-created job was seq 0 — two adds in
+ * the same millisecond from different processes minted the SAME id, and because `loadJobs` folds
+ * the log last-append-wins per id, the earlier job silently disappeared from the queue.
+ *
+ * pid alone is not enough (pids are recycled, and two machines can share one), so three random
+ * bytes ride along. Collision now needs the same millisecond, the same pid AND the same 1-in-16M
+ * draw. Not cryptographic — it is an identity, not a secret.
+ */
+const PROCESS_TAG = `${process.pid.toString(36)}${randomBytes(3).toString('hex')}`;
 
 /**
  * `now` is injected rather than read from the clock. The gates suite expired in place once
  * because a helper called `Date.now()` where a caller had already been handed the time; the
  * same mistake here would make every scheduling test depend on the minute it ran.
  */
-export function createJob(spec: JobSpec, now: Date = new Date()): Job {
+export async function createJob(spec: JobSpec, now: Date = new Date()): Promise<Job> {
   const ts = now.toISOString();
   const scheduled = Boolean(spec.runAt && Date.parse(spec.runAt) > now.getTime());
   const job: Job = {
     ...spec,
-    id: `j_${now.getTime().toString(36)}_${(seq++).toString(36)}`,
+    id: `j_${now.getTime().toString(36)}_${PROCESS_TAG}_${(seq++).toString(36)}`,
     state: scheduled ? 'scheduled' : 'pending',
     attempts: 0,
     createdAt: ts,
     updatedAt: ts
   };
-  return append(spec.account, job);
+  // The account row must exist before the job's foreign key will accept it. It is
+  // enriched from accounts.json when that file describes this handle.
+  const described = loadAccounts().find((a) => a.handle.toLowerCase() === spec.account.toLowerCase());
+  return insertJob(getPool(), job, described);
 }
 
 export interface TransitionInput {
@@ -170,36 +181,77 @@ export interface TransitionInput {
  *
  * A terminal job is immutable. Without that rule a retry loop can resurrect a cancelled job,
  * and an operator's cancel would be advisory rather than binding.
+ *
+ * A running job cannot be moved to `running` either. That used to be allowed silently, which
+ * meant a second worker could append its own claim over a live one and both would drive the
+ * browser. Re-claiming is not a state change, it is a bug, so it is refused loudly.
  */
-export function transition(
+export async function transition(
   account: string,
   id: string,
   next: TransitionInput,
   now: Date = new Date()
-): Job {
-  const current = getJob(account, id);
-  if (!current) throw new Error(`no job ${id} for ${account}`);
-  if (TERMINAL.includes(current.state)) {
-    throw new Error(`job ${id} is already ${current.state} and cannot be moved to ${next.state}`);
-  }
-
-  const ts = now.toISOString();
-  const updated: Job = {
-    ...current,
-    ...(next.runAt ? { runAt: next.runAt } : {}),
-    state: next.state,
-    attempts: next.attempts ?? current.attempts,
-    updatedAt: ts,
-    ...(next.detail !== undefined ? { detail: next.detail } : {}),
-    ...(next.code !== undefined ? { code: next.code } : {}),
-    ...(next.state === 'running' ? { startedAt: ts } : {}),
-    ...(TERMINAL.includes(next.state) ? { finishedAt: ts } : {})
-  };
-  return append(account, updated);
+): Promise<Job> {
+  return transitionJob(account, id, next, now);
 }
 
-export function cancelJob(account: string, id: string, why = 'cancelled by the operator'): Job {
-  return transition(account, id, { state: 'cancelled', detail: why });
+export async function cancelJob(account: string, id: string, why = 'cancelled by the operator'): Promise<Job> {
+  return await transition(account, id, { state: 'cancelled', detail: why });
+}
+
+/* ------------------------------------------------------------------ *
+ * Claiming — exactly one worker per job
+ *
+ * Two drivers exist for one account queue: the `redbot work` loop the README documents, and the
+ * operator console's job endpoint, which spawns its own CLI process. `await getJob()` then
+ * `append(running)` is a read-then-write with a gap in the middle, so both could read `pending`
+ * and both could append a claim. The consequence is not a duplicated log row — it is the same
+ * vote, the same follow, the same irreversible browser action performed twice.
+ *
+ * `takeConsoleApproval()` in ask.ts already had to solve "exactly one of two racing readers
+ * wins", and it does it the only way that actually holds: one atomic filesystem operation
+ * decides the winner and the loser gets an error, rather than both sides checking first.
+ *
+ * That precedent uses `rename` because it has a token file sitting there to rename away. A job
+ * has no such file, and `rename` cannot be borrowed directly: it REPLACES its destination, so
+ * two racing renames both "succeed" and pick no winner. The exclusive-create flag `wx` is the
+ * same guarantee for the case where the winner must create the token rather than consume it —
+ * O_EXCL is atomic on every local filesystem, so of two processes exactly one creates the file
+ * and the other gets EEXIST.
+ *
+ * The claim is taken BEFORE the state is re-read, not after: checking first and locking second
+ * is the original defect with more steps.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Take exclusive ownership of a job and move it to `running`. Returns the claimed job,
+ * or null when this worker did not get it.
+ *
+ * Null is not an error and not a failure — it means another worker is already on this
+ * job, and the correct response is to move to the next one. A caller that treats null
+ * as "run it anyway" has reintroduced the defect.
+ *
+ * ONE STATEMENT. See src/db/jobs.ts for why the lock file, `claimsDir`, `claimPath`
+ * and `stealAbandonedClaim` are gone: the claim and the state change are now the same
+ * write, so the crash window their takeover logic repaired cannot open.
+ *
+ * The usual crashed-worker case is unchanged: that job is `running` in the table, so
+ * `orphaned()` finds it after the staleness window and the scheduler's `recover()`
+ * moves it out of `running`.
+ */
+export async function claimJob(account: string, id: string, now: Date = new Date()): Promise<Job | null> {
+  return claimJobRow(getPool(), account, id, now);
+}
+
+/**
+ * Kept as a no-op so callers that released a claim still read correctly.
+ *
+ * There is no separate claim to drop any more — leaving `running` IS releasing it,
+ * because the state is the claim. Removing the call sites instead would have scattered
+ * this explanation across the scheduler.
+ */
+export function releaseClaim(_account: string, _id: string): void {
+  /* the row state is the claim; nothing to release */
 }
 
 /**
@@ -209,8 +261,8 @@ export function cancelJob(account: string, id: string, why = 'cancelled by the o
  * boolean, because "why is this not running" is the question an operator actually asks:
  * a future `runAt`, an unfinished `after` dependency, or a state that is not pending.
  */
-export function runnable(account: string, now: Date = new Date()): Job[] {
-  const all = loadJobs(account);
+export async function runnable(account: string, now: Date = new Date()): Promise<Job[]> {
+  const all = await loadJobs(account);
   const byId = new Map(all.map((j) => [j.id, j]));
 
   return all.filter((j) => {
@@ -225,12 +277,8 @@ export function runnable(account: string, now: Date = new Date()): Job[] {
 }
 
 /** Counts by state, for the workstation header. Absent states are reported as 0, not omitted. */
-export function jobCounts(account: string): Record<JobState, number> {
-  const counts: Record<JobState, number> = {
-    pending: 0, scheduled: 0, running: 0, waiting: 0, completed: 0, cancelled: 0, failed: 0
-  };
-  for (const j of loadJobs(account)) counts[j.state]++;
-  return counts;
+export async function jobCounts(account: string): Promise<Record<JobState, number>> {
+  return countsByState(getPool(), account);
 }
 
 /**
@@ -240,8 +288,8 @@ export function jobCounts(account: string): Record<JobState, number> {
  * Reporting them separately lets the scheduler requeue them deliberately instead of a worker
  * silently adopting work it did not start.
  */
-export function orphaned(account: string, now: Date = new Date(), staleMinutes = 30): Job[] {
-  return loadJobs(account).filter((j) => {
+export async function orphaned(account: string, now: Date = new Date(), staleMinutes = 30): Promise<Job[]> {
+  return (await loadJobs(account)).filter((j) => {
     if (j.state !== 'running') return false;
     const started = Date.parse(j.startedAt ?? j.updatedAt);
     if (!Number.isFinite(started)) return true;

@@ -70,8 +70,11 @@ function dayKey(ts: string): string {
   return ts.slice(0, 10);
 }
 
-export function computeMetrics(history: HistoryEntry[] = loadHistory()): Metrics {
-  const drafts = loadDrafts();
+// `history` stays injectable for the tests, but the default can no longer be a
+// parameter initializer — an await is not allowed in one, and the store is async now.
+export async function computeMetrics(historyArg?: HistoryEntry[]): Promise<Metrics> {
+  const history = historyArg ?? await loadHistory();
+  const drafts = await loadDrafts();
 
   const first = history[0]?.ts ?? null;
   const last = history[history.length - 1]?.ts ?? null;

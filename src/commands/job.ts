@@ -46,9 +46,9 @@ function line(j: Job): string {
   return `  ${j.state.padEnd(9)} ${j.kind.padEnd(13)} ${j.id}${when}${dep}${tries}${why}`;
 }
 
-export function jobList(accountArg?: string, filter?: string): number {
+export async function jobList(accountArg?: string, filter?: string): Promise<number> {
   const account = requireAccount(accountArg);
-  const all = loadJobs(account);
+  const all = await loadJobs(account);
   const jobs = filter ? all.filter((j) => j.state === filter) : all;
 
   say.head(`jobs — ${account}`);
@@ -58,7 +58,7 @@ export function jobList(accountArg?: string, filter?: string): number {
   }
   for (const j of jobs) say.info(line(j));
 
-  const c = jobCounts(account);
+  const c = await jobCounts(account);
   say.step(
     `${c.pending} pending · ${c.scheduled} scheduled · ${c.running} running · ${c.waiting} waiting · ` +
     `${c.completed} completed · ${c.failed} failed · ${c.cancelled} cancelled`
@@ -69,7 +69,7 @@ export function jobList(accountArg?: string, filter?: string): number {
   return 0;
 }
 
-export function jobAdd(kind: string, args: Record<string, string>, accountArg?: string): number {
+export async function jobAdd(kind: string, args: Record<string, string>, accountArg?: string): Promise<number> {
   const account = requireAccount(accountArg);
   if (!KINDS.includes(kind as JobKind)) {
     say.fail(`"${kind}" is not a job kind. One of: ${KINDS.join(', ')}`);
@@ -91,12 +91,12 @@ export function jobAdd(kind: string, args: Record<string, string>, accountArg?: 
     say.fail(`runAt "${spec.runAt}" is not a readable date — use an ISO timestamp.`);
     return 1;
   }
-  if (spec.after && !getJob(account, spec.after)) {
+  if (spec.after && !await getJob(account, spec.after)) {
     say.fail(`after "${spec.after}" is not a job on ${account}'s queue.`);
     return 1;
   }
 
-  const job = createJob(spec);
+  const job = await createJob(spec);
   say.ok(`queued ${job.kind} — ${job.id} (${job.state})`);
   if (PUBLISH_KINDS.includes(job.kind)) {
     say.step('A publish job waits for a person. `redbot work` will not send it.');
@@ -104,12 +104,12 @@ export function jobAdd(kind: string, args: Record<string, string>, accountArg?: 
   return 0;
 }
 
-export function jobCancel(id: string, accountArg?: string): number {
+export async function jobCancel(id: string, accountArg?: string): Promise<number> {
   const account = requireAccount(accountArg);
-  const job = getJob(account, id);
+  const job = await getJob(account, id);
   if (!job) { say.fail(`No job ${id} on ${account}'s queue.`); return 1; }
   try {
-    cancelJob(account, id);
+    await cancelJob(account, id);
     say.ok(`cancelled ${id}`);
     return 0;
   } catch (e) {

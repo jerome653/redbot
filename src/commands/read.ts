@@ -35,7 +35,7 @@ export async function read(subreddit: string | undefined, limit?: number): Promi
     // interstitial and count it as "0 threads" while hammering Reddit. `isBlocked` was imported
     // but never called on this path (evaluation L4); check it before collecting.
     if (await isBlocked(s.page)) {
-      record('login.fail', `block page while opening r/${name}`, { subreddit: name });
+      await record('login.fail', `block page while opening r/${name}`, { subreddit: name });
       say.fail('Reddit served a block page. Open reddit.com by hand in that Chrome window once, then retry.');
       return 1;
     }
@@ -65,16 +65,16 @@ export async function read(subreddit: string | undefined, limit?: number): Promi
     }
     if (skipped) say.warn(`${skipped} thread(s) skipped and not counted.`);
 
-    const added = saveThreads(threads);
+    const added = await saveThreads(threads);
     say.ok(`Collected ${threads.length} threads (${added} new). Next: redbot analyze`);
-    record('read', `r/${name}: ${threads.length} threads, ${added} new`, {
+    await record('read', `r/${name}: ${threads.length} threads, ${added} new`, {
       subreddit: name, collected: threads.length, added
     });
     return 0;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     say.fail(msg);
-    record('error', `read r/${name} failed: ${msg}`);
+    await record('error', `read r/${name} failed: ${msg}`);
     return 1;
   } finally {
     await s.close();

@@ -19,11 +19,15 @@
  * State lives in the append-only job log, never in this process. A worker that dies leaves a
  * job in `running`; `recover()` finds those on the next pass and returns them to `pending` with
  * the interruption recorded. Nothing is lost and nothing is silently retried more than its
- * `maxAttempts` allows.
+ * `maxAttempts` allows — including after a crash, which is a ceiling `recover()` has to apply
+ * itself because the catch block in `runOne` is exactly the code a dead process never reaches.
+ *
+ * A pass does not assume it is the only one. Jobs are taken with `claimJob()`, which hands a
+ * job to exactly one worker; a job this pass did not win is skipped, not run.
  */
 import { record } from './log.js';
 import {
-  loadJobs, runnable, transition, createJob, orphaned,
+  loadJobs, runnable, transition, claimJob, createJob, orphaned,
   type Job, type JobKind
 } from './jobs.js';
 
@@ -80,19 +84,46 @@ export interface PassResult {
 }
 
 /**
- * Return interrupted jobs to the queue.
+ * Deal with jobs interrupted by a process that died.
  *
  * Called at the start of every pass rather than only at startup: a worker can die at any point,
  * and a scheduler that only recovers on boot leaves work stranded until someone restarts it.
+ *
+ * The retry ceiling is applied HERE as well as in `runOne`'s catch block, and that duplication
+ * is the point. A crash never reaches a catch block, so the ceiling used to exist only for
+ * failures polite enough to throw: an orphan came back as `pending` with no comparison against
+ * `maxAttempts` at all, was picked up, crashed the worker again, and was requeued again, for as
+ * long as whatever killed the process kept killing it. A job that kills its worker is the LAST
+ * thing that should be retried without limit.
+ *
+ * The comparison matches `runOne` exactly — `attempts` counts attempts already made, so a job
+ * with `attempts` still within `maxAttempts` has a try left and anything beyond it does not.
+ *
+ * Returns the number of orphans dealt with, requeued and failed alike: the operator's question
+ * is "how much work did a dead process leave behind", not "how much of it survived".
  */
-export function recover(account: string, now: Date = new Date()): number {
+export async function recover(account: string, now: Date = new Date()): Promise<number> {
   let n = 0;
-  for (const job of orphaned(account, now)) {
-    transition(account, job.id, {
+  for (const job of await orphaned(account, now)) {
+    const allowed = job.maxAttempts ?? 0;
+
+    if (job.attempts > allowed) {
+      const why =
+        `the process running this job stopped before it finished, and its ${job.attempts} ` +
+        `attempt(s) already exhausted maxAttempts=${allowed} — not requeued`;
+      await transition(account, job.id, { state: 'failed', detail: why }, now);
+      await record('job.failed', `${job.kind} job ${job.id} failed: ${why}`, {
+        account, jobId: job.id, attempts: job.attempts, level: 'error'
+      });
+      n++;
+      continue;
+    }
+
+    await transition(account, job.id, {
       state: 'pending',
       detail: 'the process running this job stopped before it finished — returned to the queue'
     }, now);
-    record('job.recovered', `recovered ${job.kind} job ${job.id}`, {
+    await record('job.recovered', `recovered ${job.kind} job ${job.id}`, {
       account, jobId: job.id, kind: job.kind
     });
     n++;
@@ -104,12 +135,18 @@ export function recover(account: string, now: Date = new Date()): number {
  * A recurring job schedules its successor rather than looping in place.
  *
  * The successor is a new row, so the log reads as a history of discrete runs instead of one
- * row whose meaning changes. `runAt` is computed from the completion time, which means a job
+ * row whose meaning changes. `runAt` is computed from the COMPLETION time, which means a job
  * that overran its own interval does not immediately fire again.
+ *
+ * `completedAt` is a separate argument from the pass clock because those two are not the same
+ * instant and the difference is the whole point. This used to be handed the pass timestamp,
+ * captured before the runner ran, so a `everyMinutes: 15` job that took 40 minutes scheduled
+ * its successor 25 minutes in the past — due on the very next pass, back to back, exactly the
+ * behaviour the paragraph above says cannot happen. The doc was right and the code was wrong.
  */
-function scheduleRepeat(job: Job, now: Date): Job | null {
+async function scheduleRepeat(job: Job, completedAt: Date): Promise<Job | null> {
   if (!job.everyMinutes || job.everyMinutes <= 0) return null;
-  const next = new Date(now.getTime() + job.everyMinutes * 60_000).toISOString();
+  const next = new Date(completedAt.getTime() + job.everyMinutes * 60_000).toISOString();
   const spec = {
     kind: job.kind,
     account: job.account,
@@ -119,10 +156,16 @@ function scheduleRepeat(job: Job, now: Date): Job | null {
     ...(job.args ? { args: job.args } : {}),
     ...(job.note ? { note: job.note } : {})
   };
-  return createJob(spec, now);
+  return await createJob(spec, completedAt);
 }
 
-async function runOne(job: Job, now: Date): Promise<'completed' | 'failed' | 'waiting'> {
+/**
+ * `skipped` means another worker claimed the job first. It is not an outcome of the job — this
+ * pass simply did not run it — so it is reported separately from failure and is not counted.
+ */
+type RunOutcome = 'completed' | 'failed' | 'waiting' | 'skipped';
+
+async function runOne(job: Job, now: Date): Promise<RunOutcome> {
   const account = job.account;
 
   /**
@@ -131,7 +174,7 @@ async function runOne(job: Job, now: Date): Promise<'completed' | 'failed' | 'wa
    * the path.
    */
   if (PUBLISH_KINDS.includes(job.kind)) {
-    transition(account, job.id, {
+    await transition(account, job.id, {
       state: 'waiting',
       detail: 'ready for a person to approve — redbot does not publish on its own'
     }, now);
@@ -140,23 +183,42 @@ async function runOne(job: Job, now: Date): Promise<'completed' | 'failed' | 'wa
 
   const runner = runners.get(job.kind);
   if (!runner) {
-    transition(account, job.id, {
+    await transition(account, job.id, {
       state: 'failed',
       detail: `no runner is registered for "${job.kind}" jobs`
     }, now);
     return 'failed';
   }
 
-  const attempts = job.attempts + 1;
-  transition(account, job.id, { state: 'running', attempts }, now);
+  /**
+   * The claim, not a state write. Between `runnable()` listing this job and this line, another
+   * worker — the console spawns its own CLI process for the same queue — may already have taken
+   * it. `claimJob` settles that with one atomic filesystem operation; null means we lost, and
+   * losing means moving on, never running anyway.
+   */
+  const claimed = await claimJob(account, job.id, now);
+  if (!claimed) return 'skipped';
+
+  const attempts = claimed.attempts;
+
+  /**
+   * How long the runner actually took, measured on the real clock.
+   *
+   * The pass timestamp `now` stays the clock for every RECORDED state, so the log is
+   * reproducible and a test can drive the scheduler from a fixed date. But a duration is not a
+   * timestamp: a recurring job's next run has to be spaced from when this one finished, and the
+   * pass timestamp was captured before the runner ran. Measuring the elapsed time and adding it
+   * to the pass clock gives the completion instant without any helper reaching behind its
+   * caller's back for the wall clock — the defect that made the gates suite expire on a
+   * calendar boundary.
+   */
+  const startedMs = Date.now();
 
   try {
-    await runner({ ...job, attempts });
-    // `now` throughout, never `new Date()`. The pass timestamp is the scheduler's clock, and a
-    // helper reaching for the wall clock behind its caller's back is precisely the defect that
-    // made the gates suite expire on a calendar boundary.
-    transition(account, job.id, { state: 'completed' }, now);
-    scheduleRepeat(job, now);
+    await runner(claimed);
+    const completedAt = new Date(now.getTime() + (Date.now() - startedMs));
+    await transition(account, job.id, { state: 'completed' }, now);
+    await scheduleRepeat(job, completedAt);
     return 'completed';
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e);
@@ -169,20 +231,20 @@ async function runOne(job: Job, now: Date): Promise<'completed' | 'failed' | 'wa
        * measured once (HTTP 429 after roughly 75 page loads in a few minutes).
        */
       const delayMinutes = Math.min(30, 2 ** attempts);
-      transition(account, job.id, {
+      await transition(account, job.id, {
         state: 'pending',
         attempts,
         runAt: new Date(now.getTime() + delayMinutes * 60_000).toISOString(),
         detail: `attempt ${attempts} failed (${why}) — retrying in ${delayMinutes}m`
       }, now);
-      record('job.retry', `${job.kind} job ${job.id} retrying`, {
+      await record('job.retry', `${job.kind} job ${job.id} retrying`, {
         account, jobId: job.id, attempts, why
       });
       return 'failed';
     }
 
-    transition(account, job.id, { state: 'failed', attempts, detail: why }, now);
-    record('job.failed', `${job.kind} job ${job.id} failed: ${why}`, {
+    await transition(account, job.id, { state: 'failed', attempts, detail: why }, now);
+    await record('job.failed', `${job.kind} job ${job.id} failed: ${why}`, {
       account, jobId: job.id, attempts, level: 'error'
     });
     return 'failed';
@@ -201,15 +263,19 @@ export async function runPass(account: string, now: Date = new Date()): Promise<
     ran: 0, completed: 0, failed: 0, waiting: 0, recovered: 0, requeued: 0
   };
 
-  result.recovered = recover(account, now);
+  result.recovered = await recover(account, now);
 
-  for (const job of runnable(account, now)) {
+  for (const job of await runnable(account, now)) {
     // Re-read: an earlier job in this pass may have cancelled or completed a dependency.
-    const fresh = loadJobs(account).find((j) => j.id === job.id);
+    const fresh = (await loadJobs(account)).find((j) => j.id === job.id);
     if (!fresh || (fresh.state !== 'pending' && fresh.state !== 'scheduled')) continue;
 
-    result.ran++;
     const outcome = await runOne(fresh, now);
+    // Counted after the fact, because until the claim is settled this pass does not know
+    // whether the job is its work at all. A job another worker took was not "ran by us".
+    if (outcome === 'skipped') continue;
+
+    result.ran++;
     if (outcome === 'completed') result.completed++;
     else if (outcome === 'waiting') result.waiting++;
     else result.failed++;

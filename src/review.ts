@@ -21,6 +21,9 @@ import { join } from 'node:path';
 import { DATA, ensureData } from './config.js';
 import type { QualityMetrics } from './quality.js';
 
+import { getPool } from './db.js';
+import { insertReview, selectReviews, insertRegret, selectRegrets } from './db/logs.js';
+
 export const reviewsPath = join(DATA, 'reviews.jsonl');
 
 export type Decision = 'approved' | 'edited' | 'rejected';
@@ -168,20 +171,14 @@ export interface RegretRecord {
   operator: string | null;
 }
 
-export function recordRegret(r: Omit<RegretRecord, 'ts'>): RegretRecord {
-  ensureData();
+export async function recordRegret(r: Omit<RegretRecord, 'ts'>): Promise<RegretRecord> {
   const full: RegretRecord = { ts: new Date().toISOString(), ...r };
-  appendFileSync(regretPath, JSON.stringify(full) + '\n', 'utf8');
+  await insertRegret(getPool(), full);
   return full;
 }
 
-export function loadRegrets(): RegretRecord[] {
-  if (!existsSync(regretPath)) return [];
-  return readFileSync(regretPath, 'utf8')
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => { try { return JSON.parse(l) as RegretRecord; } catch { return null; } })
-    .filter((r): r is RegretRecord => r !== null);
+export async function loadRegrets(): Promise<RegretRecord[]> {
+  return selectRegrets(getPool());
 }
 
 export interface RegretSummary {
@@ -196,7 +193,7 @@ export interface RegretSummary {
   byCategory: Array<{ category: string; count: number }>;
 }
 
-export function summarizeRegret(records: RegretRecord[] = loadRegrets()): RegretSummary {
+export function summarizeRegret(records: RegretRecord[]): RegretSummary {
   const standalone = records.filter((r) => r.kind === 'standalone');
   const regret = records.filter((r) => r.kind === 'regret');
   const counts = new Map<string, number>();
@@ -217,20 +214,14 @@ export function summarizeRegret(records: RegretRecord[] = loadRegrets()): Regret
   };
 }
 
-export function recordReview(r: Omit<ReviewRecord, 'ts'>): ReviewRecord {
-  ensureData();
+export async function recordReview(r: Omit<ReviewRecord, 'ts'>): Promise<ReviewRecord> {
   const full: ReviewRecord = { ts: new Date().toISOString(), ...r };
-  appendFileSync(reviewsPath, JSON.stringify(full) + '\n', 'utf8');
+  await insertReview(getPool(), full);
   return full;
 }
 
-export function loadReviews(): ReviewRecord[] {
-  if (!existsSync(reviewsPath)) return [];
-  return readFileSync(reviewsPath, 'utf8')
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => { try { return JSON.parse(l) as ReviewRecord; } catch { return null; } })
-    .filter((r): r is ReviewRecord => r !== null);
+export async function loadReviews(): Promise<ReviewRecord[]> {
+  return selectReviews(getPool());
 }
 
 /** Share of the original's content words still present after an edit. */
@@ -264,7 +255,7 @@ export interface ReviewSummary {
   timedReviews: number;
 }
 
-export function summarizeReviews(reviews: ReviewRecord[] = loadReviews()): ReviewSummary {
+export function summarizeReviews(reviews: ReviewRecord[]): ReviewSummary {
   const total = reviews.length;
   const approved = reviews.filter((r) => r.decision === 'approved').length;
   const edited = reviews.filter((r) => r.decision === 'edited').length;

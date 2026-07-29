@@ -52,7 +52,7 @@ function list(): number {
   return 0;
 }
 
-function add(name: string | undefined): number {
+async function add(name: string | undefined): Promise<number> {
   say.head('redbot operators add');
 
   if (!name) { say.fail('Usage: redbot operators add <name>'); return 1; }
@@ -97,7 +97,7 @@ function add(name: string | undefined): number {
   say.step(`  bash:        CLAUDE_CONFIG_DIR="${configDir}" claude          # then /login inside it`);
   say.step('');
   say.step(`Then run as this operator:  $env:REDBOT_OPERATOR = "${name}"   (or pick "${name}" in the console)`);
-  record('operator.add', `registered operator ${name}`, { name });
+  await record('operator.add', `registered operator ${name}`, { name });
   return 0;
 }
 

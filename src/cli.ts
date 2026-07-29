@@ -7,6 +7,11 @@
  */
 import { login } from './commands/login.js';
 import { operators } from './commands/operators.js';
+import { vault } from './commands/vault.js';
+import { accounts } from './commands/accounts.js';
+import { sources } from './commands/sources.js';
+import { probeKarma } from './probe-karma.js';
+import { primeAccounts, selectedAccount } from './config.js';
 import { read } from './commands/read.js';
 import { search } from './commands/search.js';
 import { draft } from './commands/draft.js';
@@ -34,6 +39,13 @@ redbot — Reddit engagement assistant
     redbot login                 confirm the browser session
     redbot operators [add <name>]
                                  who can run redbot, and whose Claude login pays
+    redbot accounts [import|export]
+                                 who redbot may post as (the database is the record)
+    redbot sources [add|rm|import|export]
+                                 where redbot looks for threads (the database is the record)
+    redbot vault [list|check]    what secrets are stored, encrypted, in the database
+    redbot vault set <name>      store one — piped in, never typed as an argument
+    redbot vault rm <name>       remove one
     redbot session [--kind short|medium] [--sub <name>]
                                  one human-shaped browsing session (reads only)
     redbot read <subreddit>      collect threads from a subreddit
@@ -52,6 +64,18 @@ redbot — Reddit engagement assistant
                                  collect -> score -> draft -> fact-check, on a loop.
                                  Respects quiet hours and the daily ceiling. NEVER publishes.
 
+  The queue — every action becomes a job, per account
+    redbot job list [--account <handle>] [--state <state>]
+                                 what is queued, scheduled, waiting or done
+    redbot job add <kind> [--account <handle>] [--at <iso>] [--after <jobId>]
+                                 queue one action. A publish kind stops at
+                                 "waiting" — the machine will not send it.
+    redbot job cancel <id> [--account <handle>]
+                                 binding: a cancelled job is never revived
+    redbot work [--account <handle>] [--every <minutes>|--loop]
+                                 run that account's queue — one pass, or on a
+                                 loop. NEVER publishes.
+
   Certifying — truth before prose
     redbot certify [draftId] [--override]
                                  Argus: claims, evidence, contradictions
@@ -69,6 +93,7 @@ redbot — Reddit engagement assistant
                                  "would you still put your name on it?"
 
   Diagnosis
+    redbot probe-karma           measure the signed-in account's karma, and record it
     redbot doctor                is the INSTALL sound? build, auth, data, secrets, staleness
     redbot insights              where the pipeline is losing candidates, and which stage to fix
     redbot health [account]      is the ACCOUNT sound? karma, removals, cooldowns
@@ -106,7 +131,15 @@ export const VALUE_FLAGS = new Set([
   // and then act on whatever REDBOT_ACCOUNT happened to be — the wrong queue, silently.
   'account', 'state', 'at', 'after', 'attempts', 'note',
   'permalink', 'direction', 'target', 'query', 'subreddit', 'title', 'body',
-  'draft', 'thread', 'comment'
+  'draft', 'thread', 'comment',
+  // `redbot sources add --search "<query>" --why "<reason>"`. Both take a value in space form,
+  // so both must be here or their values leak back into `positional` — the same parser bug
+  // this set was created to fix.
+  'search', 'why',
+  // `redbot vault set <name> --scope <operator>`. This one currently works either way, because
+  // `vault` reads its positionals before the flag — but that is an accident of argument order,
+  // not a property of the parser, and the next command to take --scope would not be so lucky.
+  'scope'
 ]);
 
 export interface ParsedArgs {
@@ -147,9 +180,46 @@ async function main(): Promise<number> {
   const [cmd, ...rest] = process.argv.slice(2);
   const { flags, positional, flagValue } = parseCliArgs(rest);
 
+  /**
+   * `redbot.accounts` is the system of record, but the readers of it are synchronous —
+   * `config.browser` resolves which Chrome this run drives. Load them once, here, before any
+   * command can ask. Fails soft: an unreachable database leaves data/accounts.json answering,
+   * so `doctor` and the browser commands still work when the database is the thing that broke.
+   */
+  await primeAccounts();
+
+  /**
+   * An account nobody configured stops the run, here, before any command starts.
+   *
+   * This used to happen as a SIDE EFFECT: `config.browser` resolved at module load, and
+   * resolving it called `selectedAccount()`, which throws on an unknown handle. Accounts now
+   * come from Postgres and cannot be loaded before this module is evaluated, so that
+   * resolution had to become lazy — and the refusal quietly went with it. A work pass as an
+   * unknown account then ran to completion against whatever browser the ambient profile
+   * points at and reported "Nothing eligible this pass" with exit 0, which is the worst
+   * possible answer: it looks like success and it acted as the wrong person.
+   *
+   * So the check is explicit now rather than emergent. It runs for every command, before
+   * dispatch, and fails closed.
+   */
+  selectedAccount();
+
   switch (cmd) {
     case 'login':   return login();
     case 'operators': return operators(positional[0], positional[1]);
+    /**
+     * The value is never a positional argument — see src/commands/vault.ts. `--scope` names an
+     * operator so two people on one machine can hold different keys under the same name.
+     */
+    case 'vault':   return vault(positional[0], positional[1], flagValue('scope'));
+    /**
+     * The product console's "Check it worked" button spawns `dist/cli.js probe-karma`.
+     * Without this case it answered "Unknown command" and step 3 of the wizard was dead.
+     */
+    case 'probe-karma': return probeKarma();
+    case 'accounts': return accounts(positional[0]);
+    /** `--search "<q>"` adds a saved search; a bare value is a subreddit. */
+    case 'sources': return sources(positional[0], positional[1], { search: flagValue('search'), why: flagValue('why') });
     case 'read':    return read(positional[0]);
     case 'search':  return search(positional[0], undefined, flagValue('commit'));
     case 'draft':   return draft(positional[0]);

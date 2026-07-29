@@ -68,7 +68,7 @@ async function askReason(
 export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Promise<number> {
   say.head('redbot reply');
 
-  const drafts = loadDrafts();
+  const drafts = await loadDrafts();
   const pending = drafts.filter((d) => d.status === 'pending');
 
   const target: Draft | undefined = draftIdArg
@@ -84,8 +84,8 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     return 1;
   }
 
-  const thread = loadThreads().find((t) => t.id === target.threadId);
-  const assessment = loadAssessments().find((a) => a.threadId === target.threadId);
+  const thread = (await loadThreads()).find((t) => t.id === target.threadId);
+  const assessment = (await loadAssessments()).find((a) => a.threadId === target.threadId);
 
   if (!(await isBrowserUp())) {
     say.fail(new NoBrowserError(config.browser.cdpEndpoint).message);
@@ -101,12 +101,12 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     await s.page.goto(target.permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
 
     if (await isRateLimited(s.page)) {
-      record('ratelimit', `429 while opening ${target.permalink}`, { permalink: target.permalink });
+      await record('ratelimit', `429 while opening ${target.permalink}`, { permalink: target.permalink });
       say.fail('Reddit is rate-limiting this browser right now. Stopping — nothing was posted.');
       return 1;
     }
     if (await isBlocked(s.page)) {
-      record('login.fail', `block page while opening ${target.permalink}`, { permalink: target.permalink });
+      await record('login.fail', `block page while opening ${target.permalink}`, { permalink: target.permalink });
       say.fail('Reddit served a block page. Stopping — nothing was posted.');
       return 1;
     }
@@ -116,7 +116,7 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     say.step(`Account: ${identity.username ?? '(unknown)'} — ${identity.via}`);
 
     const state = await probeThreadState(s.page, identity.username);
-    const verdict = health(identity.username);
+    const verdict = await health(identity.username);
     say.step(`Health : ${verdict.state}${verdict.resumeAt ? ` (resumes ${verdict.resumeAt})` : ''}`);
 
     /**
@@ -138,7 +138,7 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     const windowVerdict = intended
       ? checkWindow({
           account: intended,
-          repliesToday: counters(intended.handle, new Date(), undefined, intended.timezone).repliesToday
+          repliesToday: (await counters(intended.handle, new Date(), undefined, intended.timezone)).repliesToday
         })
       : null;
     if (windowVerdict) say.step(`Window : ${windowVerdict.detail}`);
@@ -159,7 +159,7 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     if (!pre.allow) {
       say.fail('Refusing to publish. Gates that failed:');
       for (const b of pre.blocks) say.fail(`  [${b.gate}] ${b.reason}`);
-      record('gate.block', `publish blocked for ${target.id}`, {
+      await record('gate.block', `publish blocked for ${target.id}`, {
         draftId: target.id,
         gates: pre.blocks.map((b) => b.gate),
         blocks: pre.blocks
@@ -173,12 +173,12 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       say.step('Reading the thread and its comments before replying…');
       const view = await viewThread(s.page, thread, rng, { thorough: true });
       say.step(`  dwelt ${Math.round(view.dwellMs / 1000)}s over ${view.steps} scroll steps`);
-      record('session.view', `read ${thread.id} before replying`, {
+      await record('session.view', `read ${thread.id} before replying`, {
         threadId: thread.id, dwellMs: view.dwellMs, steps: view.steps, thorough: true, seed: rng.seed
       });
     } else if (opts?.quick) {
       say.warn('--quick: skipped the pre-reply read. Recorded, so the metrics do not overstate behaviour.');
-      record('session.view', `SKIPPED pre-reply read for ${target.threadId} (--quick)`, {
+      await record('session.view', `SKIPPED pre-reply read for ${target.threadId} (--quick)`, {
         threadId: target.threadId, skipped: true
       });
     }
@@ -251,17 +251,17 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     if (decision === 'r') {
       target.status = 'rejected';
       target.decidedAt = new Date().toISOString();
-      saveDraft(target);
+      await saveDraft(target);
 
       const { code, note } = await askReason('rejected', REJECT_REASONS);
-      recordReview({
+      await recordReview({
         ...snapshot, decision: 'rejected', reasonCode: code, note,
         reviewSeconds, totalSeconds: secondsSince(shownAt)
       });
 
       say.ok('Rejected. Nothing was posted, and the reason is on the record.');
-      record('reject', `rejected draft ${target.id}`, { draftId: target.id, reasonCode: code });
-      record('review', `review recorded for ${target.id}`, { draftId: target.id, decision: 'rejected', reasonCode: code });
+      await record('reject', `rejected draft ${target.id}`, { draftId: target.id, reasonCode: code });
+      await record('review', `review recorded for ${target.id}`, { draftId: target.id, decision: 'rejected', reasonCode: code });
       return 0;
     }
 
@@ -282,11 +282,11 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       const relint = lintDraft(edited);
       target.lintIssues = relint.issues;
       target.hasDisclosure = relint.hasDisclosure;
-      saveDraft(target);
+      await saveDraft(target);
       say.ok('Draft updated.');
 
       const { code, note } = await askReason('edited', EDIT_REASONS);
-      recordReview({
+      await recordReview({
         ...snapshot,
         decision: 'edited',
         reasonCode: code,
@@ -303,7 +303,7 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
           after: edited
         }
       });
-      record('review', `review recorded for ${target.id}`, { draftId: target.id, decision: 'edited', reasonCode: code });
+      await record('review', `review recorded for ${target.id}`, { draftId: target.id, decision: 'edited', reasonCode: code });
     } else {
       /**
        * Approval reason. A console approval has ALREADY been made by a person and carries its
@@ -315,11 +315,11 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       const { code, note } = preApproved
         ? { code: preApproved.reasonCode ?? 'console', note: preApproved.note ?? '' }
         : await askReason('approved', APPROVE_REASONS);
-      recordReview({
+      await recordReview({
         ...snapshot, decision: 'approved', reasonCode: code, note,
         reviewSeconds, totalSeconds: secondsSince(shownAt)
       });
-      record('review', `review recorded for ${target.id}`, { draftId: target.id, decision: 'approved', reasonCode: code });
+      await record('review', `review recorded for ${target.id}`, { draftId: target.id, decision: 'approved', reasonCode: code });
     }
 
     /* ---------- 6. re-probe and re-gate against fresh state ---------- */
@@ -327,7 +327,7 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     await s.page.goto(target.permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     const identity2 = await whoAmI(s.page);
     const state2 = await probeThreadState(s.page, identity2.username);
-    const verdict2 = health(identity2.username);
+    const verdict2 = await health(identity2.username);
 
     const final = evaluateGates({
       draft: target,
@@ -338,13 +338,13 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       window: windowVerdict,
       health: verdict2,
       threadState: state2,
-      allDrafts: loadDrafts()
+      allDrafts: await loadDrafts()
     });
 
     if (!final.allow) {
       say.fail('State changed during review — refusing to publish:');
       for (const b of final.blocks) say.fail(`  [${b.gate}] ${b.reason}`);
-      record('gate.block', `publish blocked at final check for ${target.id}`, {
+      await record('gate.block', `publish blocked at final check for ${target.id}`, {
         draftId: target.id,
         gates: final.blocks.map((b) => b.gate),
         blocks: final.blocks,
@@ -356,11 +356,11 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     /* ---------- 7. publish ---------- */
     target.status = 'approved';
     target.decidedAt = new Date().toISOString();
-    saveDraft(target);
-    record('approve', `approved draft ${target.id}`, { draftId: target.id });
+    await saveDraft(target);
+    await record('approve', `approved draft ${target.id}`, { draftId: target.id });
 
     say.step('Publishing…');
-    record('publish.attempt', `submitting to ${target.permalink}`, {
+    await record('publish.attempt', `submitting to ${target.permalink}`, {
       draftId: target.id, permalink: target.permalink, body: target.body
     });
 
@@ -371,12 +371,12 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       if (result.url) target.publishedUrl = result.url;
       if (result.commentPermalink) target.commentPermalink = result.commentPermalink;
       if (result.commentId) target.commentId = result.commentId;
-      saveDraft(target);
+      await saveDraft(target);
       say.ok(`Published. ${result.commentPermalink ?? result.url ?? ''}`);
       if (!result.commentPermalink) {
         say.warn('Reddit did not expose a comment permalink on the node — checkpoints will match on text instead.');
       }
-      record('publish.ok', `published ${target.id}`, {
+      await record('publish.ok', `published ${target.id}`, {
         draftId: target.id, url: result.url, commentPermalink: result.commentPermalink, commentId: result.commentId
       });
 
@@ -389,7 +389,7 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
        * never turn a published reply into a reported failure.
        */
       try {
-        appendInteraction({
+        await appendInteraction({
           schemaVersion: INTERACTION_SCHEMA_VERSION,
           ts: new Date().toISOString(),
           kind: 'publish',
@@ -429,10 +429,10 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     }
 
     target.status = 'failed';
-    saveDraft(target);
+    await saveDraft(target);
     say.fail(`Publish failed: ${result.error}`);
     say.warn('If you are unsure whether it landed, open the thread and check by hand before retrying.');
-    record('publish.fail', `failed ${target.id}: ${result.error}`, {
+    await record('publish.fail', `failed ${target.id}: ${result.error}`, {
       draftId: target.id, error: result.error
     });
     return 1;

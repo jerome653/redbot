@@ -51,13 +51,13 @@ async function pickFrom<T extends string>(
 export async function regret(draftIdArg?: string): Promise<number> {
   say.head('redbot regret');
 
-  const published = loadDrafts().filter((d) => d.status === 'published');
+  const published = (await loadDrafts()).filter((d) => d.status === 'published');
   if (!published.length) {
     say.warn('Nothing has been published, so there is nothing to stand behind yet.');
     return 1;
   }
 
-  const existing = loadRegrets();
+  const existing = await loadRegrets();
   const has = (draftId: string, kind: 'standalone' | 'regret') =>
     existing.some((r) => r.draftId === draftId && r.kind === kind);
 
@@ -93,13 +93,13 @@ export async function regret(draftIdArg?: string): Promise<number> {
       }
       const lessons = await ask('  What did you learn? (one line, Enter to skip): ');
 
-      recordRegret({
+      await recordRegret({
         draftId: d.id, threadId: d.threadId, permalink: url,
         kind: 'standalone', answer,
         ...(category ? { category } : {}),
         lessons, hoursAfterPublish: Number(hours.toFixed(1)), operator: null
       });
-      record('review', `standalone check for ${d.id}: ${answer}`, { draftId: d.id, answer, category });
+      await record('review', `standalone check for ${d.id}: ${answer}`, { draftId: d.id, answer, category });
       say.ok('Recorded.');
       asked++;
     }
@@ -131,13 +131,13 @@ export async function regret(draftIdArg?: string): Promise<number> {
     }
     const lessons = await ask('  Lessons for the next reply (one line): ');
 
-    recordRegret({
+    await recordRegret({
       draftId: d.id, threadId: d.threadId, permalink: url,
       kind: 'regret', answer,
       ...(category ? { category } : {}),
       lessons, hoursAfterPublish: Number(hours.toFixed(1)), operator: null
     });
-    record('review', `regret check for ${d.id}: ${answer}`, { draftId: d.id, answer, category });
+    await record('review', `regret check for ${d.id}: ${answer}`, { draftId: d.id, answer, category });
     say.ok('Recorded.');
     asked++;
   }

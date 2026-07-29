@@ -22,6 +22,8 @@ import { join } from 'node:path';
 import { DATA, ensureData } from './config.js';
 import { policy } from './policy.js';
 import { loadHistory } from './store.js';
+import { getPool } from './db.js';
+import { insertObservation, selectObservations } from './db/logs.js';
 import type { HistoryEntry } from './types.js';
 
 export const observationsPath = join(DATA, 'observations.jsonl');
@@ -57,20 +59,14 @@ export interface Observation {
   note?: string;
 }
 
-export function recordObservation(o: Omit<Observation, 'ts'>): Observation {
-  ensureData();
+export async function recordObservation(o: Omit<Observation, 'ts'>): Promise<Observation> {
   const full: Observation = { ts: new Date().toISOString(), ...o };
-  appendFileSync(observationsPath, JSON.stringify(full) + '\n', 'utf8');
+  await insertObservation(getPool(), full);
   return full;
 }
 
-export function loadObservations(): Observation[] {
-  if (!existsSync(observationsPath)) return [];
-  return readFileSync(observationsPath, 'utf8')
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => { try { return JSON.parse(l) as Observation; } catch { return null; } })
-    .filter((o): o is Observation => o !== null);
+export async function loadObservations(): Promise<Observation[]> {
+  return selectObservations(getPool());
 }
 
 /* ------------------------------------------------------------------ */
@@ -147,15 +143,15 @@ function num(v: unknown): number | null {
  *
  * `now` is injectable so the state machine is testable without waiting a day.
  */
-export function counters(
+export async function counters(
   account: string | null,
   now: Date = new Date(),
   sources?: { history?: HistoryEntry[]; observations?: Observation[] },
   /** The account's IANA timezone, so "today" for the daily counts matches its quiet hours. */
   zone?: string
-): HealthCounters {
-  const history = sources?.history ?? loadHistory();
-  const obs = sources?.observations ?? loadObservations();
+): Promise<HealthCounters> {
+  const history = sources?.history ?? await loadHistory();
+  const obs = sources?.observations ?? await loadObservations();
 
   const mine = <T extends { account?: string | null }>(rows: T[]) =>
     account ? rows.filter((r) => r.account === account || r.account == null) : rows;
@@ -323,6 +319,6 @@ export function assess(c: HealthCounters, now: Date = new Date()): HealthVerdict
   return { state: 'Healthy', mayPublish: true, reasons: ['no counter is near a threshold'], resumeAt: null, counters: c };
 }
 
-export function health(account: string | null, now: Date = new Date()): HealthVerdict {
-  return assess(counters(account, now), now);
+export async function health(account: string | null, now: Date = new Date()): Promise<HealthVerdict> {
+  return assess(await counters(account, now), now);
 }

@@ -8,7 +8,7 @@ import { say } from '../log.js';
 
 export async function history(limitArg?: string): Promise<number> {
   const limit = Number(limitArg) > 0 ? Number(limitArg) : 40;
-  const entries = loadHistory();
+  const entries = await loadHistory();
 
   say.head('redbot history');
 
@@ -22,7 +22,7 @@ export async function history(limitArg?: string): Promise<number> {
     say.info(`${when}  ${e.kind.padEnd(16)} ${e.summary}`);
   }
 
-  const drafts = loadDrafts();
+  const drafts = await loadDrafts();
   const counts = drafts.reduce<Record<string, number>>((acc, d) => {
     acc[d.status] = (acc[d.status] ?? 0) + 1;
     return acc;

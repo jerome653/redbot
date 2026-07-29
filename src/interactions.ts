@@ -29,6 +29,9 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DATA, ensureData } from './config.js';
 
+import { getPool } from './db.js';
+import { insertInteraction, selectInteractions } from './db/logs.js';
+
 export const interactionsPath = join(DATA, 'interactions.jsonl');
 
 /** Bump only for a breaking change, and migrate rather than reinterpret old rows. */
@@ -128,20 +131,12 @@ export interface InteractionRecord {
   note: string;
 }
 
-export function appendInteraction(record: InteractionRecord): void {
-  ensureData();
-  appendFileSync(interactionsPath, JSON.stringify(record) + '\n', 'utf8');
+export async function appendInteraction(record: InteractionRecord): Promise<void> {
+  await insertInteraction(getPool(), record);
 }
 
-export function loadInteractions(): InteractionRecord[] {
-  if (!existsSync(interactionsPath)) return [];
-  return readFileSync(interactionsPath, 'utf8')
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => {
-      try { return JSON.parse(l) as InteractionRecord; } catch { return null; }
-    })
-    .filter((r): r is InteractionRecord => r !== null);
+export async function loadInteractions(): Promise<InteractionRecord[]> {
+  return selectInteractions(getPool());
 }
 
 /**
@@ -150,8 +145,8 @@ export function loadInteractions(): InteractionRecord[] {
  * Deliberately the only accessor beyond the raw load. Anything that looks like a rate or a
  * trend belongs in a reporting layer built when there is something to report — not here.
  */
-export function interactionsFor(draftId: string): InteractionRecord[] {
-  return loadInteractions()
+export async function interactionsFor(draftId: string): Promise<InteractionRecord[]> {
+  return (await loadInteractions())
     .filter((r) => r.draftId === draftId)
     .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
 }

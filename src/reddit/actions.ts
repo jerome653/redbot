@@ -155,20 +155,51 @@ export async function submitPost(page: Page, input: SubmitPostInput): Promise<Ac
 
     const before = page.url();
     await submit.click();
-    await sleep(4000);
 
     /**
-     * Reddit navigates to the created post on success. If the URL has not moved off the submit
-     * form, the submission was refused — most often a missing required flair, a karma or
-     * account-age minimum, or an automod rule. Reporting "submitted" here would be the
-     * shadow-removal failure with an extra step.
+     * Wait for the navigation; do not sleep at it.
+     *
+     * Until 2026-07-27 this slept a flat 4000ms and then read `page.url()` once, and anything
+     * still on `/submit` was reported as a definitive refusal. A submission Reddit ACCEPTED but
+     * navigated away from more slowly than that reads exactly the same from here — and the only
+     * sensible response to "refused" is to submit again, which publishes a duplicate public
+     * thread. A race is the one thing this function must not turn into a verdict.
+     *
+     * The explicit timeout is load-bearing: `waitForURL`'s default is 0, which means wait for
+     * ever, and a genuinely refused submission never navigates.
      */
+    let leftTheForm = true;
+    try {
+      await page.waitForURL((u) => !u.pathname.includes('/submit'), {
+        timeout: 30_000,
+        waitUntil: 'domcontentloaded'
+      });
+    } catch {
+      leftTheForm = false;
+    }
+
     const after = page.url();
-    if (after.includes('/submit')) {
+
+    /**
+     * Still on the form after that wait is AMBIGUOUS, and is reported as ambiguous.
+     *
+     * A missing required flair, a karma or account-age minimum and an automod rule all land
+     * here — and so does a post that went through while Reddit took longer than 30s to move.
+     * The URL cannot tell them apart, so this says so and leaves the judgement to a person,
+     * exactly as the non-permalink landing below already does. `confirmed: false` is what makes
+     * it safe: the confirmation contract in `runners.ts` fails the job on anything that is not
+     * confirmed, so nothing downstream can read this as a success.
+     */
+    if (!leftTheForm) {
       return {
-        ok: false,
+        ok: true,
         url: after,
-        error: 'still on the submit form after posting — the subreddit refused it (flair required, karma or age minimum, or automod)'
+        confirmed: false,
+        error:
+          `still on the submit form 30s after posting — either the subreddit refused it (flair ` +
+          `required, karma or age minimum, or automod) or it was accepted and the page has not ` +
+          `moved. Check the account's profile before submitting again: a resubmit of a post that ` +
+          `was actually accepted creates a duplicate public thread.`
       };
     }
 
@@ -242,11 +273,25 @@ export async function votePost(
      * waiting for element to be visible, enabled and stable`, on an element that was visible
      * and enabled. Scoping plus an explicit scroll fixed it, verified by aria-pressed going
      * false → true on r/Wordpress as docs-architect.
+     *
+     * There is deliberately no page-level fallback. `?? firstVisible(page, candidates)` used to
+     * follow this lookup and handed back precisely the comment button the scoping exists to
+     * avoid, on exactly the occasions the scoping was needed — it reinstated the hazard the
+     * comment above describes, and it read as safety. Rule 2 of this module's header applies
+     * with no exception: absence refuses.
      */
     const postScope = page.locator(sel.postUnit[0]).first();
     const candidates = direction === 'up' ? sel.upvoteButton : sel.downvoteButton;
-    const button = (await within(postScope, candidates)) ?? (await firstVisible(page, candidates));
-    if (!button) return { ok: false, error: `no ${direction}vote control on the page — signed out, or the post is archived` };
+    const button = await within(postScope, candidates);
+    if (!button) {
+      return {
+        ok: false,
+        error:
+          `no ${direction}vote control inside the post unit — signed out, the post is archived, ` +
+          `or ${sel.postUnit[0]} did not render. Refusing rather than taking the first ` +
+          `${direction}vote button on the page, which on a detail page belongs to a comment.`
+      };
+    }
 
     // Reddit renders the action bar below the fold on a long post; the actionability check
     // fails on an element the viewport has never reached.
@@ -278,13 +323,29 @@ export async function votePost(
      * outcome, and the runner recorded `confirmed: true` for a vote that never existed. That
      * is the shadow-removal failure this project already documents for comments, one action
      * across. Persistence can only be established by asking the server again.
+     *
+     * The read-back is scoped, and has no fallback either — for a sharper reason than the click
+     * does. A page-level fallback here reads a COMMENT's `aria-pressed`, so a click that landed
+     * on the wrong element is confirmed by re-reading that same wrong element: a confirmation
+     * that agrees with itself whatever happened.
      */
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 });
     await sleep(2500);
 
-    const after = (await within(page.locator(sel.postUnit[0]).first(), candidates))
-      ?? (await firstVisible(page, candidates));
-    const pressedAfter = after ? await after.getAttribute('aria-pressed').catch(() => null) : null;
+    const after = await within(page.locator(sel.postUnit[0]).first(), candidates);
+    if (!after) {
+      // Reported as unread, not as discarded: "the vote did not persist" is a specific claim
+      // about what the server did with it, and nothing here observed that.
+      return {
+        ok: false,
+        url: page.url(),
+        error:
+          `the ${direction}vote was clicked, but after the reload no ${direction}vote control ` +
+          `could be found inside the post unit, so the outcome was never read — the vote may or ` +
+          `may not have registered. Check the post before voting again.`
+      };
+    }
+    const pressedAfter = await after.getAttribute('aria-pressed').catch(() => null);
     const persisted = pressedAfter === 'true';
 
     return {
@@ -312,10 +373,25 @@ export async function setSaved(page: Page, permalink: string, saved: boolean): P
     await page.goto(permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await pause();
 
-    // Scoped to the post: a detail page has one overflow menu per post AND one per comment.
+    /**
+     * Scoped to the post: a detail page has one overflow menu per post AND one per comment.
+     *
+     * No page-level fallback, for a reason specific to this selector group — `sel.overflowMenu`
+     * ends with a bare `button[aria-label*="more options" i]`, which every comment carries. A
+     * fallback here does not degrade to "the wrong post", it opens a COMMENT's menu, and the
+     * next thing this function does is click Save in whatever menu opened. Absence refuses.
+     */
     const postScope = page.locator(sel.postUnit[0]).first();
-    const menu = (await within(postScope, sel.overflowMenu)) ?? (await firstVisible(page, sel.overflowMenu));
-    if (!menu) return { ok: false, error: 'no overflow menu on the post' };
+    const menu = await within(postScope, sel.overflowMenu);
+    if (!menu) {
+      return {
+        ok: false,
+        error:
+          `no overflow menu inside the post unit — signed out, or ${sel.postUnit[0]} did not ` +
+          `render. Refusing rather than opening the first "more options" menu on the page, ` +
+          `which belongs to a comment.`
+      };
+    }
 
     await menu.scrollIntoViewIfNeeded().catch(() => { /* already in view */ });
     await sleep(400);
@@ -386,10 +462,16 @@ export async function setSaved(page: Page, permalink: string, saved: boolean): P
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 });
     await sleep(2000);
 
-    const menu2 = (await within(page.locator(sel.postUnit[0]).first(), sel.overflowMenu))
-      ?? (await firstVisible(page, sel.overflowMenu));
+    // Scoped for the same reason as the first lookup, and with the same refusal: reading a
+    // comment's menu back would "confirm" the save from a menu that was never touched.
+    const menu2 = await within(page.locator(sel.postUnit[0]).first(), sel.overflowMenu);
     if (!menu2) {
-      return { ok: true, confirmed: false, url: page.url(), error: 'could not re-open the menu to confirm' };
+      return {
+        ok: true,
+        confirmed: false,
+        url: page.url(),
+        error: "could not re-open the post's own overflow menu to confirm"
+      };
     }
     await menu2.scrollIntoViewIfNeeded().catch(() => { /* already in view */ });
     await menu2.locator('button').first().click({ timeout: 10_000 }).catch(() => { /* stays closed */ });

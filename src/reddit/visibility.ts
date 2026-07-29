@@ -25,6 +25,30 @@
  * The profile is a throwaway — created empty, used once, and never reused. That is not
  * incidental: a profile that accumulated history would eventually stop being anonymous, and the
  * check would quietly start measuring something else.
+ *
+ * ## NOT WIRED — read this before trusting the paragraphs above
+ *
+ * As of 2026-07-27 `checkAnonymousVisibility` has **zero call sites in this repository**, tests
+ * included. Nothing runs it. The warming rules it was committed alongside are now enforced in
+ * `evaluateGates` (see src/warming.ts), but this function was left behind, and the header above
+ * describes a capability the codebase does not currently exercise. It is a design, not a
+ * running check. Recorded here rather than quietly left to be discovered, because everything
+ * else in this file is written as though it happens.
+ *
+ * The seam a follow-up should wire it into is the signed-out branch of
+ * **`observe(...)` in src/commands/observe.ts** — the `openSignedOut()` helper and the block that
+ * records `reply-visible-signed-out` / `reply-absent-signed-out`. That path answers the same
+ * question this file exists for, by a weaker method: `browser.newContext()` on the SAME Chrome
+ * `attach()` connected to, i.e. a fresh context inside the signed-in browser, with no wait for
+ * Reddit's interstitial. This function is the stronger reading — a separate Chrome on a clean
+ * profile, waiting the interstitial out, and reporting `wasAnonymous: false` rather than
+ * guessing when the reader turns out to be signed in.
+ *
+ * Swapping it in is NOT a local edit, which is why it is not done here. `config.browser`
+ * (cdpEndpoint, profileDir) names the account's own Chrome; an anonymous read needs a second
+ * endpoint pointing at a clean-profile instance, so the change spans src/config.ts and
+ * src/commands/observe.ts. Until it is made, treat `reply-absent-signed-out` observations as
+ * produced by the weaker check.
  */
 import type { Browser } from 'playwright';
 

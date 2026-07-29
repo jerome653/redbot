@@ -16,8 +16,16 @@
  * ## What this module is
  *
  * `ACCOUNT-WARMING.md` states the stage-1 rules in prose. Prose does not stop anything. This
- * turns each one into a check that runs before a warming comment can be published, on the same
+ * turns each one into a check that runs before a comment can be published, on the same
  * principle the rest of the codebase already follows: a rule nothing enforces is a note.
+ *
+ * ## Where it is enforced
+ *
+ * `evaluateGates` (src/gates.ts), section 6b. Between 2026-07-22 and 2026-07-27 that sentence
+ * was false: `checkWarmingComment`, `checkWarmingPace` and `isWarmingTarget` were exported and
+ * had no caller outside `src/test/warming.test.ts`, so the commit that claimed to enforce the
+ * warming rules enforced nothing. The gate now calls all three whenever `warmingStage` says the
+ * acting account is still new, which makes this module's own header true.
  *
  * ## What warming is NOT
  *
@@ -40,6 +48,67 @@ export interface WarmingVerdict {
   ok: boolean;
   issues: WarmingIssue[];
   warnings: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Stage
+ * ------------------------------------------------------------------ */
+
+export interface WarmingStageInput {
+  /** Latest measured karma, or null when it has never been measured. */
+  karma: number | null;
+  /** Days since the observed account-created date, or null when that was never recorded. */
+  accountAgeDays: number | null;
+}
+
+/**
+ * Is this account still in stage 1, and therefore bound by the rules below?
+ *
+ * The scope is the ACCOUNT, not the draft, and that is the whole design. Nothing anywhere marks
+ * a comment as "a warming comment" — no field on `Draft`, no flag in accounts.json — and adding
+ * one would have made every check here opt-in, which is precisely the state the rules spent
+ * their first week in. So the account's own measured state decides: while it is new by the two
+ * thresholds `health.assess` already uses to call an account new (`cautionKarmaBelow`,
+ * `cautionAccountAgeDays`), everything it sends is a stage-1 comment, including one the
+ * contribution pipeline wrote. A moderator skimming a two-day-old account's history cannot tell
+ * which part of this repository produced which comment either.
+ *
+ * An unmeasured value counts as stage 1. "We have never checked this account's karma" is not
+ * evidence that it is warmed, and being wrong in the permissive direction costs the account —
+ * the one thing every other capability here runs through.
+ */
+export function warmingStage(input: WarmingStageInput): { warming: boolean; why: string } {
+  const karmaFloor = policy.cautionKarmaBelow.value;
+  const ageFloor = policy.cautionAccountAgeDays.value;
+
+  if (input.karma === null) {
+    return {
+      warming: true,
+      why: 'karma has never been measured on this account, so it is treated as still warming'
+    };
+  }
+  if (input.karma < karmaFloor) {
+    return {
+      warming: true,
+      why: `karma ${input.karma} is below ${karmaFloor} — the account is still in warming stage 1`
+    };
+  }
+  if (input.accountAgeDays === null) {
+    return {
+      warming: true,
+      why: 'the account creation date was never observed, so its age cannot be shown to clear stage 1'
+    };
+  }
+  if (input.accountAgeDays < ageFloor) {
+    return {
+      warming: true,
+      why: `the account is ${input.accountAgeDays} days old, under the ${ageFloor}-day stage-1 threshold`
+    };
+  }
+  return {
+    warming: false,
+    why: `karma ${input.karma} and age ${input.accountAgeDays}d clear both stage-1 thresholds`
+  };
 }
 
 /**
