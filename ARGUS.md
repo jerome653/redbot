@@ -104,10 +104,34 @@ Every other phase measures a property readable inside the draft. This one looks 
 human-authored reference material — and it is deliberately scoped to almost nothing.
 
 A corpus has a **jurisdiction**: the claims it is entitled to rule on. It is silent everywhere
-else, and that silence is recorded as silence, never as approval. The only configured corpus is
-the SGEN knowledge base, whose jurisdiction is claims about SGEN.
+else, and that silence is recorded as silence, never as approval.
 
-The measurement that set the scope, taken against the real KB (3,544 cards):
+Two corpora are configured (`BUILT_IN_CORPORA` in `src/corpus.ts`), and only one of them can
+reject anything:
+
+| corpus | jurisdiction | may rule? | read while drafting? |
+|---|---|---|---|
+| `sgen-kb` — the SGEN knowledge base | claims about SGEN | **yes** | no |
+| `wordpress-primary` — WordPress and MySQL primary documentation, 8 quoted cards | `max_allowed_packet`, error 1153 / `ER_NET_PACKET_TOO_LARGE`, `WP_DEBUG`, `wp_mail`, Additional CSS / `custom_css`, `mysqldump` | **no** — `rules: false` | **yes** — `draftable: true` |
+
+`rules: false` means the corpus has **no standing**. It is invisible to Phases 9/10/11: it
+cannot reject, cannot escalate, cannot certify. It is still retrieved from, which is the point
+of holding it — a quoted primary source goes in front of the drafter, and no verdict rests on
+it. The two flags are independent, and `sgen-kb` is the mirror image: full standing to
+adjudicate, never read while drafting, because retrieving product cards to answer a WordPress
+question steers the reply toward the product.
+
+Standing was withheld on evidence, not on caution. Replaying `wordpress-primary` over all 216
+logged claims, measured 2026-07-27: 194 out of jurisdiction, 6 `covered`, **16 `uncited`**.
+Rule 9 turns `uncited` into a REJECT, so those 16 were read by hand — about five are correct
+kills of the HRC-001 class, and **eleven are true claims** that simply clear no card at the 0.5
+term-coverage bar. A gate that rejects more true claims than false ones is not a gate, and this
+pipeline has published nothing. The corpus earns standing later, once its coverage is wide
+enough that `uncited` means "we hold the reference material and it does not say this" rather
+than "we happen not to have that card". Flipping it touches a frozen surface and needs a
+recorded exception in `ENGINE-FREEZE.md`.
+
+The measurement that set the SGEN KB's scope, taken against the real KB (3,544 cards):
 
 | | |
 |---|---|
@@ -140,8 +164,11 @@ No model call happens in this phase. Retrieval is term overlap; code decides. Bo
 live in `policy.ts` marked **provisional** — chosen to be conservative, never measured for
 precision or recall, not quotable as findings.
 
-The corpus set is pluggable (`src/corpus.ts`, overridable via `data/corpora.json`), so a real
-WordPress ground-truth corpus drops in without touching the rules.
+The corpus set is pluggable (`src/corpus.ts`, overridable via `data/corpora.json`), and
+`wordpress-primary` is the proof that it works: a real WordPress ground-truth corpus dropped in
+without a rule changing. Note that `data/corpora.json` **replaces** the built-in set rather than
+merging with it, so an override listing one corpus leaves the engine holding one — copy
+`docs/corpora.example.json`, which mirrors both, rather than writing a file from scratch.
 
 ## Phase 9 — the review package shows the draft last
 

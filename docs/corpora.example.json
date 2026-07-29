@@ -1,9 +1,11 @@
 {
-  "_doc": "Ground-truth corpora for the Argus Phase 10 citation check. Copy to data/corpora.json to replace the built-in set in src/corpus.ts. Absent = the built-in set (the SGEN knowledge base). Lives in docs/ because data/*.json is gitignored, and that rule keeps live session cookies out of the repository.",
+  "_doc": "Ground-truth corpora for the Argus Phase 10 citation check and for grounded drafting. This file MIRRORS the built-in set in src/corpus.ts (BUILT_IN_CORPORA) — both corpora, verbatim. Copy it to data/corpora.json and edit from there. Absent = the built-in set. Lives in docs/ because data/*.json is gitignored, and that rule keeps live session cookies out of the repository.",
 
-  "_principle": "A corpus does NOT ground drafting and does not vouch for claims outside what it covers. It has a jurisdiction — the claims it is entitled to rule on — and it is silent everywhere else. Silence is recorded as silence, never as approval.",
+  "_this_file_replaces_it_wholesale": "loadConfigs() in src/corpus.ts returns THIS ARRAY INSTEAD OF the built-in set the moment data/corpora.json exists. There is no merge and there is no warning. A copy that drops wordpress-primary drops the only corpus with draftable:true, and grounded drafting stops finding anything — silently, with no error, because 'no reference material for this subject' is the honest and common answer for a narrow corpus and is indistinguishable from 'the corpus is gone'. That is why this example ships both entries rather than one: it is a starting point to edit, not a fragment to paste.",
 
-  "_why_so_narrow": "Measured 2026-07-24 against the real SGEN KB (3,544 cards): 17 mention WordPress and every one of them says 'SGEN does not do that'; 2 mention mysql; updraft, elementor, woocommerce and jquery score zero. redbot answers WordPress questions, so ruling on WordPress claims with this corpus would flag ~100% of them — and a flag that is almost always true is not a filter (DEFECT-15). What it CAN rule on is claims about SGEN itself, and a fabricated product capability asserted in a public subreddit is unretractable. Replayed over all 216 claims in every certification ever written, this configuration fired zero times. That is correct, not broken.",
+  "_principle": "A corpus has a jurisdiction — the claims it is entitled to rule on — and it is silent everywhere else. Silence is recorded as silence, never as approval. Adjudicating and drafting are separate permissions: see `rules` and `draftable` below.",
+
+  "_why_so_narrow": "Measured 2026-07-24 against the real SGEN KB (3,544 cards): 17 mention WordPress and every one of them says 'SGEN does not do that'; 2 mention mysql; updraft, elementor, woocommerce and jquery score zero. redbot answers WordPress questions, so ruling on WordPress claims with that corpus would flag ~100% of them — and a flag that is almost always true is not a filter (DEFECT-15). What it CAN rule on is claims about SGEN, and a fabricated product capability asserted in a public subreddit is unretractable. wordpress-primary exists to cover the handful of technical subjects redbot actually argues about, and its jurisdiction is derived from the cards it holds, not from the domain — a corpus that claimed 'WordPress' generally would put nearly every claim in jurisdiction, hold nothing on most of them, and reject them.",
 
   "_fields": {
     "id": "stable identifier, cited in verdict reasons",
@@ -12,7 +14,10 @@
     "cardsAt": "dotted path to the array of cards inside that JSON; empty string means the file IS the array",
     "fields": "which card properties carry the id, the question and the body",
     "require": "field/value pairs a card must match to be usable at all",
-    "jurisdiction": "claim-text regex sources that put a claim inside this corpus's authority. A claim matching none of these is not ruled on."
+    "jurisdiction": "claim-text regex sources that put a claim inside this corpus's authority. A claim matching none of these is not ruled on.",
+    "rules": "OPTIONAL, DEFAULTS TO TRUE — omitting it grants STANDING. A corpus with standing can turn `uncited` into a REJECT through Argus Rule 9, so a thin corpus added without thinking about this field becomes a handbrake on its whole jurisdiction. Set it to false to add a corpus for retrieval only: it is then invisible to Phases 9/10/11 and cannot reject, escalate or certify anything.",
+    "draftable": "OPTIONAL, DEFAULTS TO FALSE — omitting it means the corpus is NEVER read while drafting a public reply. Opting in is explicit because the cost of the wrong corpus here is a reply that drifts toward whatever the corpus is about. The two flags are independent: sgen-kb rules but is not drafted from, wordpress-primary is drafted from but does not rule.",
+    "note": "free text, shown to an operator alongside the corpus"
   },
 
   "corpora": [
@@ -24,12 +29,31 @@
       "fields": { "id": "kb_id", "question": "question", "content": "content" },
       "require": { "status": "published-live", "classification": "PUBLIC" },
       "jurisdiction": ["\\bsgen\\b"],
-      "note": "Human-authored support cards about the SGEN product. `require` excludes the 56 INTERNAL cards on purpose: a citation check that reads internal material can surface it in a review package that gets pasted somewhere. It also excludes source-only cards, leaving 3,414 of 3,544."
+      "note": "Human-authored support cards about the SGEN product. Jurisdiction is claims about SGEN only — it knows nothing about WordPress and does not pretend to. `require` excludes the 56 INTERNAL cards on purpose: a citation check that reads internal material can surface it in a review package that gets pasted somewhere. It also excludes source-only cards, leaving 3,414 of 3,544. `rules` and `draftable` are both omitted, which is the pair of defaults this corpus wants: full standing to adjudicate, never read while drafting, because retrieving product cards to answer a WordPress question is the exact signal config.brand.forbidMention exists to suppress."
+    },
+    {
+      "id": "wordpress-primary",
+      "label": "WordPress and MySQL primary documentation",
+      "path": "ground-truth/corpora/wordpress-primary.json",
+      "cardsAt": "cards",
+      "fields": { "id": "id", "question": "question", "content": "content" },
+      "require": { "verified": "primary" },
+      "rules": false,
+      "draftable": true,
+      "jurisdiction": [
+        "max_allowed_packet",
+        "er_net_packet_too_large|\\berror\\s*1153\\b",
+        "\\bwp_debug\\b",
+        "\\bwp_mail\\b",
+        "custom_css|additional css",
+        "\\bmysqldump\\b"
+      ],
+      "note": "Eight cards of quoted primary documentation (dev.mysql.com, developer.wordpress.org). This is the corpus grounded drafting reads from — the only one with draftable:true — so removing it from a copy of this file turns grounded drafting off. `rules: false` was set on evidence, not caution: replayed over all 216 logged claims on 2026-07-27 it put 194 out of jurisdiction, 6 `covered` and 16 `uncited`, and reading those 16 by hand found about five correct kills against eleven TRUE claims that simply clear no card at the 0.5 term-coverage bar. A gate that rejects more true claims than false ones is not a gate. It earns standing later, on coverage. Each jurisdiction pattern names a subject a card actually covers; src/test/corpus-standing.test.ts fails if any of them matches no card."
     }
   ],
 
   "_two_rules_that_are_not_negotiable": [
-    "HUMAN-AUTHORED ONLY. Never point a corpus at model output — feeding Argus's own refutations back as ground truth is a model writing its own answer key, which is HRC-001 one level up.",
+    "HUMAN-AUTHORED ONLY. Never point a corpus at model output — feeding Argus's own refutations back as ground truth is a model writing its own answer key, which is HRC-001 one level up. Two wordpress-primary cards state facts Argus derived adversarially and a human reviewer missed, and they are held on the authority of the published sources they quote, never on Argus's.",
     "A MATCH IS NOT AGREEMENT. Retrieval is deterministic term overlap, so it finds cards ABOUT a subject and cannot tell one that confirms a claim from one that refutes it. Measured 2026-07-24: the false claim 'SGEN supports installing WordPress plugins' matched kb-can-i-install-a-plugin at 0.60 coverage — the card that says the opposite. That outcome is reported as `covered` and escalates to a person with the cards attached; it never certifies."
   ]
 }

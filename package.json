@@ -4,20 +4,28 @@
   "private": true,
   "type": "module",
   "description": "redbot MVP — assists a human engaging on Reddit through a real browser session. One account, one profile, local-first.",
-  "engines": { "node": ">=20" },
-  "bin": { "redbot": "dist/cli.js" },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "redbot": "dist/cli.js"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "redbot": "node dist/cli.js",
-    "test": "tsc && node --test \"dist/test/*.test.js\"",
+    "test": "tsc && node db/reset-test-db.mjs && node --env-file=db/.env.test --test \"dist/test/*.test.js\" \"tools/operator/server.test.mjs\" \"tools/product/server.test.mjs\"",
+    "test:ui": "node --test --test-timeout=180000 tools/product/ui.test.mjs",
+    "db:test-setup": "node db/setup-test-db.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "pg": "^8.22.0",
     "playwright": "^1.60.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.20.0",
     "typescript": "^5.7.0"
   }
 }

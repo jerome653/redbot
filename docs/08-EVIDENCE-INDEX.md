@@ -121,17 +121,22 @@ pending task.
 
 ## Added 2026-07-24 — Phase 16 (determinism) and Phase 10 (citations)
 
+**These nine were first written as E-60…E-68, ids the Proven table had already spent.** An
+index whose ids are ambiguous cannot be cited, so on 2026-07-27 this block was renumbered to
+continue past the highest id in use (E-70). The Proven table's E-60…E-68 keep their original
+meanings — `docs/13-CALIBRATION-REPORT-V1.md` cites E-62, E-63 and E-65 and still means those.
+
 | # | Observation | Why it matters | Where |
 |---|---|---|---|
-| E-60 | Two runs of a **byte-identical build** on a **byte-identical draft** aligned at **6.3 %** — 1 of 16 claims matched at the pre-registered threshold | Claim extraction is a sampler, not a parser | `PHASE-16-02-DETERMINISM.md` |
-| E-61 | Evidence class preserved on **0** aligned claims; the one matched pair moved community-knowledge → framework-documentation and medium → high | Self-declared provenance does not survive re-measurement | `PHASE-16-02` |
-| E-62 | Verdict rule `unrefuted-falsifiable-claim` fired in one run and not the other, same input | A rule's participation is a function of the sample | `PHASE-16-02` |
-| E-63 | Phase 7 resolution detection **byte-identical across 4 runs, 2 builds, 2 days** | The deterministic layers hold; the inputs to them do not | `PHASE-16-02` |
-| E-64 | The build that produced R1/R2 **is not in git**; `src/argus/prompts.ts` (frozen) differs at `07bd842` with no recorded exception | A cited experiment is unreproducible, and nothing detected the frozen-surface change | `PHASE-16-03-BUILD-REPRODUCIBILITY.md` |
-| E-65 | Corpus is **16 of 16 REJECT**; Argus has never returned CERTIFIED | Verdict agreement across runs carries ~no information | `PHASE-16-04-VERDICT-AGREEMENT.md` |
-| E-66 | SGEN KB coverage of the WordPress claim space is ~0 (17 WordPress cards, all "SGEN does not do that"; 0 for updraft/elementor/woocommerce/jquery) | Grounding drafts in the KB would flag ~100 % of claims — DEFECT-15's shape | `../ARGUS.md` Phase 10 |
-| E-67 | The false claim *"SGEN supports installing WordPress plugins"* matched the card that **contradicts** it, at 0.60 term coverage | Term overlap cannot tell agreement from contradiction; `covered` ≠ `supported` | `../ENGINE-FREEZE.md` EX-01 |
-| E-68 | Domain profile refactor: 58/58 corpus threads score identically to the pre-move hardcoded tables (36 in scope, both) | The vocabulary moved to data without moving what the corpus measures | `../ENGINE-FREEZE.md` EX-02 |
+| E-71 | Two runs of a **byte-identical build** on a **byte-identical draft** aligned at **6.3 %** — 1 of 16 claims matched at the pre-registered threshold | Claim extraction is a sampler, not a parser | `PHASE-16-02-DETERMINISM.md` |
+| E-72 | Evidence class preserved on **0** aligned claims; the one matched pair moved community-knowledge → framework-documentation and medium → high | Self-declared provenance does not survive re-measurement | `PHASE-16-02` |
+| E-73 | Verdict rule `unrefuted-falsifiable-claim` fired in one run and not the other, same input | A rule's participation is a function of the sample | `PHASE-16-02` |
+| E-74 | Phase 7 resolution detection **byte-identical across 4 runs, 2 builds, 2 days** | The deterministic layers hold; the inputs to them do not | `PHASE-16-02` |
+| E-75 | The build that produced R1/R2 **is not in git**; `src/argus/prompts.ts` (frozen) differs at `07bd842` with no recorded exception | A cited experiment is unreproducible, and nothing detected the frozen-surface change | `PHASE-16-03-BUILD-REPRODUCIBILITY.md` |
+| E-76 | Corpus is **16 of 16 REJECT**; Argus has never returned CERTIFIED | Verdict agreement across runs carries ~no information | `PHASE-16-04-VERDICT-AGREEMENT.md` |
+| E-77 | SGEN KB coverage of the WordPress claim space is ~0 (17 WordPress cards, all "SGEN does not do that"; 0 for updraft/elementor/woocommerce/jquery) | Grounding drafts in the KB would flag ~100 % of claims — DEFECT-15's shape | `../ARGUS.md` Phase 10 |
+| E-78 | The false claim *"SGEN supports installing WordPress plugins"* matched the card that **contradicts** it, at 0.60 term coverage | Term overlap cannot tell agreement from contradiction; `covered` ≠ `supported` | `../ENGINE-FREEZE.md` EX-01 |
+| E-79 | Domain profile refactor: 58/58 corpus threads score identically to the pre-move hardcoded tables (36 in scope, both) | The vocabulary moved to data without moving what the corpus measures | `../ENGINE-FREEZE.md` EX-02 |
 
 | # | Still not known | | |
 |---|---|---|---|
@@ -142,9 +147,14 @@ pending task.
 
 ## The shape of the evidence
 
-- **31 proven observations**, of which 26 are defects, failures, or negative results.
-- **17 explicit holes**, of which N-01 through N-09 all collapse to the same root: *nothing has
-  been published, and no operator decision has been recorded.*
+- **81 observations: 72 in the Proven table** (E-01…E-70 plus E-55a and E-58a) **and 9 in the
+  2026-07-24 block** (E-71…E-79). Counted from the tables above on 2026-07-27. This line said
+  31 until then, which is what the table held before rows were appended without it. It also
+  split those 31 into "26 defects, failures, or negative results"; that split is not restated,
+  because classifying 81 rows is a judgement per row and nobody has made it.
+- **21 recorded holes** — N-01…N-19 plus N-06b and N-06c. N-05 is struck through as resolved, so
+  20 stand open, and N-01 through N-09 all collapse to the same root: *nothing has been
+  published, and no operator decision has been recorded.*
 - Every proven item about **generation quality** is a failure. There is not one positive
   measurement of contribution quality in this table, because the only instrument for that is a
   human reviewer's verdict and none has been recorded.

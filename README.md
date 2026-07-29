@@ -12,8 +12,10 @@ That boundary gives future work a clear test: a feature belongs here if it impro
 meaningful human judgement does not belong here, however much time it would save.
 
 It reads threads, works out what a discussion is missing, drafts a reply, shows it to you, and
-posts only what you approve. It never posts on its own, never votes, and never touches your
-password.
+posts only what you approve. **It never puts a word in public on its own** — no reply, no
+comment, no post — and it never touches your password. It *does* upvote, downvote, save and
+follow on its own, because those are reversible in one click. **What it does without asking**,
+below, is the exact list.
 
 ### Why the boundary is load-bearing, with evidence
 
@@ -73,11 +75,14 @@ node dist/cli.js job list      --account docs-architect
 node dist/cli.js work          --account docs-architect --every 30
 ```
 
-**The scheduler cannot publish.** `publish` and `reply` jobs are refused before it even looks
-up a runner; they reach `waiting` and stop there until a person acts. A test registers a
-publish runner that *would* complete the job and asserts it is never invoked — if that test
-ever fails, redbot has become capable of unattended publishing and the change that did it
-should be reverted, not accommodated.
+**The scheduler cannot publish.** `publish`, `reply`, `reply-comment` and `post` jobs are
+refused before it even looks up a runner; they reach `waiting` and stop there until a person
+acts. A test registers a publish runner that *would* complete the job and asserts it is never
+invoked — if that test ever fails, redbot has become capable of unattended publishing and the
+change that did it should be reverted, not accommodated.
+
+`vote`, `save` and `follow` jobs **do** run in a `work` pass, unattended and on purpose. Where
+that line falls and why is **What it does without asking**, below.
 
 `waiting` is not stuck. It means the machine did everything it is allowed to do.
 
@@ -239,7 +244,36 @@ approve it:
 - **It won't offer you threads that can only be answered with a sales pitch** — r/WordPress
   rule 1 is "No promotions of products or services", so those are useless anyway.
 
-There is no voting. redbot cannot upvote or downvote anything.
+### What it does without asking
+
+Some actions run in a `work` pass with nobody watching. The line is not the word "publish" —
+it is whether the action can be taken back.
+
+| redbot does this on its own | redbot always stops for a person |
+|---|---|
+| upvote · downvote — job kind `vote` | reply to a thread — `reply` |
+| save · unsave — `save` | reply to a comment — `reply-comment` |
+| join/leave a subreddit, follow/unfollow a user — `follow` | submit a post — `post` |
+| read, search, score, draft, certify | send an approved draft — `publish` |
+
+A vote, a save and a follow change a **relationship**, and one click undoes them. A post or a
+reply is a **public statement** carrying your name, and nothing undoes having said it.
+
+That line is in code too, not in a policy paragraph. The right-hand column is refused by the
+scheduler *before* it looks for anything to run it with — `PUBLISH_KINDS` in
+`src/scheduler.ts` — so a queued reply stops at `waiting` even when a runner exists that would
+have completed it, which is exactly what the test in `src/test/jobs.test.ts` registers and then
+asserts is never called. `reply-comment` and `post` were added to that list on 2026-07-27 after
+a gap found while testing: both had working runners and neither was called "publish", so the
+scheduler would have executed them.
+
+Two things constrain the unattended half, also in code:
+
+- **It will not vote on anything one of your own accounts wrote**, and it refuses outright on a
+  thread it has no record of — it cannot establish who wrote that one, and the cost of skipping
+  a vote is nothing. Vote rings are the fastest way to lose every account at once.
+- **Votes from a new account do not stick anyway.** See *Votes do not persist on a new account*
+  below.
 
 ---
 
@@ -261,8 +295,11 @@ Two files are configuration you may write, and neither has to exist:
 data/domain.json      what subject redbot claims to know — the areas, their vocabulary,
                       and which platforms are somebody else's problem. Absent = the
                       built-in WordPress profile, unchanged.
-data/corpora.json     which human-authored reference material may rule on which claims.
-                      Absent = the built-in set.
+data/corpora.json     which human-authored reference material may rule on which claims, and
+                      which may be read from while drafting. Absent = the built-in set, which
+                      is TWO corpora. Present, it REPLACES that set — it does not merge with
+                      it, so a file listing one corpus leaves you with one. Start from
+                      docs/corpora.example.json, which mirrors the built-in set.
 ```
 
 `domain.json` replaces what used to be two hardcoded tables that had to agree by hand — the
@@ -305,8 +342,15 @@ through. redbot never retries a post on its own, because that's how one comment 
   in one file, `src/reddit/selectors.ts`, so it's a small fix. Groups in that file are marked
   where they have been confirmed against a live page and where they have not.
 - Scoring takes a few minutes because it asks Claude in batches.
-- **Downvote, follow/unfollow and creating a post are written but never executed.** Their
-  selectors have not resolved against a live page, so treat them as unproven.
+- **Downvoting and creating a post have both run against live Reddit, and neither came back
+  clean.** Measured 2026-07-27: a downvote clicked, appeared in the page, and was gone after a
+  reload — see *Votes do not persist on a new account*. A submitted post **did** create a
+  thread, but left the browser on `/r/test/` instead of the post's permalink, so redbot reports
+  it as unconfirmed rather than claiming a success it could not see.
+- **Following a *user* is the one still unexecuted.** Its selectors did resolve against a live
+  profile on 2026-07-27 — Reddit renders both `Follow` and `Unfollow` and hides one, so only
+  the visible control reports the real state — but no follow has been carried through end to
+  end. Joining and leaving a **subreddit** has.
 - **The certification engine has never returned `CERTIFIED`.** 16 runs, 16 REJECT. Its
   false-positive rate is therefore unknown — a truth layer that rejects sound replies would
   leave no trace, and nothing here would catch it.
@@ -326,10 +370,11 @@ Short version, as of 2026-07-27:
 | Save · unsave · join/leave a subreddit | **verified** — executed as `docs-architect`, round-tripped, account left as found |
 | Cross-account vote guard | **verified** — fails closed on a thread it has no record of |
 | **Upvote · downvote** | **execute but do not persist** — see below |
-| Follow/unfollow a user · create post | written, never executed |
+| Create a post | **executed** — the thread was created; the browser landed on the subreddit rather than the permalink, so redbot reported it unconfirmed |
+| Follow/unfollow a user | selectors resolved against a live profile; **no follow carried through end to end** |
 | **Publishing a reply** | **never completed, not once** |
 | Certifications | 16 runs, **16 REJECT**, 0 CERTIFIED |
-| Suite | 328 tests · benchmark 4/4 · doctor 12 pass / 4 warn / 0 fail |
+| Suite | 371 tests · benchmark 4/4 · doctor 12 pass / 4 warn / 0 fail |
 
 The engagement path partly works. The contribution path — the reason the project exists — has
 never run to completion. Everything else is scaffolding around that one number.

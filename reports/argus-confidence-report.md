@@ -1,318 +1,72 @@
 # Confidence Report
 
-**Generated:** 2026-07-23 · **Claims:** 216
+**Generated:** 2026-07-29 · **Claims:** 30
 
 | confidence | count | may be stated as fact |
 |---|---|---|
-| high | 165 | yes |
-| medium | 47 | yes |
-| low | 1 | **no** |
-| unknown | 3 | **no** |
+| high | 21 | yes |
+| medium | 9 | yes |
+| low | 0 | **no** |
+| unknown | 0 | **no** |
 
-## Language outrunning evidence — 101
+## Language outrunning evidence — 19
 
-- `c9` language **asserted**, evidence supports **medium**
-  - > check whether that option is present-but-empty in the live DB versus present-and-full in the backup dump
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c3` language **asserted**, evidence supports **medium**
-  - > pull snapshots from before you bought it and see what the site actually was
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c6` language **asserted**, evidence supports **medium**
-  - > A manual action won't necessarily show up as anything other than 'not indexed' in coverage
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c8` language **asserted**, evidence supports **unknown**
-  - > Whether the blanket redirect of all those legacy URLs to your homepage is still live
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
-- `c12` language **asserted**, evidence supports **unknown**
-  - > if there's a stale rule sitting at the server or CDN level rather than in the page source
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
-- `c14` language **asserted**, evidence supports **medium**
-  - > rather than in the page source Yoast checks
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c15` language **asserted**, evidence supports **medium**
-  - > If the Wayback history shows heavy scraping
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c16` language **asserted**, evidence supports **medium**
-  - > there's no manual action in GSC, a reconsideration request won't apply
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c17` language **asserted**, evidence supports **unknown**
-  - > disavowing the toxic inherited backlink profile
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
-- `c18` language **asserted**, evidence supports **medium**
-  - > removing the mass redirect are things you can actually do
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c3` language **asserted**, evidence supports **medium**
-  - > solid hosting (Nginx/Apache + PHP 8, OPcache enabled)
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c4` language **asserted**, evidence supports **medium**
-  - > full-page caching for anonymous traffic
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c8` language **asserted**, evidence supports **medium**
-  - > add object caching with Redis (Redis Object Cache plugin)
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c9` language **asserted**, evidence supports **medium**
-  - > audit your plugins with Query Monitor
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c10` language **asserted**, evidence supports **medium**
-  - > check query count per page load
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c13` language **asserted**, evidence supports **medium**
-  - > keep cart/checkout on separate uncached paths
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c14` language **asserted**, evidence supports **medium**
-  - > put a CDN in front of product images
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c17` language **asserted**, evidence supports **medium**
-  - > Install Query Monitor on a staging copy before launch
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c19` language **asserted**, evidence supports **medium**
-  - > so you know whether you actually need tier 2 or 3 instead of guessing
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c3` language **asserted**, evidence supports **medium**
-  - > If HTML/PHP notice instead of JSON — that's your fatal error
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c4` language **asserted**, evidence supports **medium**
-  - > caching or object-cache plugins sometimes mangle AJAX output
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c5` language **asserted**, evidence supports **medium**
-  - > caching or object-cache plugins sometimes mangle AJAX output
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c6` language **asserted**, evidence supports **medium**
-  - > check that response with caching plugin paused
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c7` language **asserted**, evidence supports **medium**
-  - > exclude admin-ajax
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c2` language **asserted**, evidence supports **medium**
-  - > functions.php especially
-  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
-- `c3` language **asserted**, evidence supports **medium**
-  - > files inside wp-includes/wp-admin disguised as core
-  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
-- `c9` language **asserted**, evidence supports **medium**
-  - > This will also flag legitimate code
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c10` language **asserted**, evidence supports **medium**
-  - > treat it as a shortlist to review by hand, not a delete list
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c13` language **asserted**, evidence supports **medium**
-  - > instead of eyeballing manually
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c14` language **asserted**, evidence supports **medium**
-  - > Anything that doesn't match is either a hacked file or a hand-edit
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c15` language **asserted**, evidence supports **medium**
-  - > worth knowing either way
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c16` language **asserted**, evidence supports **unknown**
-  - > -mtime -30
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
-- `c17` language **asserted**, evidence supports **medium**
-  - > a shell dropped weeks ago will still show a suspicious mtime
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c18` language **asserted**, evidence supports **medium**
-  - > even with an innocuous filename
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c21` language **asserted**, evidence supports **medium**
-  - > easy to miss if you only scan the filesystem
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
 - `c1` language **asserted**, evidence supports **medium**
-  - > Two different problems are getting bundled together here: the layout breaking, and the download/purchase not working.
+  - > If you never set the site up, someone else did — a freelancer, agency, or friend
   - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c2` language **asserted**, evidence supports **unknown**
-  - > Worth diagnosing them separately.
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
 - `c3` language **asserted**, evidence supports **medium**
-  - > that's a plugin/theme CSS conflict almost every time
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c4` language **asserted**, evidence supports **medium**
-  - > the plugin itself isn't "not working," something else is overriding its styles or scripts
+  - > That's a very different situation from someone else gaining unauthorized access to your account
+  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
+- `c5` language **asserted**, evidence supports **medium**
+  - > rather than proof the site itself is gone
   - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
 - `c6` language **asserted**, evidence supports **medium**
-  - > Fastest way to confirm: install the free Health Check & Troubleshooting plugin from WordPress.org.
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c8` language **asserted**, evidence supports **unknown**
-  - > If the player looks right there, turn plugins back on one at a time until it breaks again — that tells you exactly which plugin or theme is the conflict.
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
-- `c9` language **asserted**, evidence supports **unknown**
-  - > You can also check it manually with browser dev tools (F12).
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
-- `c10` language **asserted**, evidence supports **medium**
-  - > if the HTML is there but styled wrong, that's your theme's global CSS (button/list/link resets) fighting the plugin's own stylesheet
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c11` language **asserted**, evidence supports **unknown**
-  - > If the player barely renders or the buy/download button does nothing on click, check the Console tab for red errors
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
-- `c12` language **asserted**, evidence supports **medium**
-  - > that means the plugin's JS isn't loading
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c14` language **asserted**, evidence supports **medium**
-  - > If the player itself looks fine but downloads/purchases specifically don't work, that's a separate check
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c15` language **asserted**, evidence supports **medium**
-  - > confirm the file is actually marked downloadable in the product settings
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c16` language **asserted**, evidence supports **medium**
-  - > test the download link while logged out, since some setups only allow it for logged-in users
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c2` language **asserted**, evidence supports **medium**
-  - > the bug has to be in how the custom form triggers (or fails to trigger) the send, not in mail delivery itself
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c6` language **asserted**, evidence supports **medium**
-  - > A 200 with nothing happening points to a PHP-side issue
+  - > It fits with the theory that the site is tied to someone else's account
   - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
 - `c7` language **asserted**, evidence supports **medium**
-  - > a 404/500 points to a broken endpoint
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c15` language **asserted**, evidence supports **medium**
-  - > SES rejecting the send because the custom form's "From"/"Reply-To" address isn't a verified SES identity — a common mismatch when the custom form hardcodes a different address
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c3` language **asserted**, evidence supports **medium**
-  - > a background color that's showing through an empty container
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c11` language **asserted**, evidence supports **unknown**
-  - > check Appearance > Customize > Menus
-  - stated as fact, but the evidence is observed-runtime-behaviour (unknown) — say what you would check and why, or drop the claim
-- `c12` language **asserted**, evidence supports **low**
-  - > search for a 'dropdown-arrow' related option there
-  - stated as fact, but the evidence is operator-experience (low) — say what you would check and why, or drop the claim
-- `c16` language **asserted**, evidence supports **medium**
-  - > temporarily switch to a default theme like Twenty Twenty-Four
+  - > ask them who the account holder on file is, when the account was created, and whether there's been any recent login or password-reset activity
   - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c17` language **asserted**, evidence supports **medium**
-  - > or disable Elementor, to see if the gap/arrow persists
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c18` language **asserted**, evidence supports **medium**
-  - > use a staging copy, not your live site
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c19` language **asserted**, evidence supports **medium**
-  - > Whichever one makes the issue disappear tells you where to keep looking
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
 - `c1` language **asserted**, evidence supports **medium**
-  - > MCP (Model Context Protocol) isn't WordPress-specific
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c2` language **asserted**, evidence supports **medium**
-  - > it's an open standard
-  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
-- `c4` language **asserted**, evidence supports **medium**
-  - > instead of you clicking through a dashboard yourself
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c8` language **asserted**, evidence supports **medium**
-  - > you can ask it to perform those actions through chat
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c9` language **asserted**, evidence supports **medium**
-  - > without MCP you're using the host's dashboard or their REST API/CLI directly
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c10` language **asserted**, evidence supports **medium**
-  - > one action at a time
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c11` language **asserted**, evidence supports **medium**
-  - > With MCP, an agent can chain calls together from a single natural-language request
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c12` language **asserted**, evidence supports **unknown**
-  - > three separate manual steps
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
-- `c14` language **asserted**, evidence supports **medium**
-  - > read-only vs. can it push destructive changes
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c17` language **asserted**, evidence supports **unknown**
-  - > whether the exposed tools are just a thin wrapper around their existing REST API or actually add something new
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
-- `c18` language **asserted**, evidence supports **unknown**
-  - > whether there's an audit log of what the agent did on your site
-  - stated as fact, but the evidence is unknown (unknown) — say what you would check and why, or drop the claim
+  - > Some (WebP Express is the common example) keep your original jpg/png files in place and serve a webp version conditionally at request time
+  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
 - `c3` language **asserted**, evidence supports **medium**
-  - > If you're seeing "Dynamic" during the spike, the cache isn't actually being served
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
+  - > based on what the visitor's browser supports
+  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
 - `c4` language **asserted**, evidence supports **medium**
-  - > every visitor is hitting PHP/MySQL directly
+  - > Your media library still shows the originals
   - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
 - `c5` language **asserted**, evidence supports **medium**
-  - > which would explain the runaway queries
+  - > nothing gets deleted or replaced
   - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c9` language **asserted**, evidence supports **medium**
-  - > newsletter links carry any tracking parameters
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c10` language **asserted**, evidence supports **medium**
-  - > every recipient who clicks lands on an uncached, dynamically-generated page
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c11` language **asserted**, evidence supports **medium**
-  - > every recipient who clicks lands on an uncached, dynamically-generated page at the same time
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c12` language **asserted**, evidence supports **medium**
-  - > which is effectively the same load pattern you had with no cache at all
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c15` language **asserted**, evidence supports **medium**
-  - > which is much cheaper under a burst of simultaneous hits
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c16` language **asserted**, evidence supports **medium**
-  - > if the cache for a page happens to expire right as the burst hits, every one of those simultaneous requests can end up regenerating the page at once (cache stampede)
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c17` language **asserted**, evidence supports **medium**
-  - > each doing full DB queries
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c19` language **asserted**, evidence supports **medium**
-  - > while the others get served the old cached copy
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c20` language **asserted**, evidence supports **medium**
-  - > If the page source shows "Cached" during the spike and none of the above apply, then the bottleneck is something else
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c5` language **asserted**, evidence supports **medium**
-  - > Open DevTools (F12) → Console tab, reload the page, and see if there are any red JS errors on load
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
-- `c6` language **asserted**, evidence supports **unknown**
-  - > if it's something like `transform: translateY(...)` or `opacity: 0` at load that clears on scroll, you're looking at an animate-on-scroll or sticky sidebar script, not a CSS bug per se
-  - stated as fact, but the evidence is reasoned-inference (unknown) — say what you would check and why, or drop the claim
+- `c6` language **asserted**, evidence supports **medium**
+  - > Others genuinely regenerate/replace the files
+  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
 - `c7` language **asserted**, evidence supports **medium**
-  - > inspect the widget wrapper right after load, then again after you scroll. Compare the computed `height`, `opacity`, and `transform` values
-  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
+  - > which is what you'd need if something downstream reads the uploads folder directly
+  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
 - `c8` language **asserted**, evidence supports **medium**
-  - > This specific pattern is common with sticky-sidebar plugins (Q2W3, WP Sticky, or a theme's built-in sticky widget option)
-  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
+  - > or if your goal is to eventually delete the source images
+  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
 - `c9` language **asserted**, evidence supports **medium**
-  - > This specific pattern is common with sticky-sidebar plugins (Q2W3, WP Sticky, or a theme's built-in sticky widget option)
-  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
-- `c11` language **asserted**, evidence supports **medium**
-  - > scroll/motion-effect libraries (AOS.js, WOW.js, or Elementor's "Motion Effects"
-  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
+  - > faster page loads with modern formats
+  - asserted with high confidence, but widely-accepted-practice supports medium at best — hedge it or find primary evidence
 - `c12` language **asserted**, evidence supports **medium**
-  - > scroll/motion-effect libraries (AOS.js, WOW.js, or Elementor's "Motion Effects"
-  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
+  - > If you just want faster page loads with modern formats and don't care whether the original files stay on disk, conditional serving is simpler and lower risk
+  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
 - `c13` language **asserted**, evidence supports **medium**
-  - > scroll/motion-effect libraries (AOS.js, WOW.js, or Elementor's "Motion Effects" if you're using Elementor)
-  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
-- `c15` language **asserted**, evidence supports **medium**
-  - > If you can share the console output and your theme/plugin list, that'll narrow down which script is doing this
+  - > check their docs for a bulk convert-and-replace feature
+  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
+- `c14` language **asserted**, evidence supports **medium**
+  - > on existing (not just newly uploaded) media
+  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
+- `c2` language **asserted**, evidence supports **medium**
+  - > you could pull that from your access logs
   - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
 - `c3` language **asserted**, evidence supports **medium**
-  - > Additional CSS (Appearance > Customize) is its own dedicated entry
-  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
-- `c5` language **asserted**, evidence supports **medium**
-  - > holding one large serialized value
-  - asserted with high confidence, but community-knowledge supports medium at best — hedge it or find primary evidence
-- `c10` language **asserted**, evidence supports **medium**
-  - > while smaller settings restore fine
+  - > compare miss rates, particularly on the long-tail pages the crawlers hit
   - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c11` language **asserted**, evidence supports **medium**
-  - > If so, that's a truncation issue, not a deliberate wipe
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c2` language **asserted**, evidence supports **medium**
-  - > which is why a restore can wipe one and leave the other intact
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c11` language **asserted**, evidence supports **medium**
-  - > while smaller settings restore fine
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c12` language **asserted**, evidence supports **medium**
-  - > check whether that option is present-but-empty in the live DB versus present-and-full in the backup dump
-  - asserted with high confidence, but operator-experience supports medium at best — hedge it or find primary evidence
-- `c13` language **asserted**, evidence supports **medium**
-  - > If so, that's a truncation issue
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c14` language **asserted**, evidence supports **medium**
-  - > not a deliberate wipe
-  - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
-- `c16` language **asserted**, evidence supports **medium**
-  - > so it doesn't happen again
+- `c6` language **asserted**, evidence supports **medium**
+  - > hard for anyone else to evaluate or reproduce
   - asserted with high confidence, but reasoned-inference supports medium at best — hedge it or find primary evidence
 
 > Overconfidence is a certification failure, not a style note. The craft gate rewards

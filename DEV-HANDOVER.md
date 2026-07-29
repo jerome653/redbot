@@ -14,10 +14,17 @@ Argus has never returned CERTIFIED, so its false-positive rate is unknown and cu
 unmeasurable. Both accounts sit near zero karma.
 
 Read every claim in this repository against that fact. The engine is well tested; it is not
-proven. 229 passing tests say the code does what its source says. They say nothing about
-whether a published reply would help anybody, because none exists.
+proven. **371 tests at 2026-07-27 10:23** — counted from `node --test`'s own summary, not
+remembered — say the code does what its source says. They say nothing about whether a published
+reply would help anybody, because none exists.
 
-*(An earlier version of this line said 17. The log says 16. Counted, not remembered.)*
+*(Both numbers on this page were wrong before. The certification line said 17; the log said 16.
+The test line said 229 and the command block said 194, neither of which had been run in days.
+**Recount, do not quote:** the suite went 337 → 368 → 371 during the hour this paragraph was
+written, so a test count here is a timestamp, not a fact about the project. The certification
+count is the opposite kind of number — `data/certifications.jsonl` is gitignored and absent from
+a fresh checkout, so 16 cannot be recounted from the repository at all, which is exactly why the
+date is welded to it.)*
 
 ---
 
@@ -26,8 +33,8 @@ whether a published reply would help anybody, because none exists.
 | Area | State | Evidence |
 |---|---|---|
 | Collect · score · gap analysis · draft | **Real, exercised** | 58 threads, 24 assessed, 12 drafts on disk |
-| Argus fact-checking | **Real, exercised** | 17 certifications; caught a false MySQL claim a human review missed |
-| Safety linter, 20 publish gates | **Real, tested** | 229 tests, fuzz suites pass |
+| Argus fact-checking | **Real, exercised** | 16 certifications; caught a false MySQL claim a human review missed |
+| Safety linter, 20 publish gates | **Real, tested** | 371 tests (2026-07-27), fuzz suites pass |
 | Domain profile (`data/domain.json`) | **Real, new 2026-07-24** | vocabulary out of source; 58/58 corpus threads score identically to the hardcoded tables |
 | Argus Phase 10 citation check | **Wired, never fired on real input** | no draft has yet made a claim inside a corpus's jurisdiction |
 | Search preview → commit | **Real, new 2026-07-24** | listing read without opening threads; picks are explicit |
@@ -152,7 +159,7 @@ fourth removes the only safeguard that has ever worked.
 ## Running the gates
 
 ```powershell
-npm test                              # 194 tests
+npm test                              # 371 on 2026-07-27 — it prints its own total, use that
 npx tsc --noEmit                      # typecheck, strict
 node dist/cli.js doctor               # install health
 node qa/benchmark/run.mjs             # certification regression
