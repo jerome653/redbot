@@ -23,10 +23,18 @@ import {
  * A jurisdiction pattern that matches no card is a rule with nothing behind it. Checked against
  * the real card files rather than a fixture: the failure this guards against is a corpus and
  * its declared scope drifting apart on disk, which a fixture cannot see.
+ *
+ * WIDENED: this previously skipped `rules: false` corpora on the reasoning that a corpus with no
+ * standing cannot REJECT anything, so an unbacked pattern costs nothing. True as far as it goes,
+ * but it left the test skipping wordpress-primary for having no standing and sgen-kb for being
+ * unavailable — which on every checkout without the private KB meant it asserted NOTHING and
+ * still reported green. `src/corpus.ts` also states, above wordpress-primary, that a test fails
+ * if any of ITS patterns matches no card; that claim is only true once retrieval-only corpora are
+ * covered here. So the skip is gone and the count below makes vacuity impossible.
  */
-test('every adjudicating corpus holds at least one card per jurisdiction pattern', () => {
+test('every corpus that loaded holds at least one card per jurisdiction pattern', () => {
+  let checked = 0;
   for (const c of corpora()) {
-    if (c.config.rules === false) continue;      // no standing, so nothing to justify
     if (!c.cards) continue;                      // unavailable is Rule 10's problem, not this one
     for (const src of c.config.jurisdiction) {
       const re = new RegExp(src, 'i');
@@ -36,8 +44,10 @@ test('every adjudicating corpus holds at least one card per jurisdiction pattern
         `corpus "${c.config.id}" claims jurisdiction over ${JSON.stringify(src)} but holds no ` +
         `card matching it — every claim on that subject would be REJECTed for being uncited`
       );
+      checked++;
     }
   }
+  assert.ok(checked > 0, 'no corpus was checked — a guard that can pass vacuously is not a guard');
 });
 
 test('a retrieval-only corpus can never reject, escalate or certify anything', () => {
@@ -74,8 +84,26 @@ test('the SGEN knowledge base keeps its standing', () => {
 
 test('a corpus without standing is still readable, because drafting needs it', () => {
   const ids = retrievalCorpora().map((c) => c.config.id);
+  // The load-bearing half: rules:false must not remove a corpus from RETRIEVAL.
   assert.ok(ids.includes('wordpress-primary'), 'retrieval must see the primary-docs corpus');
-  assert.ok(ids.includes('sgen-kb'));
+
+  /**
+   * The SGEN KB is deliberately outside this repository — `src/corpus.ts` says the relative path
+   * is the checkout layout of the one machine that owns both, and that "anywhere else the corpus
+   * is simply unavailable, which is handled explicitly". Asserting its presence unconditionally
+   * therefore asserted a property of that machine, not of this code, and made the whole suite red
+   * on every other checkout. Its standing is proved above by `claimsJurisdiction`, which does not
+   * need the cards on disk.
+   *
+   * Availability still gets an assertion either way, so nothing here can pass by doing nothing:
+   * present means readable, absent means it must SAY it is absent rather than read as empty.
+   */
+  const sgen = corpora().find((c) => c.config.id === 'sgen-kb');
+  if (sgen?.cards) {
+    assert.ok(ids.includes('sgen-kb'), 'a corpus that loaded must be readable whatever its standing');
+  } else {
+    assert.ok(sgen?.unavailable, 'a corpus that failed to load must report why — fail closed, not empty');
+  }
 });
 
 test('primary-documentation cards carry a source and survive the require filter', () => {

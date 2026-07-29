@@ -106,9 +106,9 @@ test('interactionsFor returns oldest first so a score history reads in order', (
   assert.equal(sorted[1]!.checkpoint, '24h');
 });
 
-test('loading an absent log yields no rows rather than throwing', () => {
-  assert.ok(Array.isArray(loadInteractions()));
-  assert.ok(Array.isArray(interactionsFor('nothing-published-yet')));
+test('loading an empty log yields no rows rather than throwing', async () => {
+  assert.ok(Array.isArray(await loadInteractions()));
+  assert.ok(Array.isArray(await interactionsFor('nothing-published-yet')));
 });
 
 test('the schema version is pinned — a silent bump would reinterpret old rows', () => {

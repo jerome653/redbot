@@ -50,14 +50,14 @@ test('120 mixed jobs: all run, none twice, none starved', async () => {
   const created: string[] = [];
   for (let i = 0; i < 120; i++) {
     const kind = kinds[i % kinds.length]!;
-    created.push(createJob({ kind, account: ACCOUNT, args: { n: i } }, T0).id);
+    created.push((await createJob({ kind, account: ACCOUNT, args: { n: i } }, T0)).id);
   }
   // …plus every publish-class kind mixed in, which must survive every pass untouched.
   const publishIds = [
-    createJob({ kind: 'publish', account: ACCOUNT, args: { draftId: 'd_1' } }, T0).id,
-    createJob({ kind: 'reply', account: ACCOUNT, args: { draftId: 'd_2' } }, T0).id,
-    createJob({ kind: 'reply-comment', account: ACCOUNT, args: { body: 'x' } }, T0).id,
-    createJob({ kind: 'post', account: ACCOUNT, args: { title: 'x' } }, T0).id
+    (await createJob({ kind: 'publish', account: ACCOUNT, args: { draftId: 'd_1' } }, T0)).id,
+    (await createJob({ kind: 'reply', account: ACCOUNT, args: { draftId: 'd_2' } }, T0)).id,
+    (await createJob({ kind: 'reply-comment', account: ACCOUNT, args: { body: 'x' } }, T0)).id,
+    (await createJob({ kind: 'post', account: ACCOUNT, args: { title: 'x' } }, T0)).id
   ];
 
   const started = Date.now();
@@ -79,10 +79,10 @@ test('120 mixed jobs: all run, none twice, none starved', async () => {
   // publish-class jobs did not execute and did not complete
   for (const id of publishIds) {
     assert.equal(runsPerJob.get(id), undefined, 'a publish-class job must never reach a runner');
-    assert.equal(getJob(ACCOUNT, id)?.state, 'waiting');
+    assert.equal((await getJob(ACCOUNT, id))?.state, 'waiting');
   }
 
-  const counts = jobCounts(ACCOUNT);
+  const counts = await jobCounts(ACCOUNT);
   assert.equal(counts.completed, 120);
   assert.equal(counts.waiting, 4);
   assert.equal(counts.running, 0, 'no job may be left claimed');
@@ -110,21 +110,21 @@ test('scheduled work stays scheduled until its time, then runs exactly once', as
   let ran = 0;
   registerRunner('read', async () => { ran++; });
 
-  const soon = createJob({ kind: 'read', account: ACCOUNT, runAt: at(1).toISOString() }, T0);
-  const later = createJob({ kind: 'read', account: ACCOUNT, runAt: at(60).toISOString() }, T0);
-  const tomorrow = createJob({ kind: 'read', account: ACCOUNT, runAt: at(24 * 60).toISOString() }, T0);
+  const soon = await createJob({ kind: 'read', account: ACCOUNT, runAt: at(1).toISOString() }, T0);
+  const later = await createJob({ kind: 'read', account: ACCOUNT, runAt: at(60).toISOString() }, T0);
+  const tomorrow = await createJob({ kind: 'read', account: ACCOUNT, runAt: at(24 * 60).toISOString() }, T0);
 
   await runPass(ACCOUNT, T0);
   assert.equal(ran, 0, 'nothing is due yet');
 
   await runPass(ACCOUNT, at(2));
   assert.equal(ran, 1);
-  assert.equal(getJob(ACCOUNT, soon.id)?.state, 'completed');
-  assert.equal(getJob(ACCOUNT, later.id)?.state, 'scheduled');
+  assert.equal((await getJob(ACCOUNT, soon.id))?.state, 'completed');
+  assert.equal((await getJob(ACCOUNT, later.id))?.state, 'scheduled');
 
   await runPass(ACCOUNT, at(61));
   assert.equal(ran, 2);
-  assert.equal(getJob(ACCOUNT, tomorrow.id)?.state, 'scheduled', 'tomorrow is still tomorrow');
+  assert.equal((await getJob(ACCOUNT, tomorrow.id))?.state, 'scheduled', 'tomorrow is still tomorrow');
 
   await runPass(ACCOUNT, at(24 * 60 + 1));
   assert.equal(ran, 3);
@@ -137,7 +137,7 @@ test('a recurring job keeps producing successors, one per pass, never a burst', 
   let ran = 0;
   registerRunner('read', async () => { ran++; });
 
-  createJob({ kind: 'read', account: ACCOUNT, everyMinutes: 30 }, T0);
+  await createJob({ kind: 'read', account: ACCOUNT, everyMinutes: 30 }, T0);
 
   await runPass(ACCOUNT, T0);
   assert.equal(ran, 1);
@@ -150,7 +150,7 @@ test('a recurring job keeps producing successors, one per pass, never a burst', 
   assert.equal(ran, 2);
 
   // The chain is a sequence of discrete rows, not one row rewritten.
-  const all = loadJobs(ACCOUNT);
+  const all = await loadJobs(ACCOUNT);
   assert.ok(all.length >= 3, 'each run leaves its own record');
   assert.equal(all.filter((j) => j.state === 'completed').length, 2);
   clearRunners();
@@ -169,13 +169,98 @@ test('a crashed worker\'s job is recovered and completes on the next pass', asyn
   let ran = 0;
   registerRunner('read', async () => { ran++; });
 
-  const j = createJob({ kind: 'read', account: ACCOUNT }, T0);
-  transition(ACCOUNT, j.id, { state: 'running' }, T0);   // the process dies here
+  const j = await createJob({ kind: 'read', account: ACCOUNT }, T0);
+  await transition(ACCOUNT, j.id, { state: 'running' }, T0);   // the process dies here
 
   const r = await runPass(ACCOUNT, at(45));
   assert.equal(r.recovered, 1, 'the orphaned claim must be recovered');
   assert.equal(ran, 1, 'and then actually run');
-  assert.equal(getJob(ACCOUNT, j.id)?.state, 'completed');
+  assert.equal((await getJob(ACCOUNT, j.id))?.state, 'completed');
+  clearRunners();
+});
+
+/**
+ * A worker that dies on the job's LAST permitted attempt.
+ *
+ * The retry ceiling used to live only in `runOne`'s catch block, which is precisely the code a
+ * process death never reaches: `recover()` returned every orphan to `pending` without ever
+ * comparing `attempts` to `maxAttempts`. So a job that crashed its worker was requeued, crashed
+ * the next worker, and was requeued again, forever — unbounded retry on the one failure mode
+ * where it does the most damage. The job here has already burned both attempts that
+ * `maxAttempts: 1` allows, so recovery must fail it rather than hand it out again.
+ */
+test('an orphan that has exhausted its attempts is failed, not requeued forever', async () => {
+  clearRunners();
+  const ACCOUNT = 'stress-orphan-ceiling';
+  let ran = 0;
+  registerRunner('read', async () => { ran++; });
+
+  const j = await createJob({ kind: 'read', account: ACCOUNT, maxAttempts: 1 }, T0);
+  await transition(ACCOUNT, j.id, { state: 'running', attempts: 2 }, T0);   // the process dies here
+
+  const r = await runPass(ACCOUNT, at(45));
+
+  assert.equal(r.recovered, 1, 'the orphan is still accounted for');
+  const after = await getJob(ACCOUNT, j.id);
+  assert.equal(after?.state, 'failed', 'an exhausted orphan must not go back to pending');
+  assert.match(after?.detail ?? '', /exhausted maxAttempts/);
+  assert.equal(ran, 0, 'and it must not be run again');
+
+  // terminal means terminal — a later pass must not resurrect it either
+  await runPass(ACCOUNT, at(120));
+  assert.equal((await getJob(ACCOUNT, j.id))?.state, 'failed');
+  assert.equal(ran, 0);
+  clearRunners();
+});
+
+/** The other half of the ceiling: an orphan with a try left is still recovered, not condemned. */
+test('an orphan that still has attempts left is requeued and runs', async () => {
+  clearRunners();
+  const ACCOUNT = 'stress-orphan-retry';
+  let ran = 0;
+  registerRunner('read', async () => { ran++; });
+
+  const j = await createJob({ kind: 'read', account: ACCOUNT, maxAttempts: 2 }, T0);
+  await transition(ACCOUNT, j.id, { state: 'running', attempts: 1 }, T0);
+
+  const r = await runPass(ACCOUNT, at(45));
+  assert.equal(r.recovered, 1);
+  assert.equal(ran, 1, 'a job with a retry left must still be retried');
+  assert.equal((await getJob(ACCOUNT, j.id))?.state, 'completed');
+  clearRunners();
+});
+
+/**
+ * A recurring job that overran its own interval.
+ *
+ * `scheduleRepeat` is documented as spacing the successor from the COMPLETION time, so that a
+ * job taking longer than its interval does not fire again immediately. It was handed the pass
+ * timestamp instead — captured before the runner ran — so the successor was due `everyMinutes`
+ * after the pass STARTED, which for an overrunning job is already in the past.
+ *
+ * The runner sleeps on the real clock, so the only thing asserted is the direction: the gap
+ * must be strictly larger than the bare interval. Nothing here depends on how fast this machine
+ * is, which is the same reason the throughput test above records its latency instead of
+ * asserting a threshold.
+ */
+test('a recurring job is spaced from its completion, not from the start of the pass', async () => {
+  clearRunners();
+  const ACCOUNT = 'stress-overrun';
+  registerRunner('read', async () => { await new Promise((r) => setTimeout(r, 40)); });
+
+  const j = await createJob({ kind: 'read', account: ACCOUNT, everyMinutes: 60 }, T0);
+  await runPass(ACCOUNT, T0);
+  assert.equal((await getJob(ACCOUNT, j.id))?.state, 'completed');
+
+  const successor = (await loadJobs(ACCOUNT)).find((x) => x.id !== j.id);
+  assert.ok(successor, 'a successor must be scheduled');
+  assert.ok(successor.runAt, 'and it must carry the time it is due');
+
+  const gap = Date.parse(successor.runAt) - T0.getTime();
+  assert.ok(
+    gap > 60 * 60_000,
+    `the successor must be spaced from when the run finished, not from when the pass began (gap ${gap} ms)`
+  );
   clearRunners();
 });
 
@@ -186,14 +271,14 @@ test('a runner that throws does not stop the pass or the jobs behind it', async 
   registerRunner('vote', async () => { throw new Error('rate limited (429)'); });
   registerRunner('read', async () => { good++; });
 
-  createJob({ kind: 'vote', account: ACCOUNT, args: { permalink: 'x' } }, T0);
-  createJob({ kind: 'read', account: ACCOUNT }, T0);
-  createJob({ kind: 'read', account: ACCOUNT }, T0);
+  await createJob({ kind: 'vote', account: ACCOUNT, args: { permalink: 'x' } }, T0);
+  await createJob({ kind: 'read', account: ACCOUNT }, T0);
+  await createJob({ kind: 'read', account: ACCOUNT }, T0);
 
   const r = await runPass(ACCOUNT, T0);
   assert.equal(r.failed, 1);
   assert.equal(good, 2, 'work behind a failure still runs');
-  assert.equal(jobCounts(ACCOUNT).running, 0, 'nothing left claimed after a throw');
+  assert.equal((await jobCounts(ACCOUNT)).running, 0, 'nothing left claimed after a throw');
   clearRunners();
 });
 
@@ -203,17 +288,17 @@ test('two accounts under load never touch each other\'s queues', async () => {
   registerRunner('read', async (job) => { seen.push(job.account); });
 
   for (let i = 0; i < 20; i++) {
-    createJob({ kind: 'read', account: 'load-a' }, T0);
-    createJob({ kind: 'read', account: 'load-b' }, T0);
+    await createJob({ kind: 'read', account: 'load-a' }, T0);
+    await createJob({ kind: 'read', account: 'load-b' }, T0);
   }
 
   const a = await runPass('load-a', T0);
   assert.equal(a.completed, 20);
   assert.ok(seen.every((x) => x === 'load-a'), 'a pass for one account ran another account\'s work');
-  assert.equal(jobCounts('load-b').pending, 20, 'the other queue is untouched');
+  assert.equal((await jobCounts('load-b')).pending, 20, 'the other queue is untouched');
   clearRunners();
 });
 
-process.on('exit', () => {
+process.on('exit', async () => {
   try { rmSync(process.env.REDBOT_DATA!, { recursive: true, force: true }); } catch { /* ignore */ }
 });

@@ -10,11 +10,24 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { terms, findSupport, SUPPORT_MIN_TERMS, SUPPORT_MIN_COVERAGE } from '../corpus.js';
 import type { LoadedCorpus, CorpusConfig } from '../corpus.js';
-import { checkCitations } from '../argus/citations.js';
-import { certify } from '../argus/certify.js';
 import type { Claim, ResolutionVerdict } from '../argus/types.js';
+
+/**
+ * The loader tests at the bottom of this file write a `corpora.json` and reload. `DATA` — and
+ * with it `corporaPath` — is fixed the moment `config.js` is first evaluated, so the redirect
+ * has to be in place before any value import; hence the dynamic imports, the same shape
+ * jobs.test.ts and confirm.test.ts already use. Without it those tests would write into the
+ * operator's real `data/`, which is append-only evidence.
+ */
+process.env.REDBOT_DATA = mkdtempSync(join(tmpdir(), 'redbot-corpus-'));
+
+const {
+  terms, findSupport, findReference, corpora, resetCorpora, corporaPath, CorpusError,
+  SUPPORT_MIN_TERMS, SUPPORT_MIN_COVERAGE, REFERENCE_MIN_SCORE
+} = await import('../corpus.js');
+const { checkCitations } = await import('../argus/citations.js');
+const { certify } = await import('../argus/certify.js');
 
 /* ------------------------------------------------------------------ *
  * Fixtures
@@ -200,14 +213,80 @@ test('an absent citation report says nothing — it is not read as a clean one',
  * Corpus configuration is validated, not trusted
  * ------------------------------------------------------------------ */
 
-test('a corpus file with a bad jurisdiction regex is rejected at load', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'redbot-corpus-'));
+/** Point the loader at a `corpora.json` of our own, and put the built-in set back afterwards. */
+function withCorporaConfig(file: unknown, body: () => void): void {
+  writeFileSync(corporaPath, JSON.stringify(file));
+  resetCorpora();
   try {
-    writeFileSync(join(dir, 'corpora.json'), JSON.stringify({ corpora: [{ ...CFG, jurisdiction: ['('] }] }));
-    // Validation lives in loadConfigs, exercised through the real reader in corpus.ts; here we
-    // assert the regex itself is the thing that would throw, which is what that code checks.
-    assert.throws(() => new RegExp('(', 'i'));
+    body();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(corporaPath, { force: true });
+    resetCorpora();
   }
+}
+
+test('a corpus file with a bad jurisdiction regex is rejected at load', () => {
+  // WAS: this wrote the file into a temp directory nothing read, then asserted that
+  // `new RegExp('(', 'i')` throws — a fact about JavaScript, true whatever corpus.ts does.
+  // Same intent, now aimed at the code that owns it: loadConfigs must REFUSE the file rather
+  // than load a corpus carrying a pattern that cannot compile.
+  withCorporaConfig({ corpora: [{ ...CFG, jurisdiction: ['('] }] }, () => {
+    assert.throws(
+      () => corpora(),
+      (e: unknown) => e instanceof CorpusError && /corpus "test-kb" jurisdiction "\("/.test(e.message),
+      'an uncompilable jurisdiction pattern must fail the load, not reach retrieval'
+    );
+  });
+});
+
+/**
+ * Six cards, so the rarity weights are worth something: a term held by one card out of six
+ * scores log(7/2) ≈ 1.25, and the three the probe subject shares clear REFERENCE_MIN_SCORE
+ * with room to spare. None of this vocabulary appears in any corpus loaded before the reload,
+ * which is the whole point of it.
+ */
+const PROBE_CARDS = [
+  {
+    id: 'probe-kestrel',
+    question: 'What plumage does a kestrel show?',
+    content: 'Falconry manuals describe the kestrel plumage band by band.'
+  },
+  { id: 'probe-anvil', question: 'Anvil bench height', content: 'Bench height for an anvil in a working forge.' },
+  { id: 'probe-basalt', question: 'Basalt column formation', content: 'Columnar basalt forms as lava cools slowly.' },
+  { id: 'probe-cinder', question: 'Cinder track upkeep', content: 'A cinder track needs rolling after heavy rain.' },
+  { id: 'probe-dovetail', question: 'Dovetail joint angles', content: 'Dovetail joints hold a drawer together without glue.' },
+  { id: 'probe-estuary', question: 'Estuary tidal range', content: 'Tidal range in an estuary varies with the moon.' }
+];
+
+test('reloading a corpus rebuilds the rarity weights, so retrieval still finds the new cards', () => {
+  // Warm the caches against the built-in set first — that is the state a reload has to replace.
+  const cardsFile = join(process.env.REDBOT_DATA!, 'probe-cards.json');
+  findReference('max_allowed_packet truncation during a mysqldump restore');
+  writeFileSync(cardsFile, JSON.stringify({ cards: PROBE_CARDS }));
+
+  withCorporaConfig({
+    corpora: [{
+      id: 'probe',
+      label: 'the reload probe corpus',
+      path: cardsFile,
+      cardsAt: 'cards',
+      fields: { id: 'id', question: 'question', content: 'content' },
+      require: {},
+      jurisdiction: ['\\bkestrel\\b'],
+      draftable: true
+    }]
+  }, () => {
+    // The failure this pins is silent, which is what makes it worth a test: keeping the old
+    // corpus's document frequencies across a reload gives every term only the NEW corpus holds
+    // a weight of 0, so every card scores 0, falls under REFERENCE_MIN_SCORE, and retrieval
+    // returns an empty list while reporting no error at all.
+    const hits = findReference('Kestrel plumage identification for falconry');
+    assert.ok(hits.length > 0, 'a reloaded corpus must be retrievable, not silently scored to zero');
+    assert.equal(hits[0]!.cardId, 'probe-kestrel');
+    assert.ok(hits[0]!.score >= REFERENCE_MIN_SCORE);
+  });
+});
+
+process.on('exit', () => {
+  try { rmSync(process.env.REDBOT_DATA!, { recursive: true, force: true }); } catch { /* ignore */ }
 });

@@ -13,9 +13,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  checkWarmingComment, checkWarmingPace, isWarmingTarget,
+  checkWarmingComment, checkWarmingPace, isWarmingTarget, warmingStage,
   WARMING_MAX_WORDS
 } from '../warming.js';
+import { evaluateGates, type GateInput } from '../gates.js';
+import type { HealthCounters, HealthVerdict } from '../health.js';
+import type { ThreadState } from '../reddit/thread-state.js';
+import type { Draft, Thread, OpportunityAssessment } from '../types.js';
 
 const GOOD =
   'Check the error log first — a 502 right after a PHP upgrade is usually a fatal in a plugin ' +
@@ -112,4 +116,192 @@ test('threads are chosen for being read, not for being easy', () => {
 
   // unknown age fails closed — we cannot tell whether it would be read
   assert.equal(isWarmingTarget({ ageHours: null, commentCount: 0, subreddit: 'WordPress', title: 't' }).ok, false);
+});
+
+/* ---- stage ---- */
+
+test('stage 1 is decided from the account, and an unmeasured account is still in it', () => {
+  assert.equal(warmingStage({ karma: 500, accountAgeDays: 400 }).warming, false);
+  assert.equal(warmingStage({ karma: 1, accountAgeDays: 400 }).warming, true);
+  assert.equal(warmingStage({ karma: 500, accountAgeDays: 2 }).warming, true);
+
+  // Unknown is not permission. Never having measured karma is not evidence the account is warmed.
+  assert.equal(warmingStage({ karma: null, accountAgeDays: 400 }).warming, true);
+  assert.equal(warmingStage({ karma: 500, accountAgeDays: null }).warming, true);
+});
+
+/* ------------------------------------------------------------------ *
+ * The wiring
+ *
+ * Between 2026-07-22 and 2026-07-27 every check above ran only here. `checkWarmingComment`,
+ * `checkWarmingPace` and `isWarmingTarget` had no caller anywhere on the publish path, so the
+ * commit titled "enforce the account-warming rules" enforced none of them and this file was the
+ * feature in its entirety. These tests are about the seam rather than the rules: they assert
+ * that `evaluateGates` — the one function that can stop a publish — actually refuses. Each one
+ * fails against the unwired code, because no gate named `warming:*` existed to be hit.
+ * ------------------------------------------------------------------ */
+
+const NOW = new Date('2026-07-27T12:00:00.000Z');
+
+const GOOD_THREAD: Thread = {
+  id: 't_1',
+  permalink: 'https://www.reddit.com/r/WordPress/comments/abc/x/',
+  title: 'Checkout throws 502 after upgrading to PHP 8.2',
+  subreddit: 'WordPress',
+  author: 'asker',
+  upvotes: 3,
+  commentCount: 2,
+  ageText: '1 hr ago',
+  ageMinutes: 60,
+  body: 'Since the upgrade, checkout throws a 502 from admin-ajax.php.',
+  comments: [],
+  collectedAt: NOW.toISOString(),
+  source: 'read'
+};
+
+const counters = (over: Partial<HealthCounters> = {}): HealthCounters => ({
+  account: 'docs-architect',
+  readsToday: 0, searchesToday: 0, repliesToday: 0,
+  avgSessionMs: null, avgDwellMs: null,
+  rateLimitHits24h: 0, loginFailures24h: 0,
+  removalsObserved30d: 0, absentSignedOut30d: 0, suspensionNotices: 0,
+  // Stage 1 by karma, as both live accounts actually are (measured 2026-07-27: karma 1).
+  accountAgeDays: 3, karma: 1,
+  lastReplyAt: null, lastRateLimitAt: null, lastRemovalAt: null,
+  ...over
+});
+
+/**
+ * Healthy and mayPublish, on purpose and in every case below.
+ *
+ * If the health verdict did the refusing, these tests would prove nothing about the warming
+ * gate. Handing in a verdict that says "go" is what makes a `warming:*` block attributable.
+ */
+const healthy = (c: HealthCounters): HealthVerdict => ({
+  state: 'Healthy', mayPublish: true, reasons: [], resumeAt: null, counters: c
+});
+
+const gateInput = (over: Partial<GateInput> = {}): GateInput => ({
+  draft: {
+    id: 'd_1',
+    threadId: 't_1',
+    permalink: GOOD_THREAD.permalink,
+    title: GOOD_THREAD.title,
+    body: GOOD,
+    hasDisclosure: false,
+    lintIssues: [],
+    createdAt: new Date(NOW.getTime() - 30 * 60_000).toISOString(),
+    model: 'test',
+    status: 'pending'
+  } satisfies Draft,
+  thread: GOOD_THREAD,
+  assessment: {
+    threadId: 't_1',
+    permalink: GOOD_THREAD.permalink,
+    title: GOOD_THREAD.title,
+    verdict: 'contribute',
+    score: 80,
+    thesis: null,
+    reasons: ['a fillable gap nobody has closed'],
+    assessedAt: NOW.toISOString()
+  } satisfies OpportunityAssessment,
+  identity: { loggedIn: true, username: 'docs-architect', via: 'test' },
+  expectedAccount: 'docs-architect',
+  health: healthy(counters()),
+  threadState: {
+    locked: false, archived: false, ownCommentPresent: false, composerPresent: true,
+    unknown: [], anomalies: [], postScore: null, commentCount: null
+  } satisfies ThreadState,
+  allDrafts: [],
+  now: NOW,
+  ...over
+});
+
+const gatesHit = (over: Partial<GateInput> = {}) =>
+  evaluateGates(gateInput(over)).blocks.map((b) => b.gate);
+
+const withBody = (body: string, over: Partial<GateInput> = {}): Partial<GateInput> => ({
+  ...over,
+  draft: { ...gateInput().draft, body }
+});
+
+test('the gate refuses a link from a warming account — the rule is enforced, not documented', () => {
+  const hit = gatesHit(withBody(`${GOOD} See https://developer.wordpress.org/debug/`));
+  assert.ok(
+    hit.includes('warming:no-links'),
+    `expected warming:no-links on the publish gate, got ${hit.join(',') || '(nothing)'}`
+  );
+});
+
+test('the gate refuses a product mention from a warming account', () => {
+  const hit = gatesHit(withBody(`${GOOD} Our tool handles it automatically.`));
+  assert.ok(hit.includes('warming:no-promotion'), `got ${hit.join(',') || '(nothing)'}`);
+});
+
+test('an essay from a warming account is refused at the gate, not merely noted', () => {
+  const long = Array.from({ length: WARMING_MAX_WORDS + 20 }, () => 'word').join(' ');
+  assert.ok(gatesHit(withBody(long)).includes('warming:too-long'));
+});
+
+/**
+ * The scope guard. Stage 1 binds new accounts; it must not quietly become a second linter for
+ * every account forever, or the contribution pipeline is unpublishable by design.
+ */
+test('an account past stage 1 is not held to the warming rules', () => {
+  const grown = healthy(counters({ karma: 500, accountAgeDays: 400 }));
+  const hit = gatesHit(withBody(`${GOOD} See https://developer.wordpress.org/debug/`, { health: grown }));
+  assert.equal(
+    hit.some((g) => g.startsWith('warming:')), false,
+    `a warmed account was held to stage-1 rules: ${hit.join(',')}`
+  );
+});
+
+test('unknown karma fails closed into stage 1 — never measured is not the same as warmed', () => {
+  const unmeasured = healthy(counters({ karma: null, accountAgeDays: 400 }));
+  const hit = gatesHit(withBody(`${GOOD} See https://developer.wordpress.org/debug/`, { health: unmeasured }));
+  assert.ok(hit.includes('warming:no-links'), `got ${hit.join(',') || '(nothing)'}`);
+});
+
+/**
+ * The gate reads the counters, not the verdict computed from them.
+ *
+ * `health` here says Healthy and mayPublish, so the existing health gate stays silent — and the
+ * same counters show three comments already sent today. A gate that inherited the caller's
+ * conclusion would publish the fourth.
+ */
+test('a Healthy verdict does not license a stage-1 burst', () => {
+  const bursting = healthy(counters({ repliesToday: 3 }));
+  const hit = gatesHit({ health: bursting });
+  assert.ok(hit.includes('warming:daily-ceiling'), `got ${hit.join(',') || '(nothing)'}`);
+  assert.equal(hit.includes('health'), false, 'the health gate fired, so this proves nothing about warming');
+});
+
+test('comments arriving in a cluster are refused at the gate', () => {
+  const clustered = healthy(counters({ lastReplyAt: new Date(NOW.getTime() - 5 * 60_000).toISOString() }));
+  assert.ok(gatesHit({ health: clustered }).includes('warming:spacing'));
+});
+
+test('an unreadable last-reply timestamp fails closed — NaN never satisfied the spacing rule', () => {
+  // Date.parse("whenever") is NaN and every comparison against NaN is false, so the one input
+  // meaning "we cannot tell how long ago the last comment was" would have waved the spacing
+  // rule through. It is treated as this instant instead.
+  const unreadable = healthy(counters({ lastReplyAt: 'whenever' }));
+  assert.ok(gatesHit({ health: unreadable }).includes('warming:spacing'));
+});
+
+/**
+ * Stage 1 picks threads for being READ. That is a tighter question than the 72h publish ceiling,
+ * and the assertion that `stale-thread` stays quiet is the point: a 6h-old thread is comfortably
+ * inside every gate that existed before, and still buried.
+ */
+test('a thread too old to be read is refused while warming, inside the 72h publish ceiling', () => {
+  const buried = { ...GOOD_THREAD, ageMinutes: 6 * 60, ageText: '6 hr ago' };
+  const hit = gatesHit({ thread: buried });
+  assert.ok(hit.includes('warming:target'), `got ${hit.join(',') || '(nothing)'}`);
+  assert.equal(hit.includes('stale-thread'), false, 'the pre-existing age gate caught it, so this proves nothing');
+});
+
+test('a crowded thread is refused while warming — the eleventh voice is invisible', () => {
+  const crowded = { ...GOOD_THREAD, commentCount: 40 };
+  assert.ok(gatesHit({ thread: crowded }).includes('warming:target'));
 });

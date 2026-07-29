@@ -42,8 +42,12 @@ test('plural and negated storage assertions are detected', () => {
 test('code blocks are demonstrations, not claims', () => {
   const body = 'Try this:\n\n```\nwp option get custom_css\n```\n\nIt returns the row if one exists.';
   const r = assessClaims(body);
-  // the prose sentence counts; nothing inside the fence does
-  assert.ok(r.behavioural.every((s) => !s.text.includes('wp option get')));
+  // the prose sentence counts; nothing inside the fence does — and BOTH halves are asserted,
+  // because `every` over an empty array is true: the exclusion check alone passed just as
+  // happily on a scanner that found nothing at all.
+  assert.ok(r.behavioural.every((s) => !s.text.includes('wp option get')), 'the fenced command is not a claim');
+  assert.equal(r.behavioural.length, 1, 'the prose around the fence is still an assertion');
+  assert.match(r.behavioural[0]!.text, /^It returns the row/);
 });
 
 /**
