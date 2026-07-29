@@ -66,8 +66,11 @@ export interface AccountRecord {
   note?: string;
 }
 
-export function loadAccounts(): AccountRecord[] {
-  const file = join(DATA, 'accounts.json');
+export const accountsPath = (): string => join(DATA, 'accounts.json');
+
+/** The seed file, read straight off disk. The DB is preferred over this — see `loadAccounts`. */
+export function loadAccountsFile(): AccountRecord[] {
+  const file = accountsPath();
   if (!existsSync(file)) return [];
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as { accounts?: AccountRecord[] };
@@ -77,6 +80,57 @@ export function loadAccounts(): AccountRecord[] {
   }
 }
 
+/**
+ * Accounts, from the database, cached for the synchronous readers.
+ *
+ * `redbot.accounts` is the system of record. But `loadAccounts()` has to stay SYNCHRONOUS:
+ * it resolves `config.browser` (below), which every command reads, and Postgres is async.
+ * So the CLI primes this cache once at startup (`primeAccounts`, called from cli.ts) and the
+ * sync readers serve it from memory.
+ *
+ * Null means "not primed" — not "no accounts". The difference matters: an unprimed process
+ * falls back to the seed file rather than reporting that nobody is configured.
+ */
+let accountCache: AccountRecord[] | null = null;
+
+/**
+ * Load accounts from Postgres into the cache. Safe to call more than once.
+ *
+ * Fails SOFT, deliberately. An unreachable database must not stop `redbot doctor` from
+ * running or a browser command from resolving its port — those are exactly the commands you
+ * reach for when something is broken. On failure the cache stays null and the seed file
+ * answers instead, which is the behaviour every version before the database had.
+ */
+export async function primeAccounts(): Promise<void> {
+  try {
+    const [{ getPool }, { loadAccountsFromDb }] = await Promise.all([
+      import('./db.js'), import('./db/accounts.js')
+    ]);
+    const rows = await loadAccountsFromDb(getPool());
+    // An empty table is not an answer, it is an un-imported install: leave the cache null so
+    // the seed file still works on a machine where `redbot accounts import` has not been run.
+    if (rows.length) accountCache = rows;
+  } catch {
+    /* database unavailable — the seed file answers. Reported by `redbot doctor`, not here. */
+  }
+}
+
+/** Drop the cache so the next read re-resolves. For tests and for `accounts import`. */
+export function forgetAccounts(): void {
+  accountCache = null;
+}
+
+/**
+ * Who redbot may post as.
+ *
+ * The database wins when it has rows; `data/accounts.json` is the seed you import from and
+ * the fallback when the database is not reachable. Two sources with a stated precedence,
+ * rather than two sources that quietly disagree.
+ */
+export function loadAccounts(): AccountRecord[] {
+  return accountCache ?? loadAccountsFile();
+}
+
 /** The account named by REDBOT_ACCOUNT, or null. Throws if the name is not in the file. */
 export function selectedAccount(): AccountRecord | null {
   const want = process.env.REDBOT_ACCOUNT;
@@ -84,7 +138,12 @@ export function selectedAccount(): AccountRecord | null {
   const found = loadAccounts().find((a) => a.handle.toLowerCase() === want.toLowerCase());
   if (!found) {
     const known = loadAccounts().map((a) => a.handle).join(', ') || '(none configured)';
-    throw new Error(`REDBOT_ACCOUNT="${want}" is not in data/accounts.json. Known: ${known}`);
+    // Not "is not in data/accounts.json" any more — redbot.accounts is the record, and naming
+    // only the file sent people to edit a seed the engine may not even be reading.
+    throw new Error(
+      `REDBOT_ACCOUNT="${want}" is not a configured account. Known: ${known}\n` +
+      '  Accounts live in redbot.accounts; see `redbot accounts`.'
+    );
   }
   return found;
 }
@@ -103,15 +162,73 @@ export function assertLoopbackCdp(url: string): string {
   throw new Error(`REDBOT_CDP="${url}" is not a loopback address — refusing to attach to a non-local debugger.`);
 }
 
+/**
+ * Raised when redbot cannot tell WHICH account's browser to drive.
+ *
+ * Typed so `doctor` can REPORT it rather than die of it — the same treatment
+ * `OperatorAuthError` already gets.
+ */
+export class NoAccountError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NoAccountError';
+  }
+}
+
+/**
+ * The account whose Chrome this run drives, or null when nothing names one.
+ *
+ * `REDBOT_ACCOUNT` wins. Failing that, a SINGLE configured account is not a guess — it is the
+ * only answer — and resolving it here means no call site can forget to. Two or more is
+ * genuinely ambiguous and is refused below.
+ */
+function browserAccount(): AccountRecord | null {
+  const named = selectedAccount();
+  if (named) return named;
+  const all = loadAccounts();
+  return all.length === 1 ? all[0]! : null;
+}
+
 function resolveEndpoint(): string {
   if (process.env.REDBOT_CDP) return assertLoopbackCdp(process.env.REDBOT_CDP);
-  const a = selectedAccount();
+
+  const a = browserAccount();
   if (a?.debugPort) return `http://127.0.0.1:${a.debugPort}`;
-  return 'http://127.0.0.1:9222';
+
+  /**
+   * This used to end `return 'http://127.0.0.1:9222'`.
+   *
+   * That is not a neutral default. 9222 is Chrome's conventional debug port, so on a real
+   * machine something usually answers it — on the machine this was found on, Lenovo Vantage's
+   * Edge WebView2 held it (`/json/version` → "LenovoVantage/3.0.0.191", measured 2026-07-29).
+   * redbot attached to THAT browser, opened its tabs, scraped no subreddit feed and reported
+   * "Found 0 post links" as though Reddit had served nothing. Driving the wrong browser
+   * silently is worse than refusing, so an unresolved account is an error that names the
+   * handles instead of a port that happens to answer.
+   */
+  if (a) {
+    throw new NoAccountError(
+      `Account "${a.handle}" has no debug port on record, so redbot cannot tell which Chrome to drive.\n` +
+      '  See `redbot accounts` — the port is assigned when the account is set up.'
+    );
+  }
+
+  const known = loadAccounts().map((x) => x.handle);
+  throw new NoAccountError(
+    (known.length
+      ? `Which account? REDBOT_ACCOUNT is not set and ${known.length} accounts are configured: ${known.join(', ')}.`
+      : 'No accounts are configured, so there is no Reddit browser to drive.') +
+    '\n\n  PowerShell:  $env:REDBOT_ACCOUNT = "<handle>"\n' +
+    '  bash:        export REDBOT_ACCOUNT=<handle>\n\n' +
+    (known.length
+      ? 'redbot will not guess which account to act as.'
+      : 'Add one with `redbot accounts`, or on the Accounts screen of the console.')
+  );
 }
 
 function resolveProfileDir(): string {
-  const a = selectedAccount();
+  // Same resolver as the endpoint: a run must not read one account's port and another's profile.
+  const a = browserAccount();
   return join(DATA, a?.profileDir ?? 'chrome-profile');
 }
 
@@ -228,9 +345,28 @@ export const config = {
    *   REDBOT_CDP=<url>          -> explicit override, still wins
    *   neither                   -> the original single-profile behaviour, unchanged
    */
-  browser: {
-    cdpEndpoint: resolveEndpoint(),
-    profileDir: resolveProfileDir()
+  /**
+   * A getter, not two fixed values.
+   *
+   * These used to be computed once when this module was imported, which was fine while
+   * accounts came only from a file that was already on disk. Now `primeAccounts()` loads them
+   * from Postgres and cannot finish before this module is evaluated — so resolving eagerly
+   * would freeze in whatever answer was available before the database had been consulted.
+   *
+   * Every reader says `config.browser.cdpEndpoint` at call time, so re-resolving per access
+   * is invisible to them and costs a map lookup.
+   *
+   * PER-PROPERTY getters, not one object built from two calls. `resolveEndpoint()` can now
+   * refuse when it cannot tell which account to drive, and this used to resolve BOTH fields on
+   * every access — so `new NoBrowserError(...)`, which reads only `profileDir` to print the
+   * chrome command, threw while building the very message meant to explain the failure. A
+   * diagnostic that dies of the condition it is diagnosing is worse than none.
+   */
+  get browser(): { cdpEndpoint: string; profileDir: string } {
+    return {
+      get cdpEndpoint() { return resolveEndpoint(); },
+      get profileDir() { return resolveProfileDir(); }
+    };
   },
 
   limits: {
@@ -366,14 +502,46 @@ export function claudeConfigDir(): string {
   return join(DATA, 'operators', config.llm.operator, 'claude');
 }
 
-export function anthropicKey(): string {
-  const k = process.env.ANTHROPIC_API_KEY;
-  if (!k) {
+/**
+ * The Anthropic API key: the environment first, then the vault.
+ *
+ * The environment still wins, deliberately. It is the bootstrap path — CI, a one-off shell,
+ * and the session in which someone first stores the key — and a vault that could not be
+ * loaded without already having the thing it stores would be unusable on day one.
+ *
+ * Async because the vault is a database read. Its one caller (`completeViaApi`, src/llm.ts)
+ * was already async, so nothing sync became async to make this work.
+ *
+ * The key is returned, never logged: the value goes straight into the x-api-key header.
+ */
+export async function anthropicKey(): Promise<string> {
+  const fromEnv = process.env.ANTHROPIC_API_KEY;
+  if (fromEnv) return fromEnv;
+
+  // Imported here rather than at module top: credentials.ts pulls in the pg pool, and config.ts
+  // is imported by every command including the ones that never touch a database or an LLM.
+  // A static import would make `redbot doctor` open a connection pool to answer a question
+  // about the filesystem.
+  const { anthropicKeyFromVault, vaultUnavailableReason } = await import('./credentials.js');
+  try {
+    const stored = await anthropicKeyFromVault(config.llm.operator);
+    if (stored) return stored;
+  } catch (e) {
+    // A vault that is present but unopenable is a real failure and must not be reported as
+    // "no key set" — that would send an operator off to re-export a key they already stored.
     throw new Error(
-      'ANTHROPIC_API_KEY is not set.\n' +
-      '  PowerShell:  $env:ANTHROPIC_API_KEY = "sk-ant-..."\n' +
-      '  bash:        export ANTHROPIC_API_KEY=sk-ant-...'
+      `ANTHROPIC_API_KEY is not in the environment, and the vault could not be read:\n  ${
+        e instanceof Error ? e.message : String(e)}`
     );
   }
-  return k;
+
+  const vaultNote = vaultUnavailableReason()
+    ? '\nThe vault is not available either: ' + vaultUnavailableReason()
+    : '\nOr store it once in the vault:  redbot vault set anthropic_api_key';
+  throw new Error(
+    'ANTHROPIC_API_KEY is not set.\n' +
+    '  PowerShell:  $env:ANTHROPIC_API_KEY = "sk-ant-..."\n' +
+    '  bash:        export ANTHROPIC_API_KEY=sk-ant-...' +
+    vaultNote
+  );
 }

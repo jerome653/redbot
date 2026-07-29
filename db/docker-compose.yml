@@ -1,0 +1,123 @@
+# redbot Postgres — local development database.
+#
+# Loopback-only by design. redbot is local-first and `data/` holds live Reddit session
+# cookies and per-operator credentials; a database sitting beside that has no business
+# listening on a LAN. The published port is bound to 127.0.0.1 explicitly — Docker's
+# default "5432:5432" would bind 0.0.0.0 and punch through the Windows firewall.
+#
+#   docker compose -f db/docker-compose.yml up -d
+#   node db/migrate.mjs up
+#
+# The volume is mounted at /var/lib/postgresql, which is the VOLUME the postgres:18
+# image itself declares. Note the image's PGDATA is /var/lib/postgresql/18/docker —
+# NOT the historical /var/lib/postgresql/data. Mounting the old path against an 18
+# image produces a container that runs fine and persists nothing.
+name: redbot-db
+
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: redbot-postgres
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-redbot}
+      POSTGRES_USER: ${POSTGRES_USER:-redbot}
+      # No default. An unset password would otherwise silently become a blank one.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD — copy db/.env.example to db/.env}
+      # C collation keeps ORDER BY and LIKE deterministic across machines; the engine's
+      # evidence files are compared byte-for-byte and the database should not disagree.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+
+    volumes:
+      - pgdata:/var/lib/postgresql
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-redbot} -d ${POSTGRES_DB:-redbot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+    # Postgres needs time to checkpoint and shut down cleanly. The 10s default can
+    # SIGKILL it mid-checkpoint and force recovery on the next start.
+    stop_grace_period: 30s
+
+  # --------------------------------------------------------------------------
+  # pgweb — a browser window onto the database above.
+  #
+  #   docker compose -f db/docker-compose.yml --profile tools up -d
+  #   http://127.0.0.1:8081
+  #
+  # OPT-IN, by the `tools` profile. A plain `up -d` still starts Postgres and
+  # nothing else, so the everyday command and every script that already runs it
+  # behave exactly as they did before this service existed. `--profile tools`
+  # is the only thing that brings the UI up.
+  #
+  # It connects itself on startup — there is no login screen and no server to
+  # register. Open the URL and the tables are already listed.
+  # --------------------------------------------------------------------------
+  pgweb:
+    # Pinned, like postgres:18-alpine above. `latest` is a moving target and a
+    # database viewer that silently changes behaviour between two `up`s is a
+    # viewer you cannot trust to be showing you what it showed you yesterday.
+    image: sosedoff/pgweb:0.17.0
+    container_name: redbot-pgweb
+    restart: unless-stopped
+
+    profiles: [tools]
+
+    # Same reasoning as the database's own port binding: loopback ONLY. This
+    # container holds a connection that is already authenticated, so anything
+    # that can reach the port can read the database without a password. Docker's
+    # default "8081:8081" would bind 0.0.0.0 and publish exactly that through
+    # the Windows firewall.
+    ports:
+      - "127.0.0.1:${PGWEB_PORT:-8081}:8081"
+
+    environment:
+      # PGWEB_DATABASE_URL, not DATABASE_URL — measured, not assumed. pgweb 0.17
+      # still accepts DATABASE_URL but logs
+      #   "[DEPRECATION] Usage of DATABASE_URL env var is deprecated"
+      # on every start.
+      #
+      # The discrete PGWEB_HOST / PGWEB_USER / PGWEB_PASS variables do NOT work
+      # for this: with those set, pgweb starts but sits at "Not connected" and
+      # shows a connection form. The URL is the only form that auto-connects.
+      #
+      # `db:5432` is the CONTAINER port, which is always 5432. POSTGRES_PORT is
+      # the host publish port and is deliberately not used here — changing it
+      # must not break this service, because these two containers talk to each
+      # other on the compose network and never go via the host.
+      #
+      # A note on the password: it is interpolated into a URL, so a password
+      # containing @ : / ? or # would break the connection string. The generator
+      # in .env.example produces base64url (A-Za-z0-9_-), which is URL-safe. If
+      # you set one by hand, keep it to those characters.
+      PGWEB_DATABASE_URL: postgres://${POSTGRES_USER:-redbot}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD — copy db/.env.example to db/.env}@db:5432/${POSTGRES_DB:-redbot}?sslmode=disable
+
+      # To make this a strictly read-only window, uncomment the command below
+      # instead. pgweb then refuses anything that would write, which is worth
+      # having if you only ever open this to LOOK at rows — src/store.ts is what
+      # is supposed to be writing them.
+    # command: ["--readonly"]
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    # pgweb ships curl, so the check is the real page rather than a TCP probe —
+    # a listening socket is not the same as a UI that rendered.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -o /dev/null http://127.0.0.1:8081/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pgdata:
+    name: redbot-pgdata
