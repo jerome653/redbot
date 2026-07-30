@@ -57,3 +57,12 @@ qa/evidence/*.png
 # Console UI captures. Written by tools/product/ui.test.mjs when REDBOT_UI_SHOTS is unset;
 # they are evidence for one run, not something to keep in step with the code.
 tools/product/.ui-shots/
+
+# One-off investigation write-ups. Each answers a question asked on a particular day against
+# the tree as it stood that day — cloud-hosting feasibility, the collect→review funnel, deploy
+# readiness. They cite file:line and measured figures, so they go stale the moment the code
+# moves and there is nothing that keeps them honest. Named individually rather than by a glob:
+# a pattern like *-FINDINGS.md would silently swallow the next report somebody DOES want kept.
+DEPLOY-READINESS-2026-07-30.md
+PIPELINE-FINDINGS.md
+WHY-NOT-DEPLOYABLE.md
