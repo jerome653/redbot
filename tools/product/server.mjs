@@ -1,21 +1,46 @@
 /**
- * redbot — product console (read-only).
+ * redbot — product console.
  *
  * The operator workstation at tools/operator/ answers "is the engine sound".
  * This answers the only question an operator actually has: **should this reply go out?**
  *
- * Three rules this server keeps, because redbot's whole thesis depends on them:
+ * NOT read-only. This header used to assert the opposite of all three points below — that the
+ * file only read, ran nothing, published nothing, and held no command surface or allow-list —
+ * and every clause of that was contradicted inside this same file. The operator console
+ * carried the same false self-description on /api/settings until `readOnly: false` replaced
+ * it. A comment that overstates a security boundary is worse than no comment: it invites the
+ * next reader to skip the guard they were about to add. So, plainly:
  *
- *   1. It reads. It never writes, never executes, never publishes. There is no command
- *      surface at all — not an allow-list, no exec path exists in this file. Publishing
- *      needs a person at a TTY (`reply` refuses non-interactive stdin by design) and this
- *      console will not pretend otherwise; it hands you the command to run.
- *   2. Every number is joined from an append-only log at request time. Nothing is cached,
- *      nothing is stored, so this file cannot invent a figure the logs do not contain.
- *   3. Absent evidence is reported as absent, never as zero-meaning-fine. "Never measured"
- *      and "measured 0" are different states and are rendered differently.
+ *   1. It reads AND WRITES — accounts.json, sources.json, decisions.jsonl and approvals/,
+ *      through writeFileSync / appendFileSync / mkdirSync / rmSync imported below.
+ *   2. It EXECUTES, behind a fixed allow-list: `PUBLIC_ACTIONS`, enforced on /api/run and
+ *      published by /api/actions. `spawn` runs dist/cli.js for an action, again for the
+ *      `auto` loop, and taskkill to stop a browser.
+ *   3. It PUBLISHES. /api/publish → `publish()` refuses anything but the exact word SEND,
+ *      then writes a single-use five-minute approval token that `takeConsoleApproval`
+ *      (src/ask.ts) spends on one `redbot reply`.
  *
- * data/operators/ is never served — it holds credentials next to evidence.
+ * What actually holds the line is the machine boundary, not read-only-ness: `originIsLocal`
+ * refuses cross-origin requests and `server.listen` binds 127.0.0.1 only. There is no
+ * authentication behind that — "you are on this computer" IS the security model, so do not
+ * widen either guard without first replacing it with one.
+ *
+ * Two rules that DO still hold:
+ *
+ *   - Figures come from Postgres at request time, through the typed row mappers in dist/ (see
+ *     the `domain` note below). Nothing is cached between requests, so this file cannot invent
+ *     a figure the database does not contain. (data/*.jsonl is read only for legacy decision
+ *     history.)
+ *   - Absent evidence is reported as absent, never as zero-meaning-fine. "Never measured"
+ *     and "measured 0" are different states and are rendered differently.
+ *
+ * data/operators/ holds credentials next to evidence: it is read to list and select operators,
+ * and no credential path is ever served by /api/operators.
+ *
+ * Deliberately no `:line` citations in this header. The claim it replaced rotted precisely
+ * because same-file line numbers shift under every edit above them; the symbol names above are
+ * pinned by tests in server.test.mjs instead. Cross-file refs (src/ask.ts) are fine — those
+ * only move when that file moves.
  */
 import { createServer } from 'node:http';
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, appendFileSync, mkdirSync, createWriteStream, rmSync } from 'node:fs';
@@ -1996,12 +2021,18 @@ const server = createServer((req, res) => {
   send(404, JSON.stringify({ error: 'not found' }));
 });
 
+/**
+ * The banner used to say "read-only — no command surface exists in this server" and that
+ * publishing needed a terminal. Both were false here — see the header — and this was the more
+ * misleading of the two copies, because an operator reads it every launch and may size their
+ * caution to it. It now states the actual surface and the actual boundary.
+ */
 server.listen(PORT, '127.0.0.1', () => {
   process.stdout.write(
     `redbot product console\n` +
     `  http://localhost:${PORT}\n` +
-    `  read-only — no command surface exists in this server.\n` +
-    `  Publishing needs a person at a terminal: node dist/cli.js reply <draftId>\n` +
+    `  Runs ${PUBLIC_ACTIONS.length} allow-listed actions and can publish a draft on a typed SEND.\n` +
+    `  Bound to 127.0.0.1 and refuses cross-origin requests — there is no other guard.\n` +
     `  Ctrl+C to stop.\n`
   );
 });

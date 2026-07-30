@@ -1597,3 +1597,113 @@ test('the first account can be set up when the data directory itself does not ex
     try { rmSync(dirname(gone), { recursive: true, force: true }); } catch { /* best effort */ }
   }
 });
+
+/* ------------------------------------------------------------------ *
+ * What the console says about itself
+ * ------------------------------------------------------------------ */
+
+/**
+ * The header of server.mjs claimed "It reads. It never writes, never executes, never
+ * publishes. There is no command surface at all — not an allow-list, no exec path exists in
+ * this file." Every clause was false in that same file: it imports writeFileSync and spawn,
+ * enforces a PUBLIC_ACTIONS allow-list, and serves /api/publish. The operator console carried
+ * the identical claim on /api/settings until `readOnly: false` replaced it — see
+ * tools/operator/server.test.mjs, 'the console does not describe itself as read-only'.
+ *
+ * A comment that overstates a security boundary invites the next reader to skip a guard, so
+ * the wording is pinned here rather than left to review.
+ */
+test('the product console header does not claim to be read-only', () => {
+  const src = readFileSync(join(HERE, 'server.mjs'), 'utf8');
+  const header = src.slice(0, src.indexOf('*/') + 2);
+
+  for (const lie of [
+    'product console (read-only)',
+    'It never writes',
+    'never executes',
+    'no exec path exists in this file'
+  ]) {
+    assert.ok(!header.includes(lie), `the header still claims: "${lie}"`);
+  }
+
+  // And it must still say what it DOES do, so the fix cannot be undone by deletion alone.
+  assert.match(header, /NOT read-only/);
+  assert.match(header, /It reads AND WRITES/);
+  assert.match(header, /It EXECUTES, behind a fixed allow-list/);
+  assert.match(header, /It PUBLISHES/);
+});
+
+/**
+ * The same false claim had a SECOND copy in the startup banner, and it outlived the first fix
+ * because the test above only read the header. The banner is the worse of the two: an operator
+ * reads it on every launch and may size their caution to it. Pinned against the real stdout of
+ * a real server, not against the source, so a template that stops interpolating is caught too.
+ */
+test('the startup banner does not claim to be read-only', async () => {
+  const port = await freePort();
+  const child = spawn(process.execPath, [join(HERE, 'server.mjs'), '--port', String(port)],
+                      { cwd: ROOT, env: CHILD_ENV, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '';
+  try {
+    await new Promise((res, rej) => {
+      const timer = setTimeout(() => rej(new Error(`no banner in 15s; got: ${out}`)), 15_000);
+      child.stdout.on('data', (d) => {
+        out += String(d);
+        if (out.includes('Ctrl+C to stop')) { clearTimeout(timer); res(); }
+      });
+      child.on('error', (e) => { clearTimeout(timer); rej(e); });
+    });
+  } finally {
+    try { child.kill(); } catch { /* already gone */ }
+  }
+
+  assert.ok(!/read-only/.test(out), `the banner still says read-only: ${out}`);
+  assert.ok(!/no command surface/.test(out), `the banner still denies its command surface: ${out}`);
+  assert.ok(!/Publishing needs a person at a terminal/.test(out),
+            `the banner still sends people to a terminal to publish: ${out}`);
+
+  // It must state the surface it actually has, with a real count rather than an uninterpolated
+  // template, and the boundary that is actually doing the work.
+  assert.match(out, /Runs \d+ allow-listed actions and can publish a draft on a typed SEND\./);
+  assert.match(out, /Bound to 127\.0\.0\.1 and refuses cross-origin requests/);
+});
+
+/**
+ * The header names symbols rather than line numbers, on purpose — the claim it replaced rotted
+ * because same-file `:line` citations shift under every edit above them. Symbols only rot when
+ * renamed or deleted, which is what this pins: every one the header names must still exist, and
+ * the header must not reacquire the `:NNN` habit for its own internals.
+ */
+test('every symbol the header names still exists in the file', () => {
+  const src = readFileSync(join(HERE, 'server.mjs'), 'utf8');
+  const header = src.slice(0, src.indexOf('*/') + 2);
+  const body = src.slice(header.length);
+
+  const named = [
+    [/^import \{[^}]*\bwriteFileSync\b[^}]*\} from 'node:fs'/m, 'writeFileSync is imported'],
+    [/^import \{[^}]*\bappendFileSync\b/m,                     'appendFileSync is imported'],
+    [/^import \{ spawn \} from 'node:child_process'/m,          'spawn is imported'],
+    [/^const PUBLIC_ACTIONS =/m,                                'PUBLIC_ACTIONS is declared'],
+    [/if \(!PUBLIC_ACTIONS\.includes\(body\.key\)\)/,            'the allow-list is enforced'],
+    [/url\.pathname === '\/api\/actions'/,                       '/api/actions is served'],
+    [/spawn\(process\.execPath, \[join\(ROOT, 'dist', 'cli\.js'\)/, 'dist/cli.js is spawned'],
+    [/'auto', '--every'/,                                        'the auto loop is spawned'],
+    [/spawn\('taskkill'/,                                        'taskkill is spawned'],
+    [/url\.pathname === '\/api\/publish'/,                        '/api/publish is served'],
+    [/^async function publish\(body\)/m,                          'publish() is defined'],
+    [/confirm !== 'SEND'/,                                       'SEND is required verbatim'],
+    [/takeConsoleApproval/,                                      'the approval token is named'],
+    [/^function originIsLocal\(o\)/m,                             'originIsLocal is defined'],
+    [/if \(!originIsLocal\(req\.headers\.origin\)\)/,             'originIsLocal is enforced'],
+    [/^server\.listen\(PORT, '127\.0\.0\.1'/m,                    'the server binds loopback only'],
+    [/url\.pathname === '\/api\/operators'/,                      '/api/operators is served']
+  ];
+
+  for (const [pattern, what] of named) {
+    assert.match(body, pattern, `the header claims ${what}, but nothing in the file matches`);
+  }
+
+  // The header must not go back to citing its own line numbers.
+  assert.ok(!/`:\d+`/.test(header),
+    'the header cites a same-file line number again — those rot on the next edit above them');
+});
