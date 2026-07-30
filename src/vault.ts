@@ -40,7 +40,7 @@ export class VaultError extends Error {
   }
 }
 
-/** A sealed secret — exactly the columns redbot.credentials stores. */
+/** A sealed secret — exactly the columns credentials stores. */
 export interface SealedSecret {
   algo: string;
   keyId: string;

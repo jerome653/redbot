@@ -40,10 +40,17 @@ export interface AccountTally {
 /**
  * Per-account figures, in two grouped queries rather than two per account.
  *
- * The karma reading is picked with DISTINCT ON … ORDER BY id DESC, not by `ts`. A checkpoint
- * reading is written now but can carry a back-dated timestamp (src/db/logs.ts says so at the
- * top), so "the latest by ts" is not always the last one recorded — and the card is reporting
- * what redbot most recently measured.
+ * The karma reading is picked by highest `id`, not by `ts`. A checkpoint reading is written now
+ * but can carry a back-dated timestamp (src/db/logs.ts says so at the top), so "the latest by
+ * ts" is not always the last one recorded — and the card is reporting what redbot most recently
+ * measured.
+ *
+ * That used to be spelled `DISTINCT ON (account) … ORDER BY account, id DESC`, which SQLite does
+ * not have. `row_number() OVER (PARTITION BY account ORDER BY id DESC) = 1` is the same
+ * selection, and it keeps the ordering key — `id`, deliberately, not `ts` — where a reader can
+ * still see it. The AUTOINCREMENT on `observations.id` is what makes "highest id" mean "most
+ * recently recorded"; without it SQLite would reuse a deleted rowid and this would silently
+ * start picking the wrong row, which is why the schema test pins it.
  */
 export async function accountTallies(db: Db): Promise<Map<string, AccountTally>> {
   const out = new Map<string, AccountTally>();
@@ -53,14 +60,14 @@ export async function accountTallies(db: Db): Promise<Map<string, AccountTally>>
     return t;
   };
 
-  const obs = await db.query<{ account: string; n: string }>(
-    `SELECT account, count(*)::text AS n FROM redbot.observations
+  const obs = await db.query<{ account: string; n: number }>(
+    `SELECT account, count(*) AS n FROM observations
       WHERE account IS NOT NULL GROUP BY account`
   );
   for (const r of obs.rows) get(r.account).observations = Number(r.n);
 
-  const pub = await db.query<{ account: string; n: string }>(
-    `SELECT account, count(*)::text AS n FROM redbot.history
+  const pub = await db.query<{ account: string; n: number }>(
+    `SELECT account, count(*) AS n FROM history
       WHERE account IS NOT NULL AND kind = 'publish.ok' GROUP BY account`
   );
   for (const r of pub.rows) get(r.account).published = Number(r.n);
@@ -68,10 +75,12 @@ export async function accountTallies(db: Db): Promise<Map<string, AccountTally>>
   const karma = await db.query<{
     account: string; value: unknown; ts: Date; vector: string | null; note: string | null;
   }>(
-    `SELECT DISTINCT ON (account) account, value, ts, vector::text AS vector, note
-       FROM redbot.observations
-      WHERE account IS NOT NULL AND kind = 'karma'
-      ORDER BY account, id DESC`
+    `SELECT account, value, ts, vector, note FROM (
+       SELECT account, value, ts, vector, note,
+              row_number() OVER (PARTITION BY account ORDER BY id DESC) AS rn
+         FROM observations
+        WHERE account IS NOT NULL AND kind = 'karma'
+     ) WHERE rn = 1`
   );
   for (const r of karma.rows) {
     get(r.account).karma = {
@@ -88,9 +97,9 @@ export async function accountTallies(db: Db): Promise<Map<string, AccountTally>>
 /** Every handle that appears in the logs, configured or not — the union the console shows. */
 export async function handlesInLogs(db: Db): Promise<string[]> {
   const r = await db.query<{ account: string }>(
-    `SELECT account FROM redbot.observations WHERE account IS NOT NULL
+    `SELECT account FROM observations WHERE account IS NOT NULL
      UNION
-     SELECT account FROM redbot.history WHERE account IS NOT NULL`
+     SELECT account FROM history WHERE account IS NOT NULL`
   );
   return r.rows.map((x) => x.account);
 }
@@ -106,8 +115,8 @@ export async function handlesInLogs(db: Db): Promise<string[]> {
 export async function threadsBySubreddit(
   db: Db
 ): Promise<{ collected: Record<string, number>; collectedByKey: Record<string, number> }> {
-  const r = await db.query<{ subreddit: string | null; n: string }>(
-    'SELECT subreddit, count(*)::text AS n FROM redbot.threads GROUP BY subreddit'
+  const r = await db.query<{ subreddit: string | null; n: number }>(
+    'SELECT subreddit, count(*) AS n FROM threads GROUP BY subreddit'
   );
   const collected: Record<string, number> = {};
   const collectedByKey: Record<string, number> = {};
@@ -141,26 +150,26 @@ export interface ArgusSummary {
  */
 export async function argusSummary(db: Db): Promise<ArgusSummary> {
   const head = await db.query<{ runs: string; drafts: string }>(
-    `SELECT count(*)::text AS runs, count(DISTINCT draft_id)::text AS drafts
-       FROM redbot.certifications`
+    `SELECT count(*) AS runs, count(DISTINCT draft_id) AS drafts
+       FROM certifications`
   );
-  const verdicts = await db.query<{ verdict: string; n: string }>(
-    'SELECT verdict::text AS verdict, count(*)::text AS n FROM redbot.certifications GROUP BY verdict'
+  const verdicts = await db.query<{ verdict: string; n: number }>(
+    'SELECT verdict AS verdict, count(*) AS n FROM certifications GROUP BY verdict'
   );
-  const reasons = await db.query<{ rule: string; n: string }>(
-    `SELECT rule, count(*)::text AS n FROM redbot.certification_reasons
+  const reasons = await db.query<{ rule: string; n: number }>(
+    `SELECT rule, count(*) AS n FROM certification_reasons
       GROUP BY rule ORDER BY count(*) DESC, rule LIMIT 5`
   );
 
   /* Claim counts per certification, for drafts that were certified more than once. Restricted
      in SQL to those drafts — the spread is meaningless for a draft checked once, and fetching
      every certification to discard the singletons is the read this file exists to avoid. */
-  const spread = await db.query<{ draft_id: string; cert_id: string; n: string }>(
-    `SELECT c.draft_id, c.id::text AS cert_id, count(cc.claim_id)::text AS n
-       FROM redbot.certifications c
-       LEFT JOIN redbot.certification_claims cc ON cc.cert_id = c.id
+  const spread = await db.query<{ draft_id: string; cert_id: number; n: number }>(
+    `SELECT c.draft_id, c.id AS cert_id, count(cc.claim_id) AS n
+       FROM certifications c
+       LEFT JOIN certification_claims cc ON cc.cert_id = c.id
       WHERE c.draft_id IN (
-        SELECT draft_id FROM redbot.certifications GROUP BY draft_id HAVING count(*) > 1
+        SELECT draft_id FROM certifications GROUP BY draft_id HAVING count(*) > 1
       )
       GROUP BY c.draft_id, c.id
       ORDER BY c.draft_id, c.id`
@@ -204,18 +213,18 @@ export interface ConsoleTotals {
  */
 export async function consoleTotals(db: Db): Promise<ConsoleTotals> {
   const r = await db.query<Record<string, string>>(
-    `SELECT (SELECT count(*) FROM redbot.history WHERE kind = 'publish.ok')          AS published,
-            (SELECT count(*) FROM redbot.drafts WHERE status = 'pending')       AS pending,
-            (SELECT count(*) FROM redbot.reviews)                               AS reviews,
-            (SELECT count(*) FROM redbot.regret)                                AS regret,
+    `SELECT (SELECT count(*) FROM history WHERE kind = 'publish.ok')          AS published,
+            (SELECT count(*) FROM drafts WHERE status = 'pending')       AS pending,
+            (SELECT count(*) FROM reviews)                               AS reviews,
+            (SELECT count(*) FROM regret)                                AS regret,
             /* reply-marked-removed, NOT removal. Same defect as the publish.ok one above, and
                found the same way: observation_kind has no such value, so the console's "taken
                down" badge could never be anything but zero. src/commands/observe.ts:264 writes
                this kind when a moderator removal notice is seen, and src/health.ts:186 reads it
                correctly. Deleted is deliberately excluded -- the badge says "by a moderator",
                and a deletion is usually the author's own doing. */
-            (SELECT count(*) FROM redbot.observations WHERE kind = 'reply-marked-removed') AS removals,
-            (SELECT count(*) FROM redbot.certifications)                        AS certifications`
+            (SELECT count(*) FROM observations WHERE kind = 'reply-marked-removed') AS removals,
+            (SELECT count(*) FROM certifications)                        AS certifications`
   );
   const row = r.rows[0] ?? {};
   const n = (k: string) => Number(row[k] ?? 0);

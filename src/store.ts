@@ -104,7 +104,7 @@ export async function saveThreads(incoming: Thread[]): Promise<number> {
   return withTransaction(async (c) => {
     const ids = incoming.map((t) => t.id);
     const existing = await c.query<{ id: string }>(
-      'SELECT id FROM redbot.threads WHERE id = ANY($1::text[])', [ids]
+      'SELECT id FROM threads WHERE id IN (SELECT j.value FROM json_each($1) j)', [JSON.stringify(ids)]
     );
     const known = new Set(existing.rows.map((r) => r.id));
     const added = ids.filter((id) => !known.has(id)).length;

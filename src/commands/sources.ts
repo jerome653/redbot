@@ -5,7 +5,7 @@
  * `redbot sources rm <value>`         — take one off the list
  * `redbot sources import` / `export`  — move between the database and data/sources.json
  *
- * `redbot.sources` is the system of record; `data/sources.json` is the seed you import from
+ * `sources` is the system of record; `data/sources.json` is the seed you import from
  * and the fallback when the database is unreachable — the same arrangement as `redbot accounts`.
  *
  * The distinction this surface exists to keep visible: an unreadable source list is NOT an
@@ -60,7 +60,7 @@ async function list(): Promise<number> {
   say.step('');
   const on = view.sources.filter((s) => s.enabled).length;
   say.ok(`${on} of ${view.sources.length} switched on · source of truth: ${
-    view.from === 'database' ? 'redbot.sources' : `${sourcesPath()} (seed)`}`);
+    view.from === 'database' ? 'sources' : `${sourcesPath()} (seed)`}`);
   if (view.from === 'seed-file' && !view.unavailable) {
     say.warn('None of these are in the database yet.');
     say.step('Import them:  redbot sources import');
@@ -95,7 +95,7 @@ async function importCmd(): Promise<number> {
   try { n = await importSources(); }
   catch (e) { say.fail(e instanceof SourcesError ? e.message : String(e)); return 1; }
   if (!n) { say.warn(`Nothing to import — ${sourcesPath()} lists no sources.`); return 1; }
-  say.ok(`Imported ${n} source(s) into redbot.sources.`);
+  say.ok(`Imported ${n} source(s) into sources.`);
   return 0;
 }
 

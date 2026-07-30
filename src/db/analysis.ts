@@ -34,7 +34,7 @@ interface GapRow {
 export async function upsertGapAnalyses(db: Db, items: GapAnalysis[]): Promise<number> {
   for (const g of items) {
     await db.query(
-      `INSERT INTO redbot.gap_analyses
+      `INSERT INTO gap_analyses
          (thread_id, permalink, title, question, covered, already_answered, headroom, analyzed_at, model)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        ON CONFLICT (thread_id) DO UPDATE SET
@@ -46,14 +46,14 @@ export async function upsertGapAnalyses(db: Db, items: GapAnalysis[]): Promise<n
          headroom         = EXCLUDED.headroom,
          analyzed_at      = EXCLUDED.analyzed_at,
          model            = EXCLUDED.model`,
-      [g.threadId, g.permalink, g.title, g.question, g.covered ?? [],
+      [g.threadId, g.permalink, g.title, g.question, JSON.stringify(g.covered ?? []),
        g.alreadyAnswered, g.headroom, g.analyzedAt, g.model]
     );
 
-    await db.query('DELETE FROM redbot.gaps WHERE thread_id = $1', [g.threadId]);
+    await db.query('DELETE FROM gaps WHERE thread_id = $1', [g.threadId]);
     for (const [i, gap] of (g.gaps ?? []).entries()) {
       await db.query(
-        `INSERT INTO redbot.gaps (thread_id, position, kind, what, fillable)
+        `INSERT INTO gaps (thread_id, position, kind, what, fillable)
          VALUES ($1,$2,$3,$4,$5)`,
         [g.threadId, i, gap.kind, gap.what, gap.fillable]
       );
@@ -66,10 +66,10 @@ export async function loadGapAnalyses(db: Db): Promise<GapAnalysis[]> {
   const a = await db.query<GapAnalysisRow>(
     `SELECT thread_id, permalink, title, question, covered,
             already_answered, headroom, analyzed_at, model
-       FROM redbot.gap_analyses ORDER BY analyzed_at DESC, thread_id`
+       FROM gap_analyses ORDER BY analyzed_at DESC, thread_id`
   );
   const g = await db.query<GapRow>(
-    `SELECT thread_id, kind, what, fillable FROM redbot.gaps ORDER BY thread_id, position`
+    `SELECT thread_id, kind, what, fillable FROM gaps ORDER BY thread_id, position`
   );
 
   const byThread = new Map<string, Gap[]>();
@@ -114,7 +114,7 @@ export async function upsertAssessments(db: Db, items: OpportunityAssessment[]):
   for (const a of items) {
     const t: ContributionThesis | null = a.thesis ?? null;
     await db.query(
-      `INSERT INTO redbot.opportunity_assessments
+      `INSERT INTO opportunity_assessments
          (thread_id, permalink, title, verdict, score,
           thesis_why_thread, thesis_what_new, thesis_why_not_silent, reasons, assessed_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
@@ -130,7 +130,7 @@ export async function upsertAssessments(db: Db, items: OpportunityAssessment[]):
          assessed_at           = EXCLUDED.assessed_at`,
       [a.threadId, a.permalink, a.title, a.verdict, a.score,
        t?.whyThread ?? null, t?.whatNew ?? null, t?.whyNotSilent ?? null,
-       a.reasons ?? [], a.assessedAt]
+       JSON.stringify(a.reasons ?? []), a.assessedAt]
     );
   }
   return items.length;
@@ -144,10 +144,10 @@ export async function loadAssessmentsFromDb(
   const r = await db.query<AssessmentRow>(
     `SELECT thread_id, permalink, title, verdict, score,
             thesis_why_thread, thesis_what_new, thesis_why_not_silent, reasons, assessed_at
-       FROM redbot.opportunity_assessments
-      ${threadIds ? 'WHERE thread_id = ANY($1)' : ''}
+       FROM opportunity_assessments
+      ${threadIds ? 'WHERE thread_id IN (SELECT j.value FROM json_each($1) j)' : ''}
       ORDER BY assessed_at DESC, thread_id`,
-    threadIds ? [threadIds] : []
+    threadIds ? [JSON.stringify(threadIds)] : []
   );
   return r.rows.map((x) => ({
     threadId: x.thread_id,

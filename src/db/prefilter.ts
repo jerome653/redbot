@@ -14,6 +14,7 @@
  * dropped for a subreddit that has since joined the pilot set is legitimately kept.
  */
 import type { Db } from '../db.js';
+import { withTransaction } from '../db.js';
 import type { DropKind } from '../commands/opportunity.js';
 
 export interface DropRow { threadId: string; kind: DropKind; detail: string }
@@ -27,45 +28,55 @@ export interface DropRow { threadId: string; kind: DropKind; detail: string }
  * makes a person stop trusting the screen.
  */
 export async function savePrefilterOutcome(
-  db: Db, dropped: DropRow[], keptThreadIds: string[]
+  _db: Db, dropped: DropRow[], keptThreadIds: string[]
 ): Promise<void> {
   /**
-   * Sorted, because lock ORDER is what avoids deadlocks.
+   * Sorted, because ORDER used to be what avoided deadlocks.
    *
-   * This transaction touches one row per dropped thread and, through the foreign key, the
-   * `redbot.threads` rows behind them. Anything else working on those threads at the same time
-   * — another run, a collect, a delete — takes overlapping locks, and two transactions that
-   * acquire the same locks in DIFFERENT orders deadlock. Measured: a run over 122 threads
-   * against a concurrent thread delete produced `deadlock detected`. Ascending thread_id gives
-   * every writer here the same order, so the worst case becomes waiting rather than aborting.
+   * On Postgres this transaction took a row lock per dropped thread and, through the foreign
+   * key, on the `threads` rows behind them; two transactions taking overlapping locks in
+   * DIFFERENT orders deadlock, and that was measured — a run over 122 threads against a
+   * concurrent thread delete produced `deadlock detected`. Ascending thread_id gave every
+   * writer the same order, so the worst case became waiting rather than aborting.
+   *
+   * SQLite cannot deadlock here at all: there is one write lock for the whole database and one
+   * writer at a time, so there is no second lock to acquire out of order. The sort is KEPT
+   * regardless, for a reason that outlives the deadlock: it makes the write order deterministic,
+   * which is what lets two runs over the same input be compared. It is no longer load-bearing,
+   * and this comment says so rather than leaving a future reader to infer a danger that is gone.
    */
   const inOrder = [...dropped].sort((a, b) => (a.threadId < b.threadId ? -1 : a.threadId > b.threadId ? 1 : 0));
   const keptInOrder = [...keptThreadIds].sort();
 
-  await db.query('BEGIN');
-  try {
+  /**
+   * `withTransaction`, not a hand-rolled BEGIN/COMMIT/ROLLBACK through `db.query`.
+   *
+   * The hand-rolled version worked on a pg pool because the pool handed this function its own
+   * client. It does NOT work through the SQLite façade: `db.query('BEGIN')` and each statement
+   * after it are separate items on the writer queue, so another queued write could land between
+   * them — inside this transaction — and a concurrent `withTransaction` would hit "cannot start
+   * a transaction within a transaction". The transaction has to be owned by the thing that owns
+   * the connection, which is why the parameter above is now unused.
+   */
+  await withTransaction(async (tx) => {
     /* Threads this run KEPT must lose any drop row they had. A thread whose subreddit was
        added to the pilot set is no longer dropped, and leaving the stale row would report it
        as filtered out while it sits in the assessed list. */
     if (keptInOrder.length) {
-      await db.query(
-        `DELETE FROM redbot.thread_prefilter
-          WHERE thread_id IN (SELECT unnest($1::text[]) ORDER BY 1)`, [keptInOrder]);
+      await tx.query(
+        `DELETE FROM thread_prefilter
+          WHERE thread_id IN (SELECT j.value FROM json_each($1) j)`, [JSON.stringify(keptInOrder)]);
     }
     for (const d of inOrder) {
-      await db.query(
-        `INSERT INTO redbot.thread_prefilter (thread_id, kind, detail, checked_at)
-         VALUES ($1,$2,$3, now())
+      await tx.query(
+        `INSERT INTO thread_prefilter (thread_id, kind, detail, checked_at)
+         VALUES ($1,$2,$3, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
          ON CONFLICT (thread_id) DO UPDATE SET
            kind = EXCLUDED.kind, detail = EXCLUDED.detail, checked_at = EXCLUDED.checked_at`,
         [d.threadId, d.kind, d.detail]
       );
     }
-    await db.query('COMMIT');
-  } catch (e) {
-    await db.query('ROLLBACK').catch(() => { /* the original error is the one worth raising */ });
-    throw e;
-  }
+  });
 }
 
 export interface PrefilterBreakdown {
@@ -91,11 +102,11 @@ export interface PrefilterBreakdown {
  * whatever the filter thinks of it today.
  */
 export async function prefilterBreakdown(db: Db): Promise<PrefilterBreakdown> {
-  const r = await db.query<{ kind: DropKind; n: string }>(
-    `SELECT kind::text AS kind, count(*)::text AS n
-       FROM redbot.thread_prefilter p
+  const r = await db.query<{ kind: DropKind; n: number }>(
+    `SELECT kind AS kind, count(*) AS n
+       FROM thread_prefilter p
       WHERE NOT EXISTS (
-        SELECT 1 FROM redbot.opportunity_assessments a WHERE a.thread_id = p.thread_id
+        SELECT 1 FROM opportunity_assessments a WHERE a.thread_id = p.thread_id
       )
       GROUP BY kind ORDER BY count(*) DESC, kind`
   );

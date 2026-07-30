@@ -66,10 +66,30 @@ function restore<T>(rows: T[], t: Tail | undefined): T[] {
   return (Math.floor(Number(t?.limit) || 0) > 0) ? rows.reverse() : rows;
 }
 
+/**
+ * The tables this function may count. An ALLOW-LIST, not a pattern.
+ *
+ * The guard was `/^redbot\.[a-z_]+$/`. Dropping the schema prefix would have left
+ * `/^[a-z_]+$/`, which accepts any identifier and therefore guards almost nothing, so the
+ * translation names the tables instead.
+ *
+ * The name does originate in a request — `/api/page?table=…` — but it is NOT raw input by the
+ * time it arrives: src/console-data.ts maps it through its own `LOG_TABLES` dictionary and
+ * returns early on a miss, so what reaches here is always one of that module's constants. This
+ * list must therefore stay in step with that map. It carries `certifications` for exactly that
+ * reason; leaving it out was silent rather than loud, because the call site wraps this in
+ * `.catch(() => rows.length)` and the only symptom would have been a pager reporting the size of
+ * the page as the size of the table.
+ */
+const COUNTABLE_LOGS = new Set([
+  'history', 'observations', 'reviews', 'regret',
+  'interactions', 'trace', 'confirmations', 'certifications'
+]);
+
 /** How many rows the table holds altogether, so a pager can say "of 12,480". */
 export async function countLog(db: Db, table: string): Promise<number> {
-  if (!/^redbot\.[a-z_]+$/.test(table)) throw new Error(`refusing to count "${table}"`);
-  const r = await db.query<{ n: string }>(`SELECT count(*)::text AS n FROM ${table}`);
+  if (!COUNTABLE_LOGS.has(table)) throw new Error(`refusing to count "${table}"`);
+  const r = await db.query<{ n: number }>(`SELECT count(*) AS n FROM ${table}`);
   return Number(r.rows[0]?.n ?? 0);
 }
 
@@ -90,7 +110,7 @@ interface ObservationRow {
 
 export async function insertObservation(db: Db, o: Observation): Promise<void> {
   await db.query(
-    `INSERT INTO redbot.observations (ts, account, kind, vector, permalink, checkpoint, value, note)
+    `INSERT INTO observations (ts, account, kind, vector, permalink, checkpoint, value, note)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [
       o.ts, o.account, o.kind, o.vector, o.permalink ?? null, o.checkpoint ?? null,
@@ -106,7 +126,7 @@ export async function selectObservations(db: Db, t?: Tail): Promise<Observation[
   const q = tail(t, []);
   const r = await db.query<ObservationRow>(
     `SELECT ts, account, kind, vector, permalink, checkpoint, value, note
-       FROM redbot.observations ${q.clause}`, q.params
+       FROM observations ${q.clause}`, q.params
   );
   return restore(r.rows, t).map((x) => {
     const o: Observation = { ts: x.ts.toISOString(), account: x.account, kind: x.kind, vector: x.vector };
@@ -135,7 +155,7 @@ interface ReviewRow {
   total_seconds: number | null;
   edit_chars_before: number | null;
   edit_chars_after: number | null;
-  edit_retained: string | null;   // numeric arrives as a string
+  edit_retained: number | null;  // was numeric(5,4) in Postgres, which pg returned as a string; SQLite REAL is a number
   edit_before: string | null;
   edit_after: string | null;
   quality: ReviewRecord['quality'] | null;
@@ -148,7 +168,7 @@ const j = (v: unknown) => (v === undefined || v === null ? null : JSON.stringify
 
 export async function insertReview(db: Db, r: ReviewRecord): Promise<void> {
   await db.query(
-    `INSERT INTO redbot.reviews
+    `INSERT INTO reviews
        (ts, draft_id, thread_id, permalink, decision, reason_code, note, operator,
         review_seconds, total_seconds, edit_chars_before, edit_chars_after, edit_retained,
         edit_before, edit_after, quality, gates, novelty, contribution)
@@ -171,7 +191,7 @@ export async function selectReviews(db: Db, t?: Tail): Promise<ReviewRecord[]> {
     `SELECT ts, draft_id, thread_id, permalink, decision, reason_code, note, operator,
             review_seconds, total_seconds, edit_chars_before, edit_chars_after, edit_retained,
             edit_before, edit_after, quality, gates, novelty, contribution
-       FROM redbot.reviews ${q.clause}`, q.params
+       FROM reviews ${q.clause}`, q.params
   );
   return restore(r.rows, t).map((x) => {
     const out: ReviewRecord = {
@@ -216,13 +236,13 @@ interface RegretRow {
   answer: string;
   category: NonNullable<RegretRecord['category']> | null;
   lessons: string;
-  hours_after_publish: string;
+  hours_after_publish: number;
   operator: string | null;
 }
 
 export async function insertRegret(db: Db, r: RegretRecord): Promise<void> {
   await db.query(
-    `INSERT INTO redbot.regret
+    `INSERT INTO regret
        (ts, draft_id, thread_id, permalink, kind, answer, category, lessons, hours_after_publish, operator)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [r.ts, r.draftId, r.threadId, r.permalink, r.kind, r.answer,
@@ -235,7 +255,7 @@ export async function selectRegrets(db: Db, t?: Tail): Promise<RegretRecord[]> {
   const r = await db.query<RegretRow>(
     `SELECT ts, draft_id, thread_id, permalink, kind, answer, category, lessons,
             hours_after_publish, operator
-       FROM redbot.regret ${q.clause}`, q.params
+       FROM regret ${q.clause}`, q.params
   );
   return restore(r.rows, t).map((x) => {
     const out: RegretRecord = {
@@ -269,7 +289,7 @@ interface InteractionRow {
   comment_id: string | null;
   account: string | null;
   checkpoint: string | null;
-  elapsed_minutes: string;
+  elapsed_minutes: number;
   vector: InteractionRecord['vector'];
   thread: InteractionRecord['thread'];
   self: InteractionRecord['self'];
@@ -279,7 +299,7 @@ interface InteractionRow {
 
 export async function insertInteraction(db: Db, r: InteractionRecord): Promise<void> {
   await db.query(
-    `INSERT INTO redbot.interactions
+    `INSERT INTO interactions
        (schema_version, ts, kind, draft_id, thread_id, permalink,
         comment_permalink, comment_id, account, checkpoint, elapsed_minutes,
         vector, thread, self, replies, note)
@@ -304,7 +324,7 @@ export async function selectInteractions(db: Db, t?: Tail): Promise<InteractionR
     `SELECT schema_version, ts, kind, draft_id, thread_id, permalink,
             comment_permalink, comment_id, account, checkpoint, elapsed_minutes,
             vector, thread, self, replies, note
-       FROM redbot.interactions ${q.clause}`, q.params
+       FROM interactions ${q.clause}`, q.params
   );
   return restore(r.rows, t).map((x) => ({
     schemaVersion: x.schema_version,
@@ -344,7 +364,7 @@ interface TraceRow {
 
 export async function insertTrace(db: Db, e: TraceEvent): Promise<void> {
   await db.query(
-    `INSERT INTO redbot.trace (ts, run_id, stage, event, level, thread_id, draft_id, ms, data)
+    `INSERT INTO trace (ts, run_id, stage, event, level, thread_id, draft_id, ms, data)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [
       e.ts, e.runId, e.stage, e.event, e.level,
@@ -358,7 +378,7 @@ export async function selectTrace(db: Db, t?: Tail): Promise<TraceEvent[]> {
   const q = tail(t, []);
   const r = await db.query<TraceRow>(
     `SELECT ts, run_id, stage, event, level, thread_id, draft_id, ms, data
-       FROM redbot.trace ${q.clause}`, q.params
+       FROM trace ${q.clause}`, q.params
   );
   return restore(r.rows, t).map((x) => {
     const e: TraceEvent = {
@@ -392,7 +412,7 @@ interface ConfirmationRow {
 
 export async function insertConfirmation(db: Db, r: ConfirmationRecord): Promise<void> {
   await db.query(
-    `INSERT INTO redbot.confirmations
+    `INSERT INTO confirmations
        (ts, action, account, job_id, confirmed, source, observed, permalink, visibility, ms, error)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [
@@ -406,7 +426,7 @@ export async function selectConfirmations(db: Db, t?: Tail): Promise<Confirmatio
   const q = tail(t, []);
   const r = await db.query<ConfirmationRow>(
     `SELECT ts, action, account, job_id, confirmed, source, observed, permalink, visibility, ms, error
-       FROM redbot.confirmations ${q.clause}`, q.params
+       FROM confirmations ${q.clause}`, q.params
   );
   return restore(r.rows, t).map((x) => {
     const c = {

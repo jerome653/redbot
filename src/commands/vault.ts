@@ -102,7 +102,7 @@ function check(): number {
   if (!vaultReady()) return reportUnavailable();
   say.ok(`The vault key is present and usable (fingerprint ${keyFingerprint()}).`);
   say.step('Secrets are sealed with AES-256-GCM. The key is not in the database,');
-  say.step('so a dump of redbot.credentials without it yields nothing.');
+  say.step('so a dump of credentials without it yields nothing.');
   return 0;
 }
 

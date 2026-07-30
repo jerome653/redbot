@@ -24,7 +24,7 @@ import { draft } from './draft.js';
 import { certifyCmd } from './certify.js';
 import { record, say } from '../log.js';
 /**
- * Sources come from redbot.sources through src/sources.ts, which is also where "the file is
+ * Sources come from sources through src/sources.ts, which is also where "the file is
  * absent" stopped meaning the same thing as "the file is corrupt".
  *
  * This file used to hold its own reader that caught every parse error and returned

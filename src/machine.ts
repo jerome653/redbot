@@ -1,7 +1,7 @@
 /**
  * Which computer this is.
  *
- * Needed because `redbot.accounts` is shared between machines but a Chrome profile folder and a
+ * Needed because `accounts` is shared between machines but a Chrome profile folder and a
  * debugging port are not: the folder holds a session DPAPI-bound to one Windows user on one
  * machine, and a port that is free here may be held by something else there. Bindings are
  * therefore keyed by machine (db/migrations/0013_account_machines.up.sql), and this answers the

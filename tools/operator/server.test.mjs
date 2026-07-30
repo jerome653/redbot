@@ -173,7 +173,7 @@ test('the queue endpoint answers no verb but POST', async () => {
  *
  * These six logs were data/*.jsonl files, and src/store.ts stopped writing them when the store
  * moved to Postgres. The viewer then answered "data/history.jsonl does not exist yet — nothing
- * has written to it" on a machine whose redbot.history table held rows: not a missing feature
+ * has written to it" on a machine whose history table held rows: not a missing feature
  * but a false statement, and the one an operator checking "did anything run?" would believe.
  * ------------------------------------------------------------------ */
 
@@ -189,7 +189,7 @@ test('a log is served from its table, not from a file nothing writes', async () 
   const r = await (await fetch(`http://127.0.0.1:${PORT}/api/log?name=history`)).json();
   assert.equal(r.available, true, `the log read as absent: ${r.reason}`);
   assert.equal(r.source, 'database');
-  assert.equal(r.path, 'redbot.history', 'the viewer must name the table it actually read');
+  assert.equal(r.path, 'history', 'the viewer must name the table it actually read');
   assert.ok(r.total > 0);
   // Lines stay JSON strings, the shape the log page renders.
   assert.ok(r.lines.some((l) => l.includes(MARKER)), 'the row just written must appear');
@@ -197,11 +197,13 @@ test('a log is served from its table, not from a file nothing writes', async () 
 });
 
 test('an empty log names the table, never a file that does not exist', async () => {
-  // redbot.observations is empty in the test database and no legacy file accompanies it.
+  // observations is empty in the test database and no legacy file accompanies it.
   const r = await (await fetch(`http://127.0.0.1:${PORT}/api/log?name=observations`)).json();
   if (r.available) return;   // another file in the suite wrote one; the claim below is moot
-  assert.equal(r.path, 'redbot.observations');
-  assert.match(r.reason, /redbot\.observations is empty/);
+  assert.equal(r.path, 'observations');
+  // `observations`, not `redbot.observations`: SQLite has no schemas, so the qualification went
+  // with the port. The claim being tested is unchanged — the reason names a TABLE, not a file.
+  assert.match(r.reason, /observations is empty/);
   // The old wording pointed at a path that will never exist again.
   assert.doesNotMatch(r.reason, /\.jsonl/);
 });

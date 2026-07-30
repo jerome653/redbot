@@ -3,7 +3,7 @@
  * `redbot accounts import`   — copy data/accounts.json into the database
  * `redbot accounts export`   — write the database back out to data/accounts.json
  *
- * **Where accounts live.** `redbot.accounts` is the system of record; `data/accounts.json` is
+ * **Where accounts live.** `accounts` is the system of record; `data/accounts.json` is
  * the seed you import from, and the fallback when the database is not reachable. The console's
  * setup wizard writes both, so a person clicking buttons never has to know this command exists
  * — it is for the machine that already had a file before the database existed, and for looking
@@ -108,7 +108,7 @@ async function importFromFile(): Promise<number> {
   forgetAccounts();
   await primeAccounts();
 
-  say.ok(`Imported ${n} account(s) into redbot.accounts.`);
+  say.ok(`Imported ${n} account(s) into accounts.`);
   for (const a of fromFile) say.step(`  ${a.handle}`);
   say.step('');
   say.step('The database is now the system of record. data/accounts.json stays as the seed.');
@@ -135,12 +135,48 @@ async function exportToFile(): Promise<number> {
   return 0;
 }
 
-export async function accounts(sub?: string): Promise<number> {
+/**
+ * Record which account this machine acts as.
+ *
+ * The desktop app has no shell, so `REDBOT_ACCOUNT` cannot be the only way to answer this — see
+ * `selectedAccount()` in src/config.ts. This is the CLI half of the same control the console offers.
+ */
+async function use(handle?: string): Promise<number> {
+  const { getPool } = await import('../db.js');
+  const { setSelectedAccount, clearSelectedAccount, selectedHandleForMachine } =
+    await import('../db/accounts.js');
+  const { machineId } = await import('../machine.js');
+
+  if (handle === undefined) {
+    const current = await selectedHandleForMachine(getPool());
+    const env = process.env.REDBOT_ACCOUNT;
+    if (env) {
+      say.step(`REDBOT_ACCOUNT="${env}" is set and OVERRIDES the stored selection.`);
+    }
+    say.step(current
+      ? `${machineId()} acts as ${current}`
+      : `${machineId()} has no account selected. Choose one: redbot accounts use <handle>`);
+    return current || env ? 0 : 1;
+  }
+
+  if (handle === '--none') {
+    await clearSelectedAccount(getPool());
+    say.ok(`${machineId()} no longer has an account selected — redbot will refuse to act.`);
+    return 0;
+  }
+
+  await setSelectedAccount(getPool(), handle);
+  say.ok(`${machineId()} now acts as ${handle}.`);
+  return 0;
+}
+
+export async function accounts(sub?: string, arg?: string): Promise<number> {
   try {
     if (sub === undefined || sub === 'list') return await list();
     if (sub === 'import') return await importFromFile();
     if (sub === 'export') return await exportToFile();
-    say.fail(`Unknown: "${sub}". One of: list, import, export.`);
+    if (sub === 'use') return await use(arg);
+    say.fail(`Unknown: "${sub}". One of: list, use, import, export.`);
     return 1;
   } catch (e) {
     say.fail(e instanceof Error ? e.message : String(e));

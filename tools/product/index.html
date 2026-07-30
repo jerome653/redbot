@@ -2516,6 +2516,68 @@ function accounts(){
   r.append(el('h2','sec','Accounts'));
   r.append(el('div','sub','who redbot would be posting as'));
 
+  /* ---------------- which account this machine acts as ----------------
+   *
+   * The control that makes the app usable with more than one account. `selectedAccount()` used to
+   * resolve only from REDBOT_ACCOUNT, and a window has no shell — so an install with two accounts
+   * refused every command and there was nowhere to answer. The choice is per MACHINE, because a
+   * browser profile and a port are (migration 0013/0015), and the database allows only one.
+   *
+   * Rendered whenever there is a choice to make. With a single account there is nothing to choose
+   * and `selectedAccount()` resolves it by arithmetic, so a picker would be ceremony. */
+  if(S.accounts.length>1){
+    const sel=(SETUP&&!SETUP.error)?(SETUP.requirements||[]).find(x=>x.id==='account'):null;
+    const acting=sel&&sel.ok?(sel.detail.replace(/^acting as /,'')):null;
+    const box=el('div','collect');
+    box.append(el('div','collect-h',
+      '<h3>'+(acting?'This machine acts as '+esc(acting):'Choose who this machine acts as')+'</h3>'+
+      '<span class="hint">redbot refuses to act until one is chosen</span>'));
+    const bb=el('div','collect-b');
+    if(!acting){
+      bb.append(el('div','tiny',
+        'Nothing runs while this is unset — a pass that guessed would act as the wrong person.'));
+    }
+    for(const a of S.accounts){
+      const row=el('div','src-row');
+      const tag=el('span','tag '+(a.handle===acting?'ok':'no'));
+      tag.textContent=a.handle===acting?'acting as':'not selected';
+      row.append(tag);
+      const mid=el('div');
+      mid.append(el('div','src-t',esc(a.handle)));
+      if(a.role)mid.append(el('div','src-w',esc(a.role)));
+      row.append(mid);
+      if(a.handle!==acting){
+        const pick=el('button','btn tiny','Act as this account');
+        /* `fetch` directly rather than the `post` helper: that helper is declared with `const`
+           INSIDE addAccount() and editAccount(), so it is not in scope here at all — referencing it
+           would be a ReferenceError the moment somebody opened this screen. */
+        pick.onclick=async()=>{
+          pick.disabled=true; pick.textContent='choosing…';
+          let res=null;
+          try{
+            res=await fetch('/api/account/select',{
+              method:'POST',headers:{'content-type':'application/json'},
+              body:JSON.stringify({handle:a.handle})
+            }).then(x=>x.json());
+          }catch(e){ res={ok:false,error:String(e&&e.message||e)} }
+          if(res&&res.ok){
+            /* Re-read setup AND state: the selection changes which browser every other screen
+               reports on, so a partial refresh would leave the rest of the app describing the
+               previous account. */
+            await loadSetup(); await load(); go('accounts');
+            toast('redbot now acts as '+a.handle);
+          }else{
+            pick.disabled=false; pick.textContent='Act as this account';
+            toast((res&&res.error)||'could not choose that account');
+          }
+        };
+        row.append(pick);
+      }
+      bb.append(row);
+    }
+    box.append(bb); r.append(box);
+  }
+
   /* ---- the limits actually in force, as a rail beside the cards ---- */
   const grid=el('div','grid2');
   const cardCol=el('div');
@@ -3179,7 +3241,15 @@ async function loadSetup(){
 }
 
 /** One status line. `state` is 'ok' | 'warn' | 'bad' — the same three the rest of the UI uses. */
-function setupRow(state,title,detail){
+/**
+ * One requirement row. `detail` and `hint` are PLAIN TEXT — this function escapes them.
+ *
+ * `hint` is a separate parameter rather than something a caller concatenates in, because the first
+ * version of the requirement checklist passed `esc(detail) + '<span class="hint">…</span>'` and the
+ * span rendered as literal angle brackets on screen: `esc()` here escaped it a second time. Owning
+ * the markup in one place is what stops that, and it means a caller cannot inject HTML by accident.
+ */
+function setupRow(state,title,detail,hint){
   const row=el('div','src-row');
   const tag=el('span','tag '+(state==='ok'?'ok':'no'));
   tag.textContent=state==='ok'?'ready':(state==='warn'?'check':'not set');
@@ -3187,6 +3257,7 @@ function setupRow(state,title,detail){
   const mid=el('div');
   mid.append(el('div','src-t',esc(title)));
   if(detail)mid.append(el('div','src-w',esc(detail)));
+  if(hint)mid.append(el('div','tiny',esc(hint)));
   row.append(mid);
   return row;
 }
@@ -3198,6 +3269,40 @@ function setup(){
   const s=SETUP;
 
   const again=async()=>{await loadSetup();go('setup')};
+
+  /* ---- the requirement checklist, from the server's shared list ----
+   *
+   * This is the same set `redbot doctor` reports, tiered. It goes FIRST and it names the fix,
+   * because this screen is where a person lands on first boot when something is blocking — a list
+   * of red dots with no action beside them is a diagnosis, not a setup screen. */
+  if(Array.isArray(s.requirements)&&s.requirements.length){
+    const need=el('div','collect');
+    const nb=(s.blocking||[]).length, na=(s.advisory||[]).length;
+    need.append(el('div','collect-h',
+      '<h3>'+(nb?'redbot cannot run yet':(na?'redbot can run, with limits':'Everything redbot needs is here'))+'</h3>'+
+      '<span class="hint">'+(nb?nb+' to settle':(na?na+' worth knowing':'re-checked every time this screen opens'))+'</span>'));
+    const nbody=el('div','collect-b');
+    /* Blocking first, then advisory, then the met ones — worst first is the order to act in. */
+    const order=[...s.requirements].sort((x,y)=>
+      (x.ok?1:0)-(y.ok?1:0) || (x.tier==='blocking'?-1:1)-(y.tier==='blocking'?-1:1));
+    for(const r of order){
+      const state=r.ok?'ok':(r.tier==='blocking'?'bad':'warn');
+      /* Plain text on both — setupRow escapes them. Building markup here is what put a literal
+         `<span class="hint">` on screen the first time. */
+      const row=setupRow(state,r.label,r.detail,(!r.ok&&r.fix)?r.fix.hint:'');
+      /* A control that resolves it, where the app can — inside the row, so it is unambiguous which
+         requirement it belongs to. `null` means it cannot be fixed in here (starting a browser, for
+         instance) and then the hint is the whole answer. */
+      if(!r.ok&&r.fix&&r.fix.screen&&r.fix.screen!=='setup'){
+        const go2=el('button','btn tiny','Go to '+r.fix.screen);
+        go2.onclick=()=>go(r.fix.screen);
+        row.append(go2);
+      }
+      nbody.append(row);
+    }
+    if(s.requirementsError)nbody.append(el('div','note warn','<b>Some checks could not run.</b> '+esc(s.requirementsError)));
+    need.append(nbody); root.append(need);
+  }
 
   /* ---- what is missing, first ---- */
   const box=el('div','collect');
@@ -3238,11 +3343,16 @@ function setup(){
     pick.append(lab,sel);opBox.append(pick);
     opBox.append(el('div','tiny',s.selectedOperator
       ? (s.operatorReady?`<span class="tag ok">signed in</span> Runs are billed to ${esc(s.selectedOperator)}.`
-                        :`<span class="tag no">not signed in</span> ${esc(s.selectedOperator)} has no login folder yet — sign in with the command below.`)
+                        :`<span class="tag no">not signed in</span> ${esc(s.selectedOperator)} has a folder but has never logged in — sign in with the command below.`)
       : '<span class="tag no">nobody selected</span> Runs that need the model will refuse until you choose one.'));
-    /* The selection lives in the server's memory, so say so rather than let a restart look
-       like a bug. */
-    opBox.append(el('div','tiny','This choice is remembered until the console restarts. To make it permanent, start the console with <code>REDBOT_OPERATOR</code> set.'));
+    /* The choice is written to disk now, so it survives a restart. The one thing that can still
+       make this screen disagree with a run is REDBOT_OPERATOR, so that is called out by name
+       rather than left to be discovered. */
+    opBox.append(el('div','tiny',s.operatorFromEnv && s.operatorFromEnv!==s.selectedOperator
+      ? `<span class="tag no">overridden</span> <code>REDBOT_OPERATOR</code> is set to ${esc(s.operatorFromEnv)}, which wins over this choice. Clear it to use the picker.`
+      : (s.operatorFromEnv
+        ? 'This choice is remembered on this machine. <code>REDBOT_OPERATOR</code> is also set, to the same name.'
+        : 'This choice is remembered on this machine, and survives a restart.')));
   }
   b.append(opBox);
 
@@ -3462,22 +3572,57 @@ async function load(){
   $('#nDisc').textContent=S.discovery.assessed;
   $('#nAcc').textContent=S.accounts.length;
   $('#nOut').textContent=S.outcomes.published;
+  /* The Setup badge counts UNMET REQUIREMENTS, from the server's shared list.
+     It used to count four hand-written conditions here in the browser — which never included the
+     browser itself, so the badge read "ok" on a machine that could not drive Chrome. */
   if(SETUP&&!SETUP.error){
-    const missing=[
-      !SETUP.database.ok,
-      !SETUP.vault.ok,
-      !SETUP.operatorReady,
-      SETUP.provider==='api'&&!SETUP.apiKeyStored&&!SETUP.apiKeyFromEnv
-    ].filter(Boolean).length;
-    $('#nSet').textContent=missing?String(missing):'ok';
+    const nBlock=(SETUP.blocking||[]).length, nAdv=(SETUP.advisory||[]).length;
+    $('#nSet').textContent=nBlock?String(nBlock):(nAdv?String(nAdv):'ok');
   }
-  $('#banner').innerHTML=S.pulse.published===0
-    ? '<b>Nothing has been sent yet.</b> Threads, scores and replies below are real output from live runs. Results is empty because there are no results.'
-    : `<b>${S.pulse.published} sent.</b> Every figure is read fresh from the run records.`;
+
+  /* ---------------- first boot: Setup before anything else ----------------
+   *
+   * A BLOCKING requirement means redbot cannot function, so the app opens on Setup and says which
+   * one. This replaces a signal that was wrong in three ways: it opened the WALKTHROUGH rather than
+   * Setup, it was keyed on `localStorage['redbot.seenGuide']` which `guide()` sets on any open
+   * INCLUDING a click on the ? button, and it REMEMBERED rather than re-derived — so one Help click
+   * permanently consumed the first run and a later-broken install said nothing.
+   *
+   * Derived every load instead. Requirements go stale constantly: a browser gets closed, a port
+   * gets taken, a key gets rotated.
+   *
+   * The gate is deliberately NOT sticky and NOT modal — Setup is a normal screen with working
+   * navigation, because the one surface that can fix a missing account is the console itself. It
+   * redirects once per load and never traps.
+   */
+  const blockers=(SETUP&&!SETUP.error)?(SETUP.blocking||[]):[];
+  if(blockers.length){
+    $('#banner').innerHTML='<b>Setup is not finished.</b> '+blockers.length+
+      ' thing'+(blockers.length===1?'':'s')+' must be settled before redbot can run: '+
+      blockers.map(b=>esc(b.label)).join(', ')+'.';
+  }else{
+    const adv=(SETUP&&!SETUP.error)?(SETUP.advisory||[]):[];
+    $('#banner').innerHTML=adv.length
+      ? '<b>'+esc(adv[0].label)+' — '+esc(adv[0].detail)+'</b>'
+      : (S.pulse.published===0
+        ? '<b>Nothing has been sent yet.</b> Threads, scores and replies below are real output from live runs. Results is empty because there are no results.'
+        : `<b>${S.pulse.published} sent.</b> Every figure is read fresh from the run records.`);
+  }
+
   argusRecord();
-  pulse();go(CUR);
-  let seen=false; try{seen=localStorage.getItem('redbot.seenGuide')==='1'}catch{}
-  if(!seen)guide(true);
+  pulse();
+  go(blockers.length?'setup':CUR);
+
+  /* The walkthrough no longer decides what first boot SHOWS — the gate above does — but it keeps
+     its own existing flag, `redbot.seenGuide`.
+     Renaming it to `seenTour` was the first attempt and was wrong twice over: it re-opens the
+     walkthrough for every existing operator (their seenGuide is already set), and it silently broke
+     the whole UI suite, which pre-sets seenGuide to keep the overlay from intercepting clicks — 14
+     tests failed with 30-second click timeouts against an overlay nobody could see.
+     It is suppressed while something is BLOCKING, because an overlay on top of the checklist hides
+     the thing the person has to act on. */
+  let seenGuide=false; try{seenGuide=localStorage.getItem('redbot.seenGuide')==='1'}catch{}
+  if(!seenGuide&&!blockers.length)guide(true);
 }
 load().catch(e=>{$('#banner').textContent='Could not load: '+e.message});
 pulseCheck(); setInterval(pulseCheck,15000);

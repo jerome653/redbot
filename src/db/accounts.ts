@@ -1,13 +1,13 @@
 /**
- * accounts — mirror of data/accounts.json into redbot.accounts.
+ * accounts — mirror of data/accounts.json into accounts.
  *
  * Credentials are never written here. `AccountRecord` carries none, and the table has
  * no column that could hold one (db/migrations/0002_accounts.up.sql).
  *
  * TWO KINDS OF FACT, TWO TABLES. What an account IS — role, subreddits, ceiling, quiet hours —
- * is portable and belongs in `redbot.accounts`, shared by every machine pointed at this
+ * is portable and belongs in `accounts`, shared by every machine pointed at this
  * database. Which Chrome it drives — the profile folder, the debugging port — is true of ONE
- * computer only, and lives in `redbot.account_machines` keyed by machine (0013). Every function
+ * computer only, and lives in `account_machines` keyed by machine (0013). Every function
  * here therefore takes the machine it is answering for.
  *
  * The legacy `accounts.profile_dir` / `accounts.debug_port` columns are still read as a
@@ -16,6 +16,7 @@
  * until something writes a binding.
  */
 import type { Db } from '../db.js';
+import { withTransaction } from '../db.js';
 import type { AccountRecord } from '../config.js';
 import { machineId } from '../machine.js';
 
@@ -52,8 +53,8 @@ function toRecord(r: AccountRow): AccountRecord {
 /**
  * Upsert by handle. The file is configuration a person wrote; it wins.
  *
- * Writes BOTH halves: the description to `redbot.accounts`, and — when the record carries a
- * folder or a port — this machine's binding to `redbot.account_machines`. The legacy columns
+ * Writes BOTH halves: the description to `accounts`, and — when the record carries a
+ * folder or a port — this machine's binding to `account_machines`. The legacy columns
  * are still written so that rolling 0013 back, or reading the table with anything older,
  * still finds this machine's values where they have always been.
  */
@@ -62,7 +63,7 @@ export async function upsertAccounts(
 ): Promise<number> {
   for (const a of accounts) {
     await db.query(
-      `INSERT INTO redbot.accounts
+      `INSERT INTO accounts
          (handle, role, speaks, knows, subreddits, timezone,
           quiet_start, quiet_end, daily_ceiling, profile_dir, debug_port, note)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
@@ -79,7 +80,9 @@ export async function upsertAccounts(
          debug_port    = EXCLUDED.debug_port,
          note          = EXCLUDED.note`,
       [
-        a.handle, a.role ?? null, a.speaks ?? null, a.knows ?? [], a.subreddits ?? [],
+        // knows/subreddits are TEXT holding JSON now, not Postgres text[].
+        a.handle, a.role ?? null, a.speaks ?? null,
+        JSON.stringify(a.knows ?? []), JSON.stringify(a.subreddits ?? []),
         a.timezone ?? null, a.quietHours?.[0] ?? null, a.quietHours?.[1] ?? null,
         a.dailyCeiling ?? null, a.profileDir ?? null, a.debugPort ?? null, a.note ?? null
       ]
@@ -105,7 +108,7 @@ export async function bindAccountToMachine(
   db: Db, machine: string, handle: string, profileDir: string | null, debugPort: number | null
 ): Promise<void> {
   await db.query(
-    `INSERT INTO redbot.account_machines (machine, handle, profile_dir, debug_port)
+    `INSERT INTO account_machines (machine, handle, profile_dir, debug_port)
      VALUES ($1,$2,$3,$4)
      ON CONFLICT (machine, handle) DO UPDATE SET
        profile_dir = EXCLUDED.profile_dir,
@@ -117,7 +120,7 @@ export async function bindAccountToMachine(
 /** Forget one machine's binding, leaving the shared account description untouched. */
 export async function unbindAccountFromMachine(db: Db, machine: string, handle: string): Promise<number> {
   const r = await db.query(
-    'DELETE FROM redbot.account_machines WHERE machine = $1 AND lower(handle) = lower($2)',
+    'DELETE FROM account_machines WHERE machine = $1 AND lower(handle) = lower($2)',
     [machine, handle]
   );
   return r.rowCount ?? 0;
@@ -146,8 +149,8 @@ export async function loadAccountsFromDb(
             a.quiet_start, a.quiet_end, a.daily_ceiling, a.note,
             COALESCE(m.profile_dir, a.profile_dir) AS profile_dir,
             COALESCE(m.debug_port,  a.debug_port)  AS debug_port
-       FROM redbot.accounts a
-       LEFT JOIN redbot.account_machines m
+       FROM accounts a
+       LEFT JOIN account_machines m
          ON m.handle = a.handle AND m.machine = $1
       ORDER BY a.handle`,
     [machine]
@@ -158,9 +161,67 @@ export async function loadAccountsFromDb(
 /** Which handles have a browser set up on this machine. */
 export async function boundHandles(db: Db, machine: string = machineId()): Promise<Set<string>> {
   const r = await db.query<{ handle: string }>(
-    'SELECT handle FROM redbot.account_machines WHERE machine = $1', [machine]
+    'SELECT handle FROM account_machines WHERE machine = $1', [machine]
   );
   return new Set(r.rows.map((x) => x.handle.toLowerCase()));
+}
+
+/**
+ * Which account this machine acts as, or null when nobody has said.
+ *
+ * Null is a real answer, not a missing one. An install with two accounts and no selection must
+ * REFUSE to act rather than pick the first row — `src/cli.ts` documents what happens otherwise: a
+ * pass ran to completion as whoever happened to be first and reported success.
+ */
+export async function selectedHandleForMachine(
+  db: Db, machine: string = machineId()
+): Promise<string | null> {
+  const r = await db.query<{ handle: string }>(
+    'SELECT handle FROM account_machines WHERE machine = $1 AND selected = 1', [machine]
+  );
+  return r.rows[0]?.handle ?? null;
+}
+
+/**
+ * Record which account this machine acts as.
+ *
+ * Clear-then-set inside ONE transaction. Two statements without a transaction would leave a window
+ * with no selection at all, and a concurrent read landing in it would see "none selected" on an
+ * install that has one — which is exactly the state that stops redbot running.
+ *
+ * The row is created if this machine has no binding for the account yet: selecting an account and
+ * having a browser set up for it are different things, and a person must be able to do the first
+ * before the second. `handle` is a foreign key, so an account that does not exist is refused here
+ * rather than becoming a selection that resolves to nobody.
+ */
+export async function setSelectedAccount(
+  db: Db, handle: string, machine: string = machineId()
+): Promise<void> {
+  await withTransaction(async (tx) => {
+    const known = await tx.query<{ handle: string }>(
+      'SELECT handle FROM accounts WHERE lower(handle) = lower($1)', [handle]
+    );
+    const real = known.rows[0]?.handle;
+    if (!real) throw new Error(`"${handle}" is not a configured account.`);
+
+    await tx.query(
+      'UPDATE account_machines SET selected = 0 WHERE machine = $1 AND selected = 1', [machine]
+    );
+    await tx.query(
+      `INSERT INTO account_machines (machine, handle, selected) VALUES ($1,$2,1)
+       ON CONFLICT (machine, handle) DO UPDATE SET selected = 1`,
+      [machine, real]
+    );
+  });
+}
+
+/** Forget the selection, so the install refuses to act until somebody chooses again. */
+export async function clearSelectedAccount(
+  db: Db, machine: string = machineId()
+): Promise<void> {
+  await db.query(
+    'UPDATE account_machines SET selected = 0 WHERE machine = $1 AND selected = 1', [machine]
+  );
 }
 
 /** Every machine that has claimed this account, so a person can see where it already runs. */
@@ -168,7 +229,7 @@ export async function machinesForAccount(
   db: Db, handle: string
 ): Promise<{ machine: string; profileDir: string | null; debugPort: number | null }[]> {
   const r = await db.query<{ machine: string; profile_dir: string | null; debug_port: number | null }>(
-    `SELECT machine, profile_dir, debug_port FROM redbot.account_machines
+    `SELECT machine, profile_dir, debug_port FROM account_machines
       WHERE lower(handle) = lower($1) ORDER BY machine`, [handle]
   );
   return r.rows.map((x) => ({ machine: x.machine, profileDir: x.profile_dir, debugPort: x.debug_port }));
@@ -176,9 +237,9 @@ export async function machinesForAccount(
 
 /** What a DELETE would take with it. Counted BEFORE the delete, because after it they are gone. */
 export interface AccountDependents {
-  /** Deleted outright — redbot.jobs.account is ON DELETE CASCADE (0008_jobs.up.sql:27). */
+  /** Deleted outright — jobs.account is ON DELETE CASCADE (0008_jobs.up.sql:27). */
   jobs: number;
-  /** Kept, but orphaned — redbot.drafts.account is ON DELETE SET NULL (0006_drafts.up.sql:38). */
+  /** Kept, but orphaned — drafts.account is ON DELETE SET NULL (0006_drafts.up.sql:38). */
   drafts: number;
 }
 
@@ -191,8 +252,8 @@ export interface AccountDependents {
  */
 export async function countAccountDependents(db: Db, handle: string): Promise<AccountDependents> {
   const r = await db.query<{ jobs: string; drafts: string }>(
-    `SELECT (SELECT count(*) FROM redbot.jobs   WHERE lower(account) = lower($1))::text AS jobs,
-            (SELECT count(*) FROM redbot.drafts WHERE lower(account) = lower($1))::text AS drafts`,
+    `SELECT (SELECT count(*) FROM jobs   WHERE lower(account) = lower($1)) AS jobs,
+            (SELECT count(*) FROM drafts WHERE lower(account) = lower($1)) AS drafts`,
     [handle]
   );
   return { jobs: Number(r.rows[0]?.jobs ?? 0), drafts: Number(r.rows[0]?.drafts ?? 0) };
@@ -207,11 +268,11 @@ export async function countAccountDependents(db: Db, handle: string): Promise<Ac
  * remove nor recreate.
  */
 export async function deleteAccount(db: Db, handle: string): Promise<number> {
-  const r = await db.query('DELETE FROM redbot.accounts WHERE lower(handle) = lower($1)', [handle]);
+  const r = await db.query('DELETE FROM accounts WHERE lower(handle) = lower($1)', [handle]);
   return r.rowCount ?? 0;
 }
 
 export async function countAccounts(db: Db): Promise<number> {
-  const r = await db.query<{ n: string }>('SELECT count(*)::text AS n FROM redbot.accounts');
+  const r = await db.query<{ n: number }>('SELECT count(*) AS n FROM accounts');
   return Number(r.rows[0]?.n ?? 0);
 }

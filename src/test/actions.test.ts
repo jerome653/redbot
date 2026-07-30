@@ -410,7 +410,7 @@ test('a vote on our own account\'s thread is refused as vote manipulation', asyn
   );
 
   // Threads live in Postgres now, so the fixture is a real row rather than a JSON file.
-  // The ids go through threadId() because redbot.threads constrains id to 12 hex chars —
+  // The ids go through threadId() because threads constrains id to 12 hex chars —
   // the same shape the engine has always generated.
   await saveThreads([
     thread(threadId(ours), ours, 'Docs-Architect'),

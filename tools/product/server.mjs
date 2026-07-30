@@ -58,6 +58,20 @@ const ROOT = join(HERE, '..', '..');
  */
 const DATA = process.env.REDBOT_DATA ? join(process.env.REDBOT_DATA) : join(ROOT, 'data');
 
+/**
+ * A working directory that EXISTS ON DISK, for every spawn below.
+ *
+ * When this console runs inside the packaged desktop app, ROOT resolves inside
+ * `resources/app.asar` — an archive, not a directory. `spawn()` with that as cwd fails, and the
+ * error names the EXECUTABLE rather than the cwd, which sends you looking in the wrong place.
+ *
+ * `existsSync(ROOT)` cannot detect it: Electron patches fs to report an asar path as a directory,
+ * so the archive has to be recognised by name. Reading files out of it is fine — that is what asar
+ * is for — so only the cwd needs a real path, and DATA is one the app has already provisioned.
+ */
+const PACKAGED = /[\\/]app\.asar([\\/]|$)/.test(ROOT);
+const SPAWN_CWD = PACKAGED ? DATA : ROOT;
+
 const portArg = process.argv.indexOf('--port');
 const PORT = portArg > -1 ? Number(process.argv[portArg + 1]) : 7902;
 
@@ -79,7 +93,8 @@ let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccou
     deleteAccountImpl = null, changePortImpl = null, suggestPortImpl = null,
     portStatusImpl = null, stopBrowserImpl = null, setUpHereImpl = null,
     boundHandlesImpl = null, machineImpl = null, pagesApi = null, summaryApi = null,
-    dbStatus = null, sourcesApi = null;
+    selectAccountImpl = null, selectedHandleImpl = null,
+    dbStatus = null, sourcesApi = null, requirementsApi = null, configApi = null;
 /**
  * The vault, for the Setup screen.
  *
@@ -114,6 +129,15 @@ try {
   stopBrowserImpl = ports.stopAccountBrowser;
   setUpHereImpl = a.setUpAccountHere;
   boundHandlesImpl = () => dbAccounts.boundHandles(db.getPool());
+  /**
+   * Which account this machine acts as (migration 0015).
+   *
+   * This is the control that makes the desktop app usable at all: `selectedAccount()` used to read
+   * only REDBOT_ACCOUNT, and a window has no shell to set it in — so an install with two accounts
+   * could never say which one it was, and every command refused.
+   */
+  selectAccountImpl = a.selectConsoleAccount;
+  selectedHandleImpl = () => dbAccounts.selectedHandleForMachine(db.getPool());
   machineImpl = machine.machineId;
   /* Every figure that used to be `array.length` over a fully-loaded table. */
   summaryApi = {
@@ -141,6 +165,22 @@ try {
   dbStatus = db.dbUnavailableReason;
   sourcesApi = src;
   vaultApi = cred;
+  /**
+   * The requirement set, from the SAME module `redbot doctor` reads.
+   *
+   * This console used to have its own four-condition idea of "ready" and never mentioned Chrome,
+   * while doctor checked sixteen and failed on it — so the Setup screen could show green on a
+   * machine that could not drive a browser. One list, two readers; see src/requirements.ts.
+   */
+  requirementsApi = (await import('../../dist/requirements.js'));
+  /**
+   * The operator registry, from the SAME module the CLI and the requirement check read.
+   *
+   * This console used to compute "is that operator ready" itself, with `existsSync(configDir)` —
+   * and so did `listOperators()`. Both were wrong in the same way and neither could tell you so.
+   * One typed implementation, three readers.
+   */
+  configApi = (await import('../../dist/config.js'));
 } catch (e) {
   console.error(
     '\n  This console reads the database through the compiled build, which is missing or stale.\n' +
@@ -389,7 +429,7 @@ async function buildState(opts = {}) {
    * a handle written in a config file is an intention, a karma reading is a fact. The screen
    * shows both and never lets the first stand in for the second.
    */
-  // Configured accounts come from redbot.accounts (the system of record), falling back to
+  // Configured accounts come from accounts (the system of record), falling back to
   // the seed file only when the database is empty or unreachable — dom.accountsFrom says
   // which, and the screen reports it rather than letting a stale file look authoritative.
   const configured = dom.accounts;
@@ -448,7 +488,7 @@ async function buildState(opts = {}) {
   const published = summary ? summary.published : history.filter((h) => h.kind === 'publish.ok').length;
 
   /**
-   * Where threads are looked for. From redbot.sources — the console turns whatever is switched
+   * Where threads are looked for. From sources — the console turns whatever is switched
    * on into the commands to run. It cannot collect anything itself, and nothing here fires on
    * a schedule; a person runs each command.
    *
@@ -615,7 +655,7 @@ async function buildState(opts = {}) {
        * `checkpoint` and `permalink` are carried through deliberately.
        *
        * `src/health.ts` defines a reading as happening at one of four moments — immediate,
-       * 1h, 24h, 7d — and `redbot.observations` stores which. This projection dropped both,
+       * 1h, 24h, 7d — and `observations` stores which. This projection dropped both,
        * so the console could say a measurement existed but never WHEN in a comment's life it
        * was taken, and the Results screen had no way to tell "the 24h check has not run yet"
        * from "there is nothing to check". They are different facts.
@@ -659,9 +699,9 @@ async function buildState(opts = {}) {
           `${history.length} history, ${observations.length} observations, ${reviews.length} reviews, ` +
           `${regret.length} regret`
       },
-      { file: `accounts (${dom.accountsFrom === 'database' ? 'redbot.accounts' : 'data/accounts.json seed'})`,
+      { file: `accounts (${dom.accountsFrom === 'database' ? 'accounts' : 'data/accounts.json seed'})`,
         exists: configured.length > 0, detail: `${configured.length} configured` },
-      { file: `sources (${srcView.from === 'database' ? 'redbot.sources' : 'data/sources.json seed'})`,
+      { file: `sources (${srcView.from === 'database' ? 'sources' : 'data/sources.json seed'})`,
         exists: srcView.sources.length > 0,
         detail: srcError ?? srcView.unavailable ??
           `${collect.subreddits.length} subreddit(s), ${collect.searches.length} search(es)` },
@@ -1064,7 +1104,7 @@ function runAction(key, opts) {
 
     runLogStart(key, `redbot ${args.join(' ')}`);
     const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), ...args], {
-      cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe']
+      cwd: SPAWN_CWD, env, stdio: ['ignore', 'pipe', 'pipe']
     });
     runningChild = child;
     runningStopped = false;
@@ -1122,7 +1162,16 @@ const operatorsPath = join(DATA, 'operators', 'operators.json');
  * `selectedOperator` starts as whatever REDBOT_OPERATOR the server was launched with, so a
  * shell that already named an operator keeps working with no click.
  * ------------------------------------------------------------------ */
-let selectedOperator = process.env.REDBOT_OPERATOR || null;
+/**
+ * The environment first, then whatever was picked on the Setup screen last time.
+ *
+ * Same precedence as `config.llm.operator`, and it has to be, or the picker would show one name
+ * while the requirement check reported another. That disagreement is the defect this fixes: the
+ * console remembered a choice in this variable, forwarded it to spawned children, and the gate —
+ * reading `config.llm.operator` — never saw it, so the Setup screen said "no Claude operator is
+ * selected" directly underneath a picker showing one.
+ */
+let selectedOperator = process.env.REDBOT_OPERATOR || configApi.storedOperatorSelection();
 
 /**
  * Which LLM path a run takes: this machine's Claude login ('cli') or a stored API key ('api').
@@ -1136,19 +1185,22 @@ let selectedProvider = process.env.REDBOT_LLM === 'api' ? 'api' : 'cli';
 const llmProvider = () => selectedProvider;
 
 function readOperators() {
-  const all = readJson(operatorsPath, null);
-  if (!all || typeof all !== 'object') return [];
-  const dedicatedRoot = join(DATA, 'operators').split('\\').join('/');
-  return Object.entries(all)
-    .filter(([, r]) => r && typeof r.configDir === 'string' && r.configDir)
-    .map(([name, r]) => ({
-      name,
-      // shared = not a dedicated data/operators/<name>/ folder → bills a login someone else owns
-      shared: !r.configDir.split('\\').join('/').startsWith(dedicatedRoot),
-      ready: existsSync(r.configDir),
-      note: r.note || ''
-      // configDir is deliberately NOT included — it is a filesystem path and never leaves the machine.
-    }));
+  let all;
+  try {
+    all = configApi.listOperators();
+  } catch {
+    // A corrupt registry is reported by the requirement check, in words; the picker just empties.
+    return [];
+  }
+  return all.map((o) => ({
+    name: o.name,
+    // shared = not a dedicated data/operators/<name>/ folder → bills a login someone else owns
+    shared: o.shared,
+    // `ready` now means SIGNED IN, not "the folder exists" — see config.ts operatorSignedIn().
+    ready: o.ready,
+    note: o.note || ''
+    // configDir is deliberately NOT included — it is a filesystem path and never leaves the machine.
+  }));
 }
 
 /** Reddit-ish operator names, matching VALID in src/commands/operators.ts. */
@@ -1238,7 +1290,37 @@ async function setupStatus() {
 
   const operators = readOperators();
   const apiKeyName = vaultApi ? vaultApi.ANTHROPIC_API_KEY : 'anthropic_api_key';
+
+  /**
+   * The shared requirement set — the thing the first-boot gate turns on.
+   *
+   * Derived on every request, never cached and never remembered. These go stale constantly: a
+   * browser gets closed, a port gets taken, a key gets rotated. A stored "setup complete" flag
+   * would let the app open onto a broken install and say nothing, which is exactly what the old
+   * `localStorage['redbot.seenGuide']` first-run signal did.
+   *
+   * Failure here must not take the whole Setup screen down — it is the screen a person uses to fix
+   * things — so the error is reported as a field rather than thrown.
+   */
+  let requirements = [];
+  let requirementsError = null;
+  if (requirementsApi) {
+    try {
+      requirements = await requirementsApi.checkRequirements();
+    } catch (e) {
+      requirementsError = e && e.message ? e.message : String(e);
+    }
+  } else {
+    requirementsError = 'the compiled build is missing';
+  }
+
   return {
+    requirements,
+    requirementsError,
+    /* Split here rather than in the browser so the CLI and the console agree on what "blocking"
+       means. The UI decides what to DO about it; it does not decide what it IS. */
+    blocking: requirements.filter((r) => r.tier === 'blocking' && !r.ok),
+    advisory: requirements.filter((r) => r.tier === 'advisory' && !r.ok),
     database: { ok: !dbReason, reason: dbReason },
     vault: { ok: !vaultReason, reason: vaultReason, keyId: fingerprint },
     secrets, secretsError, apiKeyName,
@@ -1251,6 +1333,9 @@ async function setupStatus() {
     providerFromEnv: process.env.REDBOT_LLM === 'api' ? 'api' : null,
     operators,
     selectedOperator,
+    /* Same rule as apiKeyFromEnv: the environment wins over the stored choice, so say when one
+       is set — otherwise picking an operator and seeing nothing change is baffling. */
+    operatorFromEnv: process.env.REDBOT_OPERATOR || null,
     operatorReady: operators.some((o) => o.name === selectedOperator && o.ready)
   };
 }
@@ -1329,7 +1414,7 @@ function chromeProfiles() {
 
 /**
  * Adding an account is the one mutation this console performs directly, and it now lands in
- * `redbot.accounts` — the system of record — with data/accounts.json written alongside as the
+ * `accounts` — the system of record — with data/accounts.json written alongside as the
  * seed and the database-is-down fallback.
  *
  * The allocator (which free port, which profile folder) lives in dist/console-accounts.js so
@@ -1412,7 +1497,7 @@ function autoStart({ account, everyMinutes }) {
     /* Same identity rules as a button-driven run: the loop bills the chosen operator and takes
        the chosen LLM path, or the Setup screen would silently not apply to the one thing that
        runs unattended for days. */
-    cwd: ROOT,
+    cwd: SPAWN_CWD,
     env: {
       ...process.env,
       REDBOT_ACCOUNT: String(account),
@@ -1670,8 +1755,19 @@ const server = createServer((req, res) => {
       }
       if (url.pathname === '/api/operator/select') {
         const name = typeof body.name === 'string' ? body.name : null;
+        /**
+         * The choice is WRITTEN DOWN, not just remembered.
+         *
+         * It used to live only in `selectedOperator`, which meant two things went wrong at once:
+         * it died with the process, and — worse — the requirement check reads
+         * `config.llm.operator`, which never looked at this variable. So picking an operator
+         * changed which login a run was billed to while the Setup screen went on insisting none
+         * was selected. Persisting it is what makes those two agree.
+         */
         // Empty/null clears the pick → runs fall back to the server's shell env, or fail closed.
         if (!name) {
+          try { configApi.setStoredOperatorSelection(null); }
+          catch (e) { return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) })); }
           selectedOperator = process.env.REDBOT_OPERATOR || null;
           return send(200, JSON.stringify({ ok: true, selected: selectedOperator }));
         }
@@ -1682,11 +1778,19 @@ const server = createServer((req, res) => {
             error: `"${name}" is not a registered operator. Add one at a terminal: redbot operators add ${String(name).replace(/[^a-z0-9._-]/gi, '')}`
           }));
         }
+        try { configApi.setStoredOperatorSelection(name); }
+        catch (e) { return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) })); }
         selectedOperator = name;
-        return send(200, JSON.stringify({ ok: true, selected: selectedOperator }));
+        /* Whether the environment is overriding the choice that was just saved — the one thing
+           that would make the screen and the run disagree, so it is reported rather than hidden. */
+        return send(200, JSON.stringify({
+          ok: true,
+          selected: selectedOperator,
+          overriddenByEnv: Boolean(process.env.REDBOT_OPERATOR) && process.env.REDBOT_OPERATOR !== name
+        }));
       }
       /**
-       * Sources go to redbot.sources. Both of these used to refuse with "sources.json is
+       * Sources go to sources. Both of these used to refuse with "sources.json is
        * missing." on a fresh install — the file they demanded is the file this button exists
        * to create, the same bootstrap trap the account wizard had. Validation, the
        * absent-vs-corrupt distinction and the seed-file mirror all live in dist/sources.js so
@@ -1796,9 +1900,33 @@ const server = createServer((req, res) => {
         const r = await setUpHereImpl(body);
         return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
+
+      /**
+       * Choose which account this machine acts as.
+       *
+       * The one endpoint that turns a blocking requirement into something a person can clear from
+       * inside the app. Before it existed, `selectedAccount()` read only REDBOT_ACCOUNT — and a
+       * desktop window has no shell — so an install with two accounts refused every command with
+       * no way to answer.
+       *
+       * Writes ONE row's flag and nothing else. It cannot create, rename or delete an account:
+       * `setSelectedAccount` refuses a handle that is not already a record, and the database holds
+       * the "at most one per machine" invariant through a partial unique index, so two clicks
+       * racing cannot leave two selections.
+       */
+      if (url.pathname === '/api/account/select') {
+        if (!selectAccountImpl) {
+          return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing — run npm run build' }));
+        }
+        /* Validation and the {ok,error} shape belong to src/console-accounts.ts, beside the same
+           HANDLE_RE that create/update/delete use. A second copy of the rule here would be a second
+           rule, and they would disagree the first time one was tightened. */
+        const r = await selectAccountImpl({ handle: body.handle });
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
       if (url.pathname === '/api/account/open') {
         // `await` is load-bearing: launchChrome became async when it started reading the port
-        // from redbot.accounts. Without it, `r` is a Promise — `r.ok` is undefined, so the
+        // from accounts. Without it, `r` is a Promise — `r.ok` is undefined, so the
         // button got 400 and a body of `{}` while Chrome opened perfectly well behind it.
         const r = await launchChrome(String(body.handle || ''));
         return send(r.ok ? 200 : 400, JSON.stringify(r));

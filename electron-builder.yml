@@ -1,0 +1,62 @@
+# Windows installer for redbot.
+#
+# WHAT SHIPS, AND WHAT DELIBERATELY DOES NOT.
+#
+# `files` is an allow-list, not an exclude-list. The default would sweep in the whole working tree —
+# including `data/` (Chrome profiles, session cookies, the operator's evidence), `db/.env` (the vault
+# master key) and `reports/`. Shipping any of those in an installer is the Appilot mistake
+# src/config.ts opens by naming: an APK that carried two live API keys.
+#
+# So only four things are packaged: the compiled engine, the console, the SQLite schema, and the
+# Electron shell.
+appId: com.sgen.redbot
+productName: redbot
+copyright: redbot
+
+directories:
+  output: release
+  buildResources: electron/build
+
+files:
+  - dist/**/*                      # the compiled engine
+  - electron/main.mjs              # the shell
+  - electron/preload.cjs
+  - electron/vault-key.mjs
+  - tools/product/**/*             # the console: server + the single-file UI
+  - db/sqlite/migrate.mjs          # the schema, and the runner that applies it
+  - db/sqlite/migrations/**/*
+  - package.json
+  # Never: data/ · db/.env · db/migrations (Postgres) · reports/ · qa/ · src/ · the .md write-ups.
+  - '!**/*.map'                    # source maps double dist/ and ship nothing a user can act on
+  - '!electron/.shots/**'
+  - '!tools/product/.ui-shots/**'
+  - '!tools/product/*.test.mjs'
+  - '!tools/product/ui-fixture.mjs'
+  - '!tools/product/port-fixture.mjs'
+  - '!db/sqlite/*.test.mjs'
+  - '!db/sqlite/reset-test-db.mjs'
+  - '!db/sqlite/.env.test'
+
+# Playwright is a runtime dependency because src/browser.ts attaches to the operator's Chrome over
+# CDP. Only `playwright-core` is needed for connectOverCDP — the browser binaries it downloads are
+# never used, because redbot deliberately does not launch browsers (src/browser.ts). They are
+# excluded rather than pruned so the exclusion is visible.
+asarUnpack:
+  - node_modules/playwright-core/**
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # No signing configured. An unsigned installer shows a SmartScreen warning; a certificate is a
+  # purchase and a decision for whoever publishes this, not something to fake here.
+
+nsis:
+  oneClick: false                  # let a person choose the install directory
+  perMachine: false                # per-user: no elevation, and userData is per-user anyway
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  # An uninstall must NOT take the evidence with it. userData holds the database, the Chrome
+  # profiles and the operator's corpus; deleting it on uninstall would destroy the record.
+  deleteAppDataOnUninstall: false

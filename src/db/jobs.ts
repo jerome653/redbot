@@ -13,10 +13,16 @@
  *
  *     UPDATE … SET state='running' WHERE id=… AND state IN ('pending','scheduled') …
  *
- * Postgres takes a row lock for the duration, so of two concurrent callers exactly one
- * sees a claimable row and the other's WHERE matches nothing and returns zero rows.
- * The claim and the state change are the same write, so the window the lock file's
- * takeover logic existed to repair cannot open at all.
+ * A single statement is indivisible, so of two concurrent callers exactly one sees a claimable
+ * row and the other's WHERE matches nothing and returns zero rows. The claim and the state
+ * change are the same write, so the window the lock file's takeover logic existed to repair
+ * cannot open at all.
+ *
+ * This argument used to read "Postgres takes a row lock for the duration". It does not depend
+ * on that: SQLite serialises writers on a database-wide lock instead, which is coarser and
+ * gives the same answer here. What the claim relies on is that the test and the write are one
+ * statement — true on either engine, and the reason this file survived the port unchanged apart
+ * from `transitionJob`.
  *
  * The guarantee is unchanged and the failure mode it protects against is the same one:
  * not a duplicated log row, but the same vote, the same follow, performed twice.
@@ -50,7 +56,7 @@ interface JobRow {
 const SELECT = `
   SELECT id, account, kind, state, args, run_at, after_id, max_attempts, every_minutes,
          note, attempts, created_at, updated_at, started_at, finished_at, detail, code
-    FROM redbot.jobs`;
+    FROM jobs`;
 
 function toJob(r: JobRow): Job {
   const j: Job = {
@@ -87,7 +93,7 @@ function toJob(r: JobRow): Job {
 export async function ensureAccount(db: Db, handle: string, from?: AccountRecord): Promise<void> {
   if (from) {
     await db.query(
-      `INSERT INTO redbot.accounts
+      `INSERT INTO accounts
          (handle, role, speaks, knows, subreddits, timezone, quiet_start, quiet_end,
           daily_ceiling, profile_dir, debug_port, note)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
@@ -97,14 +103,18 @@ export async function ensureAccount(db: Db, handle: string, from?: AccountRecord
          quiet_start = EXCLUDED.quiet_start, quiet_end = EXCLUDED.quiet_end,
          daily_ceiling = EXCLUDED.daily_ceiling, profile_dir = EXCLUDED.profile_dir,
          debug_port = EXCLUDED.debug_port, note = EXCLUDED.note`,
-      [handle, from.role ?? null, from.speaks ?? null, from.knows ?? [], from.subreddits ?? [],
+      // knows/subreddits were Postgres text[] and are now TEXT holding JSON, so they are
+      // stringified here. src/db.ts refuses a raw array outright rather than guessing whether
+      // an array parameter means "store this list" or "match against this list".
+      [handle, from.role ?? null, from.speaks ?? null,
+       JSON.stringify(from.knows ?? []), JSON.stringify(from.subreddits ?? []),
        from.timezone ?? null, from.quietHours?.[0] ?? null, from.quietHours?.[1] ?? null,
        from.dailyCeiling ?? null, from.profileDir ?? null, from.debugPort ?? null, from.note ?? null]
     );
     return;
   }
   await db.query(
-    'INSERT INTO redbot.accounts (handle) VALUES ($1) ON CONFLICT (handle) DO NOTHING',
+    'INSERT INTO accounts (handle) VALUES ($1) ON CONFLICT (handle) DO NOTHING',
     [handle]
   );
 }
@@ -112,7 +122,7 @@ export async function ensureAccount(db: Db, handle: string, from?: AccountRecord
 export async function insertJob(db: Db, job: Job, from?: AccountRecord): Promise<Job> {
   await ensureAccount(db, job.account, from);
   await db.query(
-    `INSERT INTO redbot.jobs
+    `INSERT INTO jobs
        (id, account, kind, state, args, run_at, after_id, max_attempts, every_minutes, note,
         attempts, created_at, updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
@@ -136,18 +146,30 @@ export async function selectJob(db: Db, account: string, id: string): Promise<Jo
 }
 
 /**
- * Move a job to a new state, under a row lock.
+ * Move a job to a new state, under a write lock.
  *
- * The read and the write are one transaction with SELECT … FOR UPDATE, so the
- * terminal-job and already-running checks cannot be raced past — the old
- * read-then-append had a gap between them.
+ * The read and the write are one transaction, so the terminal-job and already-running checks
+ * cannot be raced past — the old read-then-append had a gap between them.
+ *
+ * `SELECT … FOR UPDATE` is gone, and NOT because the guarantee was dropped. SQLite has no
+ * row-level locks; what it has is a single database-wide write lock, and `withTransaction`
+ * opens every transaction with BEGIN IMMEDIATE, which takes that lock before the first read.
+ * So the read below is already serialised against every other writer — a coarser lock than
+ * Postgres took, and a strictly stronger one for this check. Keeping the two-letter phrase
+ * `FOR UPDATE` would have been a syntax error; keeping the *guarantee* needed nothing, which
+ * is why this function did not otherwise change.
+ *
+ * The one visible difference is at the edges: a Postgres row lock made a second writer WAIT,
+ * whereas SQLite's lock makes it wait for the busy timeout and then raise DbBusyError. A
+ * caller that must not fail on contention should catch that and retry; a queue pass that
+ * simply moves on is behaving correctly.
  */
 export async function transitionJob(
   account: string, id: string, next: TransitionInput, now: Date
 ): Promise<Job> {
   return withTransaction(async (tx) => {
     const cur = await tx.query<JobRow>(
-      `${SELECT} WHERE account = $1 AND id = $2 FOR UPDATE`, [account, id]
+      `${SELECT} WHERE account = $1 AND id = $2`, [account, id]
     );
     const row = cur.rows[0];
     if (!row) throw new Error(`no job ${id} for ${account}`);
@@ -160,25 +182,29 @@ export async function transitionJob(
 
     const ts = now.toISOString();
     const r = await tx.query<JobRow>(
-      // Every use of $3 is cast to the enum. A bare $3 binds as `text`, and while
-      // `state = $3` works in assignment context, `$3 = 'running'` inside a CASE has
-      // none — Postgres refuses with "operator does not exist: text = job_state".
-      `UPDATE redbot.jobs SET
-         state       = $3::redbot.job_state,
+      // Postgres needed `$3::redbot.job_state` on every use of $3, because a bare parameter
+      // bound as `text` and `$3 = 'running'` inside a CASE had no operator against the enum
+      // type. The column is plain TEXT with a CHECK now, so the casts are not translated —
+      // they are deleted, and `$3` compares directly.
+      //
+      // The terminal-state list reaches SQL as a JSON array through json_each, which is this
+      // schema's replacement for `= ANY($9::job_state[])`.
+      `UPDATE jobs SET
+         state       = $3,
          attempts    = COALESCE($4, attempts),
          detail      = COALESCE($5, detail),
          code        = COALESCE($6, code),
-         run_at      = COALESCE($7::timestamptz, run_at),
-         started_at  = CASE WHEN $3::redbot.job_state = 'running'
-                            THEN $8::timestamptz ELSE started_at END,
-         finished_at = CASE WHEN $3::redbot.job_state = ANY($9::redbot.job_state[])
-                            THEN $8::timestamptz ELSE finished_at END,
-         updated_at  = $8::timestamptz
+         run_at      = COALESCE($7, run_at),
+         started_at  = CASE WHEN $3 = 'running'
+                            THEN $8 ELSE started_at END,
+         finished_at = CASE WHEN $3 IN (SELECT j.value FROM json_each($9) j)
+                            THEN $8 ELSE finished_at END,
+         updated_at  = $8
        WHERE account = $1 AND id = $2
        RETURNING id, account, kind, state, args, run_at, after_id, max_attempts, every_minutes,
                  note, attempts, created_at, updated_at, started_at, finished_at, detail, code`,
       [account, id, next.state, next.attempts ?? null, next.detail ?? null,
-       next.code ?? null, next.runAt ?? null, ts, [...TERMINAL]]
+       next.code ?? null, next.runAt ?? null, ts, JSON.stringify([...TERMINAL])]
     );
     return toJob(r.rows[0]!);
   });
@@ -195,11 +221,11 @@ export async function transitionJob(
 export async function claimJobRow(db: Db, account: string, id: string, now: Date): Promise<Job | null> {
   const ts = now.toISOString();
   const r = await db.query<JobRow>(
-    `UPDATE redbot.jobs SET
-       state = 'running', attempts = attempts + 1, started_at = $3::timestamptz, updated_at = $3::timestamptz
+    `UPDATE jobs SET
+       state = 'running', attempts = attempts + 1, started_at = $3, updated_at = $3
      WHERE account = $1 AND id = $2
        AND state IN ('pending','scheduled')
-       AND (run_at IS NULL OR run_at <= $3::timestamptz)
+       AND (run_at IS NULL OR run_at <= $3)
      RETURNING id, account, kind, state, args, run_at, after_id, max_attempts, every_minutes,
                note, attempts, created_at, updated_at, started_at, finished_at, detail, code`,
     [account, id, ts]
@@ -211,8 +237,8 @@ export async function countsByState(db: Db, account: string): Promise<Record<Job
   const counts: Record<JobState, number> = {
     pending: 0, scheduled: 0, running: 0, waiting: 0, completed: 0, cancelled: 0, failed: 0
   };
-  const r = await db.query<{ state: JobState; n: string }>(
-    'SELECT state, count(*)::text AS n FROM redbot.jobs WHERE account = $1 GROUP BY state',
+  const r = await db.query<{ state: JobState; n: number }>(
+    'SELECT state, count(*) AS n FROM jobs WHERE account = $1 GROUP BY state',
     [account]
   );
   for (const row of r.rows) counts[row.state] = Number(row.n);

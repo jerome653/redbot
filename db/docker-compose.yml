@@ -66,8 +66,17 @@ services:
     # viewer you cannot trust to be showing you what it showed you yesterday.
     image: sosedoff/pgweb:0.17.0
     container_name: redbot-pgweb
-    restart: unless-stopped
 
+    # NO `restart: unless-stopped` — and its absence is the fix, so it is recorded here.
+    #
+    # `profiles: [tools]` gates only the FIRST start. With a restart policy, Docker brought this
+    # container back on every subsequent daemon launch whether or not anybody asked for the tools
+    # profile, which defeated the opt-in entirely. Measured (DEPLOY-READINESS B5): Docker Desktop
+    # was started only to run the test suite, `--profile tools` was never passed, and pgweb came up
+    # anyway — answering GET /api/connection and POST /api/query with no password at all.
+    #
+    # The compose comments claimed "a plain `up -d` still starts Postgres and nothing else". That
+    # was true only until somebody ran `--profile tools` once, ever.
     profiles: [tools]
 
     # Same reasoning as the database's own port binding: loopback ONLY. This
@@ -99,11 +108,16 @@ services:
       # you set one by hand, keep it to those characters.
       PGWEB_DATABASE_URL: postgres://${POSTGRES_USER:-redbot}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD — copy db/.env.example to db/.env}@db:5432/${POSTGRES_DB:-redbot}?sslmode=disable
 
-      # To make this a strictly read-only window, uncomment the command below
-      # instead. pgweb then refuses anything that would write, which is worth
-      # having if you only ever open this to LOOK at rows — src/store.ts is what
-      # is supposed to be writing them.
-    # command: ["--readonly"]
+    # READ ONLY, and no longer optional.
+    #
+    # This was commented out with a note that it was "worth having if you only ever open this to
+    # LOOK at rows". It is worth more than that: with it commented out, anything that could reach
+    # port 8081 could POST arbitrary SQL — including writes — to the corpus, with no password.
+    # `POST /api/query` running `select count(*) from redbot.credentials` was demonstrated during
+    # the audit that found this.
+    #
+    # src/store.ts is what is supposed to be writing rows. A viewer that can write is not a viewer.
+    command: ["--readonly"]
 
     depends_on:
       db:

@@ -33,11 +33,19 @@ const ROOT = resolve(HERE, '..', '..');
 /**
  * Every child runs against redbot_test, never the real database.
  *
- * `redbot.accounts` is the system of record now, so these tests WRITE rows. Without this they
+ * `accounts` is the system of record now, so these tests WRITE rows. Without this they
  * would land in the operator's own `redbot` database — the same reason each child gets a
  * throwaway REDBOT_DATA rather than the real data/.
  */
-const CHILD_ENV = { ...process.env, POSTGRES_DB: 'redbot_test' };
+/**
+ * REDBOT_DB reaches the child through `process.env`, set by `--env-file=db/sqlite/.env.test`.
+ *
+ * This used to pin `POSTGRES_DB: 'redbot_test'` here, because the test database was a different
+ * database on the same server. A SQLite test database is a different FILE, named once in
+ * .env.test and inherited — and because src/db.ts anchors a relative REDBOT_DB to the repository
+ * root rather than to cwd, a child spawned from anywhere resolves the same file.
+ */
+const CHILD_ENV = { ...process.env };
 
 /** The handles this file creates. Removed before and after, so a re-run starts clean. */
 const HANDLES = [
@@ -55,7 +63,7 @@ let pool = null;
 /**
  * Case-INSENSITIVE, deliberately.
  *
- * redbot.accounts has a case-sensitive text primary key, but `createConsoleAccount` refuses a
+ * accounts has a case-sensitive text primary key, but `createConsoleAccount` refuses a
  * duplicate by comparing lower-cased. So a leftover `striking_mousse6841` from an interrupted
  * run is a different row than `Striking_Mousse6841` — and an exact-match DELETE walks straight
  * past it, while the console still answers "already set up". The suite then fails on a fresh
@@ -65,8 +73,8 @@ async function clearTestAccounts() {
   const { getPool } = await import('../../dist/db.js');
   pool = getPool();
   await pool.query(
-    'DELETE FROM redbot.accounts WHERE lower(handle) = ANY($1)',
-    [HANDLES.map((h) => h.toLowerCase())]
+    'DELETE FROM accounts WHERE lower(handle) IN (SELECT j.value FROM json_each($1) j)',
+    [JSON.stringify(HANDLES.map((h) => h.toLowerCase()))]
   );
 }
 
@@ -78,7 +86,6 @@ const freePort = () => new Promise((res, rej) => {
 });
 
 before(async () => {
-  process.env.POSTGRES_DB = 'redbot_test';
   await clearTestAccounts();
   PORT = await freePort();
   // A directory that exists but holds no accounts.json — a fresh install, precisely.
@@ -128,7 +135,7 @@ after(async () => {
   try { rmSync(CHROME_DATA, { recursive: true, force: true }); } catch { /* best effort */ }
   try { await clearTestAccounts(); } catch { /* best effort */ }
   try {
-    await pool.query("DELETE FROM redbot.sources WHERE value IN ('ConsoleTestSub','console test query')");
+    await pool.query("DELETE FROM sources WHERE value IN ('ConsoleTestSub','console test query')");
   } catch { /* best effort */ }
   try { const { closePool } = await import('../../dist/db.js'); await closePool(); } catch { /* ditto */ }
 });
@@ -381,15 +388,15 @@ const sourcePost = async (path, body) => {
 test('the first source can be added when sources.json does not exist yet', async () => {
   // This returned 400 "sources.json is missing." — the endpoint demanded the file it creates,
   // so a fresh install could never switch on a single subreddit from the console.
-  await pool.query("DELETE FROM redbot.sources WHERE value IN ('ConsoleTestSub','console test query')");
+  await pool.query("DELETE FROM sources WHERE value IN ('ConsoleTestSub','console test query')");
   const r = await sourcePost('add', { kind: 'subreddit', value: 'r/ConsoleTestSub', why: 'console test' });
   assert.equal(r.status, 200, `adding was refused: ${JSON.stringify(r.body)}`);
   assert.equal(r.body.value, 'ConsoleTestSub', 'a pasted r/ prefix must be stripped');
   assert.equal(r.body.storedIn, 'database');
 
-  const row = await pool.query('SELECT enabled FROM redbot.sources WHERE kind = $1 AND value = $2',
+  const row = await pool.query('SELECT enabled FROM sources WHERE kind = $1 AND value = $2',
                                ['subreddit', 'ConsoleTestSub']);
-  assert.equal(row.rows[0]?.enabled, true, 'the source must be a row in redbot.sources');
+  assert.equal(row.rows[0]?.enabled, true, 'the source must be a row in sources');
 });
 
 test('the collect panel renders on a fresh install instead of vanishing', async () => {
@@ -414,7 +421,7 @@ test('a source already on the list is refused, and a bad subreddit name with it'
 test('a source can be removed through the console', async () => {
   const r = await sourcePost('remove', { kind: 'subreddit', value: 'ConsoleTestSub' });
   assert.equal(r.status, 200, `removal was refused: ${JSON.stringify(r.body)}`);
-  const row = await pool.query('SELECT 1 FROM redbot.sources WHERE value = $1', ['ConsoleTestSub']);
+  const row = await pool.query('SELECT 1 FROM sources WHERE value = $1', ['ConsoleTestSub']);
   assert.equal(row.rowCount, 0, 'the row must be gone from the record');
 
   const again = await sourcePost('remove', { kind: 'subreddit', value: 'ConsoleTestSub' });
@@ -422,9 +429,9 @@ test('a source can be removed through the console', async () => {
   assert.match(again.body.error, /Not on the list/);
 });
 
-/** Is this handle in redbot.accounts? The record, not the seed file. */
+/** Is this handle in accounts? The record, not the seed file. */
 async function inDatabase(handle) {
-  const r = await pool.query('SELECT handle, debug_port, profile_dir FROM redbot.accounts WHERE handle = $1', [handle]);
+  const r = await pool.query('SELECT handle, debug_port, profile_dir FROM accounts WHERE handle = $1', [handle]);
   return r.rows[0] ?? null;
 }
 
@@ -439,7 +446,7 @@ const accountsPath = () => join(DATA, 'accounts.json');
  * once here so every test that re-uses a handle starts from the same nothing.
  */
 async function forgetAccount(handle) {
-  await pool.query('DELETE FROM redbot.accounts WHERE lower(handle) = $1', [handle.toLowerCase()]);
+  await pool.query('DELETE FROM accounts WHERE lower(handle) = $1', [handle.toLowerCase()]);
   if (!existsSync(accountsPath())) return;
   try {
     const seed = JSON.parse(readFileSync(accountsPath(), 'utf8'));
@@ -478,11 +485,11 @@ test('the first account can be set up when accounts.json does not exist yet', as
   assert.equal(r.body.ok, true);
   assert.equal(r.body.account.handle, 'Striking_Mousse6841');
 
-  // The system of record is redbot.accounts — not the file. This is the assertion that would
+  // The system of record is accounts — not the file. This is the assertion that would
   // have failed while the console wrote only JSON.
   assert.equal(r.body.storedIn, 'database');
   const row = await inDatabase('Striking_Mousse6841');
-  assert.ok(row, 'the account must be a row in redbot.accounts');
+  assert.ok(row, 'the account must be a row in accounts');
   assert.equal(row.debug_port, r.body.account.debugPort);
   assert.equal(row.profile_dir, r.body.account.profileDir);
 
@@ -561,7 +568,7 @@ test('an entry with no handle does not crash the setup button', async () => {
 test('opening a browser for an unknown account reports the reason, not an empty body', async () => {
   /**
    * Pins the missing `await`. launchChrome became async when it started reading the port from
-   * redbot.accounts; the route still called it synchronously, so `r` was a Promise — `r.ok`
+   * accounts; the route still called it synchronously, so `r` was a Promise — `r.ok`
    * undefined, status 400, body `{}`. The real launch worked and the console showed a failure.
    *
    * An unknown handle is used deliberately: it exercises the same route and the same await,
@@ -591,8 +598,8 @@ test('a browser action runs as the only configured account, even when the reques
    * unknown handle, and the refusal names the handle it was given — which is exactly the
    * evidence that REDBOT_ACCOUNT reached it. Same technique as the operator console's test.
    */
-  await pool.query("DELETE FROM redbot.accounts WHERE lower(handle) = ANY($1)",
-                   [HANDLES.map((h) => h.toLowerCase())]);
+  await pool.query("DELETE FROM accounts WHERE lower(handle) IN (SELECT j.value FROM json_each($1) j)",
+                   [JSON.stringify(HANDLES.map((h) => h.toLowerCase()))]);
   const made = await create({ handle: 'SoleAcct_Run' });
   assert.equal(made.status, 200, `setup failed: ${JSON.stringify(made.body)}`);
 
@@ -611,7 +618,7 @@ test('a browser action runs as the only configured account, even when the reques
     assert.ok(!/Unknown command/.test(text), `the action did not run at all: ${text}`);
     assert.ok(text.length > 0, 'the run produced no output at all');
   } finally {
-    await pool.query("DELETE FROM redbot.accounts WHERE lower(handle) = 'soleacct_run'");
+    await pool.query("DELETE FROM accounts WHERE lower(handle) = 'soleacct_run'");
   }
 });
 
@@ -664,17 +671,17 @@ test('a send that cannot start leaves no approval token behind', async () => {
    * named means `__reply` is refused before a child is ever spawned, so this test can never
    * publish to Reddit no matter what the code under it does.
    */
-  const thread = await pool.query('SELECT id, permalink, title FROM redbot.threads LIMIT 1');
+  const thread = await pool.query('SELECT id, permalink, title FROM threads LIMIT 1');
   if (!thread.rows.length) { assert.ok(true, 'no threads in the test database — nothing to draft against'); return; }
   const t = thread.rows[0];
   const draftId = 'tok_test_draft';
 
   await forgetAccount('Ambiguous_AcctA');
   await forgetAccount('Ambiguous_AcctB');
-  await pool.query('DELETE FROM redbot.drafts WHERE id = $1', [draftId]);
+  await pool.query('DELETE FROM drafts WHERE id = $1', [draftId]);
   await pool.query(
-    `INSERT INTO redbot.drafts (id, thread_id, permalink, title, body, has_disclosure, created_at, model)
-     VALUES ($1,$2,$3,$4,$5,false,now(),'test')`,
+    `INSERT INTO drafts (id, thread_id, permalink, title, body, has_disclosure, created_at, model)
+     VALUES ($1,$2,$3,$4,$5,false,strftime('%Y-%m-%dT%H:%M:%fZ','now'),'test')`,
     [draftId, t.id, t.permalink ?? '/r/x/comments/y/z', t.title ?? 'title', 'body']);
 
   const tokenPath = join(DATA, 'approvals', `${draftId}.json`);
@@ -698,7 +705,7 @@ test('a send that cannot start leaves no approval token behind', async () => {
                  'a refused send must leave NO approval token — it authorises an unattended reply');
   } finally {
     try { if (existsSync(tokenPath)) rmSync(tokenPath, { force: true }); } catch { /* best effort */ }
-    await pool.query('DELETE FROM redbot.drafts WHERE id = $1', [draftId]);
+    await pool.query('DELETE FROM drafts WHERE id = $1', [draftId]);
     await forgetAccount('Ambiguous_AcctA');
     await forgetAccount('Ambiguous_AcctB');
   }
@@ -784,7 +791,7 @@ test('an account’s description can be edited, in the record and the seed alike
        record: an edit that lands in one is an account that behaves differently depending on
        which half of redbot is asking. */
     const row = await pool.query(
-      'SELECT role, speaks, subreddits, timezone, quiet_start, quiet_end, daily_ceiling, note FROM redbot.accounts WHERE handle = $1',
+      'SELECT role, speaks, subreddits, timezone, quiet_start, quiet_end, daily_ceiling, note FROM accounts WHERE handle = $1',
       ['Edit_Me']);
     assert.equal(row.rows[0].role, 'After');
     assert.equal(row.rows[0].speaks, 'plugin conflicts');
@@ -828,7 +835,7 @@ test('editing cannot repoint an account at another Chrome, and says so', async (
                      'a refused field must be named, not silently dropped');
     assert.equal(body.account.role, 'Changed', 'the editable fields must still have applied');
 
-    const row = await pool.query('SELECT debug_port, profile_dir FROM redbot.accounts WHERE handle = $1', ['Edit_Me']);
+    const row = await pool.query('SELECT debug_port, profile_dir FROM accounts WHERE handle = $1', ['Edit_Me']);
     assert.equal(row.rows[0].debug_port, port, 'and the record must not have moved either');
     assert.equal(row.rows[0].profile_dir, dir);
   } finally {
@@ -860,19 +867,19 @@ test('editing refuses an unknown account and nonsense limits', async () => {
 test('the Chrome profile a person picks is written onto the account, not dropped', async () => {
   /* The wizard sends the choice as the account's note. If that field were ignored the picker
      would look like it worked and record nothing — so the round trip is asserted, not assumed. */
-  await pool.query('DELETE FROM redbot.accounts WHERE lower(handle) = $1', ['noted_acct']);
+  await pool.query('DELETE FROM accounts WHERE lower(handle) = $1', ['noted_acct']);
   try {
     const made = await create({ handle: 'Noted_Acct', note: 'Signed in on Chrome profile "Qt" — Profile 1' });
     assert.equal(made.status, 200, `setup failed: ${JSON.stringify(made.body)}`);
 
-    const row = await pool.query('SELECT note FROM redbot.accounts WHERE handle = $1', ['Noted_Acct']);
+    const row = await pool.query('SELECT note FROM accounts WHERE handle = $1', ['Noted_Acct']);
     assert.match(row.rows[0].note, /Profile 1/, 'the picked profile must survive to the record');
 
     const seeded = JSON.parse(readFileSync(join(DATA, 'accounts.json'), 'utf8'));
     const mirrored = seeded.accounts.find((a) => a.handle === 'Noted_Acct');
     assert.match(mirrored.note, /Profile 1/, 'and the seed file must agree with the record');
   } finally {
-    await pool.query('DELETE FROM redbot.accounts WHERE lower(handle) = $1', ['noted_acct']);
+    await pool.query('DELETE FROM accounts WHERE lower(handle) = $1', ['noted_acct']);
   }
 });
 
@@ -989,8 +996,8 @@ test('with two accounts a browser action is refused, not pointed at the default 
    *
    * Asserted on the REFUSAL rather than on the browser: the run must not start at all.
    */
-  await pool.query('DELETE FROM redbot.accounts WHERE lower(handle) = ANY($1)',
-                   [HANDLES.map((h) => h.toLowerCase())]);
+  await pool.query('DELETE FROM accounts WHERE lower(handle) IN (SELECT j.value FROM json_each($1) j)',
+                   [JSON.stringify(HANDLES.map((h) => h.toLowerCase()))]);
   const a = await create({ handle: 'Ambiguous_AcctA' });
   const b = await create({ handle: 'Ambiguous_AcctB' });
   assert.equal(a.status, 200, `setup failed: ${JSON.stringify(a.body)}`);
@@ -1024,8 +1031,8 @@ test('with two accounts a browser action is refused, not pointed at the default 
     assert.ok(String(okBody.output ?? okBody.error ?? '').length > 0,
               'a non-browser action must not be caught by the account gate');
   } finally {
-    await pool.query('DELETE FROM redbot.accounts WHERE lower(handle) = ANY($1)',
-                     [['ambiguous_accta', 'ambiguous_acctb']]);
+    await pool.query('DELETE FROM accounts WHERE lower(handle) IN (SELECT j.value FROM json_each($1) j)',
+                     [JSON.stringify(['ambiguous_accta', 'ambiguous_acctb'])]);
   }
 });
 
@@ -1053,7 +1060,7 @@ test('an account is never given a port another program already holds', async () 
   });
 
   try {
-    await pool.query("DELETE FROM redbot.accounts WHERE handle = 'PortClash_Acct'");
+    await pool.query("DELETE FROM accounts WHERE handle = 'PortClash_Acct'");
     const r = await create({ handle: 'PortClash_Acct' });
     assert.equal(r.status, 200, `setup was refused: ${JSON.stringify(r.body)}`);
 
@@ -1071,7 +1078,7 @@ test('an account is never given a port another program already holds', async () 
     assert.equal(bindable, true, `port ${given} was handed out but is not free`);
   } finally {
     if (weBoundIt) await new Promise((res) => squatter.close(res));
-    try { await pool.query("DELETE FROM redbot.accounts WHERE handle = 'PortClash_Acct'"); } catch {}
+    try { await pool.query("DELETE FROM accounts WHERE handle = 'PortClash_Acct'"); } catch {}
   }
 });
 
@@ -1101,7 +1108,7 @@ test('removing an account takes it out of both stores and keeps the sign-in fold
     assert.deepEqual(body.removedFrom.sort(), ['database', 'seed-file'],
                      'an account left in either store comes back on the next read');
 
-    const row = await pool.query('SELECT handle FROM redbot.accounts WHERE lower(handle) = $1', ['remove_me']);
+    const row = await pool.query('SELECT handle FROM accounts WHERE lower(handle) = $1', ['remove_me']);
     assert.equal(row.rowCount, 0, 'the record must be gone');
     const seeded = JSON.parse(readFileSync(accountsPath(), 'utf8'));
     assert.equal(seeded.accounts.some((a) => a.handle === 'Remove_Me'), false, 'and the seed file too');
@@ -1118,10 +1125,10 @@ test('removing an account that has history refuses until it is confirmed', async
   await forgetAccount('Remove_Me');
   try {
     await create({ handle: 'Remove_Me' });
-    /* redbot.jobs.account is ON DELETE CASCADE (0008_jobs.up.sql:27): the database deletes
+    /* jobs.account is ON DELETE CASCADE (0008_jobs.up.sql:27): the database deletes
        these with the account. A one-click button that silently destroys a run history is the
        kind of thing nobody notices until the week it matters. */
-    await pool.query("INSERT INTO redbot.jobs (id, account, kind) VALUES ($1, $2, 'search')",
+    await pool.query("INSERT INTO jobs (id, account, kind) VALUES ($1, $2, 'search')",
                      ['job-remove-test-1', 'Remove_Me']);
 
     const asked = await fetch(`http://127.0.0.1:${PORT}/api/account/remove`, {
@@ -1134,7 +1141,7 @@ test('removing an account that has history refuses until it is confirmed', async
     assert.equal(askedBody.dependents.jobs, 1, 'the warning must be a real count, not a maybe');
     assert.match(askedBody.error, /1 job record/);
 
-    const still = await pool.query('SELECT handle FROM redbot.accounts WHERE lower(handle) = $1', ['remove_me']);
+    const still = await pool.query('SELECT handle FROM accounts WHERE lower(handle) = $1', ['remove_me']);
     assert.equal(still.rowCount, 1, 'refusing must write NOTHING — not the row, not the file');
     const seededStill = JSON.parse(readFileSync(accountsPath(), 'utf8'));
     assert.equal(seededStill.accounts.some((a) => a.handle === 'Remove_Me'), true);
@@ -1144,11 +1151,11 @@ test('removing an account that has history refuses until it is confirmed', async
       body: JSON.stringify({ handle: 'Remove_Me', confirm: true })
     });
     assert.equal(done.status, 200, `confirmed removal was refused: ${JSON.stringify(await done.json())}`);
-    assert.equal((await pool.query('SELECT handle FROM redbot.accounts WHERE lower(handle) = $1', ['remove_me'])).rowCount, 0);
-    assert.equal((await pool.query('SELECT id FROM redbot.jobs WHERE id = $1', ['job-remove-test-1'])).rowCount, 0,
+    assert.equal((await pool.query('SELECT handle FROM accounts WHERE lower(handle) = $1', ['remove_me'])).rowCount, 0);
+    assert.equal((await pool.query('SELECT id FROM jobs WHERE id = $1', ['job-remove-test-1'])).rowCount, 0,
                  'and the cascade the warning described must be exactly what happened');
   } finally {
-    await pool.query('DELETE FROM redbot.jobs WHERE id = $1', ['job-remove-test-1']);
+    await pool.query('DELETE FROM jobs WHERE id = $1', ['job-remove-test-1']);
     await forgetAccount('Remove_Me');
   }
 });
@@ -1379,7 +1386,7 @@ test('the port cannot be moved while that account’s browser is running', async
     assert.equal(r.status, 400, 'moving the record mid-flight leaves it pointing at a dead port');
     assert.match(body.error, /Stop it first/i);
 
-    const row = await pool.query('SELECT debug_port FROM redbot.accounts WHERE handle = $1', ['Port_Acct']);
+    const row = await pool.query('SELECT debug_port FROM accounts WHERE handle = $1', ['Port_Acct']);
     assert.equal(row.rows[0].debug_port, debugPort, 'and nothing may have moved');
   } finally {
     try { kid?.kill(); } catch { /* already gone */ }
@@ -1402,7 +1409,7 @@ test('a port change lands in the record and the seed file alike', async () => {
     assert.notEqual(body.port, was, 'auto must actually move it');
     assert.equal(typeof body.port, 'number');
 
-    const row = await pool.query('SELECT debug_port FROM redbot.accounts WHERE handle = $1', ['Port_Acct']);
+    const row = await pool.query('SELECT debug_port FROM accounts WHERE handle = $1', ['Port_Acct']);
     assert.equal(row.rows[0].debug_port, body.port, 'the record is what the CLI attaches by');
     const seeded = JSON.parse(readFileSync(accountsPath(), 'utf8'));
     assert.equal(seeded.accounts.find((a) => a.handle === 'Port_Acct').debugPort, body.port,
@@ -1424,7 +1431,7 @@ test('a nonsense port is refused before anything is written', async () => {
       });
       assert.equal(r.status, 400, `${JSON.stringify(bad)} must be refused`);
     }
-    const row = await pool.query('SELECT debug_port FROM redbot.accounts WHERE handle = $1', ['Port_Acct']);
+    const row = await pool.query('SELECT debug_port FROM accounts WHERE handle = $1', ['Port_Acct']);
     assert.equal(row.rows[0].debug_port, made.body.account.debugPort, 'and the port must not have moved');
   } finally { await forgetAccount('Port_Acct'); }
 });
@@ -1450,50 +1457,50 @@ const SEED_PUBLISHED = 17;
 const SEED_OBS = 23;
 
 async function seedScopeFixture() {
-  await pool.query("INSERT INTO redbot.accounts (handle, role) VALUES ($1,'seeded') ON CONFLICT DO NOTHING", [SCOPE_ACCT]);
+  await pool.query("INSERT INTO accounts (handle, role) VALUES ($1,'seeded') ON CONFLICT DO NOTHING", [SCOPE_ACCT]);
   for (let i = 0; i < SEED_DRAFTS; i++) {
     const tid = `eeee${String(i).padStart(8, '0')}`.slice(0, 12);
     await pool.query(
-      `INSERT INTO redbot.threads (id, permalink, title, subreddit, comment_count, collected_at, source)
-       VALUES ($1,$2,$3,$4,3, now(), 'read')`,
+      `INSERT INTO threads (id, permalink, title, subreddit, comment_count, collected_at, source)
+       VALUES ($1,$2,$3,$4,3, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'read')`,
       [tid, `/r/${SCOPE_TAG}/${i}`, `${SCOPE_TAG} thread ${i}`, i % 2 ? 'ScopeSubOne' : 'ScopeSubTwo']
     );
     await pool.query(
-      `INSERT INTO redbot.drafts (id, thread_id, permalink, title, body, has_disclosure, created_at, model, status, account)
-       VALUES ($1,$2,$3,$4,'body', false, now(), 'test-model', 'pending', $5)`,
+      `INSERT INTO drafts (id, thread_id, permalink, title, body, has_disclosure, created_at, model, status, account)
+       VALUES ($1,$2,$3,$4,'body', false, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'test-model', 'pending', $5)`,
       [`${SCOPE_TAG}-d${i}`, tid, `/r/${SCOPE_TAG}/${i}`, `${SCOPE_TAG} draft ${i}`, SCOPE_ACCT]
     );
   }
   /* One draft certified TWICE — the stability evidence, which must survive scoping. */
   for (let k = 0; k < 2; k++) {
     await pool.query(
-      `INSERT INTO redbot.certifications (draft_id, thread_id, verdict, certified_at, model, resolution_resolved, resolution_detail)
-       VALUES ($1,$2,'CERTIFIED', now(), 'test-model', false, 'seeded')`,
+      `INSERT INTO certifications (draft_id, thread_id, verdict, certified_at, model, resolution_resolved, resolution_detail)
+       VALUES ($1,$2,'CERTIFIED', strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'test-model', false, 'seeded')`,
       [`${SCOPE_TAG}-d0`, `eeee${'0'.repeat(8)}`.slice(0, 12)]
     );
   }
   for (let i = 0; i < SEED_PUBLISHED; i++) {
     await pool.query(
-      `INSERT INTO redbot.history (ts, kind, account, summary) VALUES (now(), 'publish.ok', $1, $2)`,
+      `INSERT INTO history (ts, kind, account, summary) VALUES (strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'publish.ok', $1, $2)`,
       [SCOPE_ACCT, `${SCOPE_TAG} published ${i}`]
     );
   }
   for (let i = 0; i < SEED_OBS; i++) {
     await pool.query(
-      `INSERT INTO redbot.observations (ts, account, kind, vector, value)
-       VALUES (now(), $1, 'karma', 'signed-in', $2)`,
+      `INSERT INTO observations (ts, account, kind, vector, value)
+       VALUES (strftime('%Y-%m-%dT%H:%M:%fZ','now'), $1, 'karma', 'signed-in', $2)`,
       [SCOPE_ACCT, JSON.stringify(100 + i)]
     );
   }
 }
 
 async function clearScopeFixture() {
-  await pool.query(`DELETE FROM redbot.certifications WHERE draft_id LIKE '${SCOPE_TAG}%'`);
-  await pool.query(`DELETE FROM redbot.drafts WHERE id LIKE '${SCOPE_TAG}%'`);
-  await pool.query(`DELETE FROM redbot.threads WHERE title LIKE '${SCOPE_TAG}%'`);
-  await pool.query(`DELETE FROM redbot.history WHERE account = $1`, [SCOPE_ACCT]);
-  await pool.query(`DELETE FROM redbot.observations WHERE account = $1`, [SCOPE_ACCT]);
-  await pool.query(`DELETE FROM redbot.accounts WHERE handle = $1`, [SCOPE_ACCT]);
+  await pool.query(`DELETE FROM certifications WHERE draft_id LIKE '${SCOPE_TAG}%'`);
+  await pool.query(`DELETE FROM drafts WHERE id LIKE '${SCOPE_TAG}%'`);
+  await pool.query(`DELETE FROM threads WHERE title LIKE '${SCOPE_TAG}%'`);
+  await pool.query(`DELETE FROM history WHERE account = $1`, [SCOPE_ACCT]);
+  await pool.query(`DELETE FROM observations WHERE account = $1`, [SCOPE_ACCT]);
+  await pool.query(`DELETE FROM accounts WHERE handle = $1`, [SCOPE_ACCT]);
 }
 
 test('/api/state sends one page of review but counts the whole queue', async () => {

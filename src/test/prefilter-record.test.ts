@@ -47,8 +47,8 @@ before(async () => {
   await cleanup();
   for (let n = 0; n < 6; n++) {
     await db.query(
-      `INSERT INTO redbot.threads (id, permalink, title, subreddit, comment_count, age_text, collected_at, source)
-       VALUES ($1,$2,$3,'wordpress',2,'1 h ago', now(), 'read')`,
+      `INSERT INTO threads (id, permalink, title, subreddit, comment_count, age_text, collected_at, source)
+       VALUES ($1,$2,$3,'wordpress',2,'1 h ago', strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'read')`,
       [id(n), `/r/wordpress/${TAG}/${n}`, `${TAG} thread ${n}`]
     );
   }
@@ -68,8 +68,8 @@ after(async () => { await cleanup(); await closePool(); });
  */
 async function cleanup(): Promise<void> {
   const db = getPool();
-  await db.query('DELETE FROM redbot.thread_prefilter WHERE thread_id = ANY($1)', [MINE]);
-  await db.query('DELETE FROM redbot.threads WHERE id = ANY($1)', [MINE]);
+  await db.query('DELETE FROM thread_prefilter WHERE thread_id IN (SELECT j.value FROM json_each($1) j)', [JSON.stringify(MINE)]);
+  await db.query('DELETE FROM threads WHERE id IN (SELECT j.value FROM json_each($1) j)', [JSON.stringify(MINE)]);
 }
 
 /**
@@ -80,7 +80,7 @@ async function cleanup(): Promise<void> {
  * happens to run second rather than in the one that is wrong.
  */
 async function reset(): Promise<void> {
-  await getPool().query('DELETE FROM redbot.thread_prefilter WHERE thread_id = ANY($1)', [MINE]);
+  await getPool().query('DELETE FROM thread_prefilter WHERE thread_id IN (SELECT j.value FROM json_each($1) j)', [JSON.stringify(MINE)]);
 }
 
 
@@ -96,11 +96,11 @@ async function reset(): Promise<void> {
  */
 async function mine(): Promise<{ kind: string; n: number }[]> {
   const r = await getPool().query<{ kind: string; n: string }>(
-    `SELECT kind::text AS kind, count(*)::text AS n
-       FROM redbot.thread_prefilter
-      WHERE thread_id = ANY($1)
+    `SELECT kind AS kind, count(*) AS n
+       FROM thread_prefilter
+      WHERE thread_id IN (SELECT j.value FROM json_each($1) j)
       GROUP BY kind ORDER BY count(*) DESC, kind`,
-    [MINE]
+    [JSON.stringify(MINE)]
   );
   return r.rows.map((x) => ({ kind: x.kind, n: Number(x.n) }));
 }
@@ -171,18 +171,21 @@ test('a re-run replaces a thread’s reason instead of adding a second', async (
   assert.deepEqual(await mine(), [{ kind: 'too-old', n: 1 }], 'and the newest reason wins');
 
   const row = await db.query<{ detail: string }>(
-    'SELECT detail FROM redbot.thread_prefilter WHERE thread_id = $1', [id(1)]);
+    'SELECT detail FROM thread_prefilter WHERE thread_id = $1', [id(1)]);
   assert.equal(row.rows[0]?.detail, '103h old', 'the sentence is refreshed too');
 });
 
 test('the database refuses a rule name the code cannot produce', async () => {
   /* Closed vocabulary, per 0001's convention. Renaming a kind in TypeScript without adding it
-     to the enum fails at the write rather than landing a string the console must guess at. */
+     to the schema fails at the write rather than landing a string the console must guess at.
+     Postgres said "invalid input value for enum"; the SQLite translation enforces the same
+     vocabulary with a CHECK, so the refusal names the column instead of a type. What is being
+     asserted is unchanged: the DATABASE refuses it, not the application. */
   await assert.rejects(
     () => savePrefilterOutcome(getPool(), [
       { threadId: id(2), kind: 'made-up-rule' as never, detail: 'x' }
     ], []),
-    /invalid input value for enum/
+    /CHECK constraint failed: kind/
   );
 });
 
@@ -207,8 +210,8 @@ test('deleting a thread takes its drop reason with it', async () => {
   await reset();
   const db = getPool();
   await savePrefilterOutcome(db, [{ threadId: id(5), kind: 'too-old', detail: 'x' }], []);
-  await db.query('DELETE FROM redbot.threads WHERE id = $1', [id(5)]);
-  const left = await db.query('SELECT 1 FROM redbot.thread_prefilter WHERE thread_id = $1', [id(5)]);
+  await db.query('DELETE FROM threads WHERE id = $1', [id(5)]);
+  const left = await db.query('SELECT 1 FROM thread_prefilter WHERE thread_id = $1', [id(5)]);
   assert.equal(left.rowCount, 0, 'a reason for a thread nobody has is not a fact worth keeping');
 });
 
@@ -231,8 +234,8 @@ test('a thread assessed before it aged out is not counted among the never-assess
     { threadId: id(1), kind: 'outside-pilot', detail: 'never eligible, never assessed' }
   ], []);
   await db.query(
-    `INSERT INTO redbot.opportunity_assessments (thread_id, permalink, title, verdict, score, reasons, assessed_at)
-     VALUES ($1,'/p','t','skip',10,'{}', now()) ON CONFLICT (thread_id) DO NOTHING`, [id(0)]);
+    `INSERT INTO opportunity_assessments (thread_id, permalink, title, verdict, score, reasons, assessed_at)
+     VALUES ($1,'/p','t','skip',10,'[]', strftime('%Y-%m-%dT%H:%M:%fZ','now')) ON CONFLICT (thread_id) DO NOTHING`, [id(0)]);
 
   try {
     const b = await prefilterBreakdown(db);
@@ -246,12 +249,12 @@ test('a thread assessed before it aged out is not counted among the never-assess
 
     /* The property the panel depends on: drops never exceed what is genuinely unassessed. */
     const totals = await db.query<{ collected: string; assessed: string }>(
-      `SELECT (SELECT count(*) FROM redbot.threads)::text AS collected,
-              (SELECT count(*) FROM redbot.opportunity_assessments)::text AS assessed`);
+      `SELECT (SELECT count(*) FROM threads) AS collected,
+              (SELECT count(*) FROM opportunity_assessments) AS assessed`);
     const neverAssessed = Number(totals.rows[0]!.collected) - Number(totals.rows[0]!.assessed);
     assert.ok(b.total <= neverAssessed,
               `the breakdown (${b.total}) must never exceed the never-assessed count (${neverAssessed})`);
   } finally {
-    await db.query('DELETE FROM redbot.opportunity_assessments WHERE thread_id = ANY($1)', [MINE]);
+    await db.query('DELETE FROM opportunity_assessments WHERE thread_id IN (SELECT j.value FROM json_each($1) j)', [JSON.stringify(MINE)]);
   }
 });

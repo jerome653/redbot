@@ -359,8 +359,8 @@ export function makeState(now = Date.now(), over = {}) {
       { file: 'postgres: redbot', exists: true,
         detail: '48 threads, 4 drafts, 16 gap analyses, 16 assessments, 4 certifications, '
               + '3 history, 2 observations, 7 reviews, 0 regret' },
-      { file: 'accounts (redbot.accounts)', exists: true, detail: '2 configured' },
-      { file: 'sources (redbot.sources)', exists: true, detail: '3 subreddit(s), 1 search(es)' },
+      { file: 'accounts (accounts)', exists: true, detail: '2 configured' },
+      { file: 'sources (sources)', exists: true, detail: '3 subreddit(s), 1 search(es)' },
       { file: 'data/ui-status.json', exists: true, bytes: 93, modified: iso(now, 5000) }
     ]
   };

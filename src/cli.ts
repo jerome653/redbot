@@ -30,6 +30,7 @@ import {
   healthCmd, metricsCmd, policyCmd, selectCmd, reviewCmd, reportCmd, insightsCmd
 } from './commands/status.js';
 import { say } from './log.js';
+import { provision, describeProvision } from './provision.js';
 import { pathToFileURL } from 'node:url';
 
 const USAGE = `
@@ -39,7 +40,7 @@ redbot — Reddit engagement assistant
     redbot login                 confirm the browser session
     redbot operators [add <name>]
                                  who can run redbot, and whose Claude login pays
-    redbot accounts [import|export]
+    redbot accounts [list|use <handle>|import|export]
                                  who redbot may post as (the database is the record)
     redbot sources [add|rm|import|export]
                                  where redbot looks for threads (the database is the record)
@@ -94,6 +95,7 @@ redbot — Reddit engagement assistant
 
   Diagnosis
     redbot probe-karma           measure the signed-in account's karma, and record it
+    redbot provision             what this install creates for itself, and where
     redbot doctor                is the INSTALL sound? build, auth, data, secrets, staleness
     redbot insights              where the pipeline is losing candidates, and which stage to fix
     redbot health [account]      is the ACCOUNT sound? karma, removals, cooldowns
@@ -181,7 +183,24 @@ async function main(): Promise<number> {
   const { flags, positional, flagValue } = parseCliArgs(rest);
 
   /**
-   * `redbot.accounts` is the system of record, but the readers of it are synchronous —
+   * Build whatever this install is missing, BEFORE anything reads it.
+   *
+   * It has to be here rather than only in the Electron shell: `npm run redbot doctor` from a
+   * terminal must keep working, and it is the command a person reaches for precisely when the
+   * install is broken. Running it first means `primeAccounts()` below queries a database that
+   * exists and is migrated, rather than failing and silently falling back to the seed file.
+   *
+   * Idempotent, and quiet on a healthy install — see src/provision.ts. Failures are collected
+   * into the report rather than thrown: a provisioning problem must not stop `doctor` from
+   * running and telling you about it.
+   */
+  const provisioned = await provision();
+  if (cmd !== 'provision') {
+    for (const note of provisioned.notes) say.warn(note);
+  }
+
+  /**
+   * `accounts` is the system of record, but the readers of it are synchronous —
    * `config.browser` resolves which Chrome this run drives. Load them once, here, before any
    * command can ask. Fails soft: an unreachable database leaves data/accounts.json answering,
    * so `doctor` and the browser commands still work when the database is the thing that broke.
@@ -217,7 +236,7 @@ async function main(): Promise<number> {
      * Without this case it answered "Unknown command" and step 3 of the wizard was dead.
      */
     case 'probe-karma': return probeKarma();
-    case 'accounts': return accounts(positional[0]);
+    case 'accounts': return accounts(positional[0], positional[1]);
     /** `--search "<q>"` adds a saved search; a bare value is a subreddit. */
     case 'sources': return sources(positional[0], positional[1], { search: flagValue('search'), why: flagValue('why') });
     case 'read':    return read(positional[0]);
@@ -301,6 +320,22 @@ async function main(): Promise<number> {
       });
     }
     case 'regret':   return regret(positional[0]);
+    /**
+     * Show what provisioning found, without doing anything else.
+     *
+     * The work already happened above — every command provisions. This exists so the result is
+     * INSPECTABLE: "did the installer set this machine up correctly" is a real question, and the
+     * honest answer is a list of paths and states rather than the absence of an error.
+     */
+    case 'provision': {
+      say.head('redbot provision');
+      for (const line of describeProvision(provisioned)) say.step(line);
+      const bad = provisioned.schema && !provisioned.schema.ok;
+      if (bad) { say.fail('the schema is not usable — see above'); return 1; }
+      say.ok('the install has everything redbot creates for itself');
+      return 0;
+    }
+
     case 'doctor':   return doctor();
     case 'backup':   return backupCmd({ list: flags.has('--list'), verify: flags.has('--verify') });
     case 'insights': return insightsCmd();

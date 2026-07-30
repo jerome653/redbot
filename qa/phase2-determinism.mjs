@@ -16,14 +16,34 @@
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
 const RUNS = Number(process.argv[2] ?? 3);
 const OUT = 'qa/evidence/phase2-determinism.log';
+/* qa/evidence/ has no tracked files, so it does not exist on a fresh clone and every
+   gate here used to crash with ENOENT before running a single check (B2). */
+mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, `PHASE 2 — determinism\n${new Date().toISOString()}\nruns per condition: ${RUNS}\n\n`);
 const log = (s) => { console.log(s); appendFileSync(OUT, s + '\n'); };
 
-const threads = JSON.parse(readFileSync('data/threads.json', 'utf8')).slice(0, 6);
+/**
+ * Threads come from the STORE, not from data/threads.json.
+ *
+ * That file has not been written since the domain moved into the database — `src/store.ts` says
+ * so at the top — so this read raised ENOENT on every machine, and the gate could not run at all.
+ * It was a second, separate crash hiding behind the qa/evidence one (B2): fixing the directory
+ * only got far enough to reach this line.
+ *
+ * Absent input is a SKIP, not a failure. A gate that reports red because there is nothing to
+ * measure is red on every fresh install by construction, which is the same defect B3 records
+ * against ARE-001 — and a red that means "no data" trains people to ignore reds.
+ */
+const { loadThreads } = await import('../dist/store.js');
+const threads = (await loadThreads()).slice(0, 6);
+if (!threads.length) {
+  log('SKIP — no threads on record. Collect some first: node dist/cli.js read <subreddit>');
+  process.exit(0);
+}
 log(`threads under test: ${threads.length}`);
 threads.forEach((t, i) => log(`  [${i}] ${t.title.slice(0, 66)}`));
 

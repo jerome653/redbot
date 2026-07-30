@@ -11,14 +11,15 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT } from '../config.js';
+import { paths } from '../config.js';
 import { loadCertifications } from './pipeline.js';
 import { terminalClaims } from './graph.js';
 import { AUTHORITATIVE, NO_PROVENANCE, FALSIFIABLE_TYPES } from './types.js';
 import type { Certification, Claim } from './types.js';
 import type { Draft } from '../types.js';
 
-const dir = join(ROOT, 'reports');
+/* Was its own `join(ROOT, 'reports')`. One directory, one constant — see config.ts on why. */
+const dir = paths.reports;
 const stamp = () => new Date().toISOString().slice(0, 10);
 
 function write(name: string, body: string): string {

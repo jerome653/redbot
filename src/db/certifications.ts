@@ -19,11 +19,11 @@ import type { Certification } from '../argus/types.js';
 export async function insertCertification(c: Certification): Promise<number> {
   return withTransaction(async (tx) => {
     const parent = await tx.query<{ id: string }>(
-      `INSERT INTO redbot.certifications
+      `INSERT INTO certifications
          (draft_id, thread_id, verdict, certified_at, model, model_analyze, model_draft,
           resolution_resolved, resolution_detail, refutation_ran, citations)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       RETURNING id::text AS id`,
+       RETURNING id AS id`,
       [
         c.draftId, c.threadId, c.verdict, c.certifiedAt, c.model,
         c.models?.analyze ?? null, c.models?.draft ?? null,
@@ -31,7 +31,9 @@ export async function insertCertification(c: Certification): Promise<number> {
         // EB-40: distinguishes a refutation that completed and found nothing from one
         // that timed out. They produce different verdicts, so the set is recorded rather
         // than inferred from which claims were attacked.
-        c.refutationRan ?? null,
+        // NULL and '[]' are different facts here (see 0007's note on this column), so the null
+        // is preserved rather than collapsed into an empty JSON array.
+        c.refutationRan ? JSON.stringify(c.refutationRan) : null,
         c.citations === undefined ? null : JSON.stringify(c.citations)
       ]
     );
@@ -42,17 +44,17 @@ export async function insertCertification(c: Certification): Promise<number> {
     // this run did not actually extract.
     for (const cl of c.claims) {
       await tx.query(
-        `INSERT INTO redbot.certification_claims
+        `INSERT INTO certification_claims
            (cert_id, claim_id, text, type, evidence_class, evidence_detail, confidence, depends_on, source_quote)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [certId, cl.id, cl.text, cl.type, cl.evidenceClass, cl.evidenceDetail,
-         cl.confidence, cl.dependsOn ?? [], cl.sourceQuote]
+         cl.confidence, JSON.stringify(cl.dependsOn ?? []), cl.sourceQuote]
       );
     }
 
     for (const x of c.contradictions) {
       await tx.query(
-        `INSERT INTO redbot.certification_contradictions
+        `INSERT INTO certification_contradictions
            (cert_id, claim_id, kind, statement, evidence_class, evidence_detail, fatal)
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
         [certId, x.claimId, x.kind, x.statement, x.evidenceClass, x.evidenceDetail, x.fatal]
@@ -61,7 +63,7 @@ export async function insertCertification(c: Certification): Promise<number> {
 
     for (const e of c.epistemic) {
       await tx.query(
-        `INSERT INTO redbot.certification_epistemic_issues
+        `INSERT INTO certification_epistemic_issues
            (cert_id, claim_id, language_certainty, supported_certainty, quote, detail)
          VALUES ($1,$2,$3,$4,$5,$6)`,
         [certId, e.claimId, e.languageCertainty, e.supportedCertainty, e.quote, e.detail]
@@ -70,7 +72,7 @@ export async function insertCertification(c: Certification): Promise<number> {
 
     for (const r of c.reasons) {
       await tx.query(
-        `INSERT INTO redbot.certification_reasons (cert_id, rule, claim_id, detail)
+        `INSERT INTO certification_reasons (cert_id, rule, claim_id, detail)
          VALUES ($1,$2,$3,$4)`,
         [certId, r.rule, r.claimId ?? null, r.detail]
       );
@@ -78,7 +80,7 @@ export async function insertCertification(c: Certification): Promise<number> {
 
     for (const v of c.invalidated) {
       await tx.query(
-        `INSERT INTO redbot.certification_invalidations (cert_id, claim_id, because_of)
+        `INSERT INTO certification_invalidations (cert_id, claim_id, because_of)
          VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
         [certId, v.claimId, v.becauseOf]
       );
@@ -86,7 +88,7 @@ export async function insertCertification(c: Certification): Promise<number> {
 
     for (const s of c.resolution.signals ?? []) {
       await tx.query(
-        `INSERT INTO redbot.certification_resolution_signals
+        `INSERT INTO certification_resolution_signals
            (cert_id, where_found, matched, context, by_original_poster)
          VALUES ($1,$2,$3,$4,$5)`,
         [certId, s.where, s.matched, s.context, s.byOriginalPoster]
@@ -149,32 +151,36 @@ export async function selectCertifications(db: Db, scope: CertScope = {}): Promi
   const parents = await db.query<Row>(
     `SELECT id, draft_id, thread_id, verdict, certified_at, model, model_analyze, model_draft,
             resolution_resolved, resolution_detail, refutation_ran, citations
-       FROM redbot.certifications
-      ${byDraft ? 'WHERE draft_id = ANY($1)' : ''}
+       FROM certifications
+      ${byDraft ? 'WHERE draft_id IN (SELECT j.value FROM json_each($1) j)' : ''}
       ${paged ? 'ORDER BY id DESC LIMIT $1 OFFSET $2' : 'ORDER BY id'}`,
-    byDraft ? [scope.draftIds] : (paged ? [limit, offset] : [])
+    byDraft ? [JSON.stringify(scope.draftIds)] : (paged ? [limit, offset] : [])
   );
   if (paged) parents.rows.reverse();          // a log reads oldest-first within its page
   if (!parents.rows.length) return [];
 
-  /* The children, restricted to the parents actually selected. `= ANY($1)` on the primary-key
-     side of each foreign key, so these are index lookups rather than scans. */
-  const ids = parents.rows.map((p) => Number(p.id));
-  const only = 'WHERE cert_id = ANY($1)';
+  /* The children, restricted to the parents actually selected. `json_each` over the primary-key
+     side of each foreign key, so these are index lookups rather than scans.
+
+     The id list is JSON-encoded once and reused for all six queries. json_each yields TEXT, and
+     cert_id is INTEGER — SQLite compares those by the column's INTEGER affinity, so '7' matches
+     7. Encoding the numbers as JSON numbers rather than strings keeps that from mattering. */
+  const ids = JSON.stringify(parents.rows.map((p) => Number(p.id)));
+  const only = 'WHERE cert_id IN (SELECT j.value FROM json_each($1) j)';
   const [claims, contras, epis, reasons, invalid, signals] = await Promise.all([
     db.query<Row>(`SELECT cert_id, claim_id, text, type, evidence_class, evidence_detail,
                           confidence, depends_on, source_quote
-                     FROM redbot.certification_claims ${only} ORDER BY cert_id, claim_id`, [ids]),
+                     FROM certification_claims ${only} ORDER BY cert_id, claim_id`, [ids]),
     db.query<Row>(`SELECT cert_id, claim_id, kind, statement, evidence_class, evidence_detail, fatal
-                     FROM redbot.certification_contradictions ${only} ORDER BY id`, [ids]),
+                     FROM certification_contradictions ${only} ORDER BY id`, [ids]),
     db.query<Row>(`SELECT cert_id, claim_id, language_certainty, supported_certainty, quote, detail
-                     FROM redbot.certification_epistemic_issues ${only} ORDER BY id`, [ids]),
+                     FROM certification_epistemic_issues ${only} ORDER BY id`, [ids]),
     db.query<Row>(`SELECT cert_id, rule, claim_id, detail
-                     FROM redbot.certification_reasons ${only} ORDER BY id`, [ids]),
+                     FROM certification_reasons ${only} ORDER BY id`, [ids]),
     db.query<Row>(`SELECT cert_id, claim_id, because_of
-                     FROM redbot.certification_invalidations ${only} ORDER BY cert_id, claim_id`, [ids]),
+                     FROM certification_invalidations ${only} ORDER BY cert_id, claim_id`, [ids]),
     db.query<Row>(`SELECT cert_id, where_found, matched, context, by_original_poster
-                     FROM redbot.certification_resolution_signals ${only} ORDER BY id`, [ids])
+                     FROM certification_resolution_signals ${only} ORDER BY id`, [ids])
   ]);
 
   const cid = (r: Row) => Number(r.cert_id);

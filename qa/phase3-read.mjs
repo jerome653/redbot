@@ -13,9 +13,13 @@
  * Run: node qa/phase3-read.mjs
  */
 import { chromium } from 'playwright';
-import { writeFileSync, appendFileSync } from 'node:fs';
+import { writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const OUT = 'qa/evidence/phase3-read.log';
+/* qa/evidence/ has no tracked files, so it does not exist on a fresh clone and every
+   gate here used to crash with ENOENT before running a single check (B2). */
+mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, `PHASE 3 — reading, instrumented\n${new Date().toISOString()}\n\n`);
 const log = (s) => { console.log(s); appendFileSync(OUT, s + '\n'); };
 

@@ -83,7 +83,7 @@ export interface ThreadPageRow {
  */
 export async function pageThreads(db: Db, q: PageQuery = {}): Promise<Page<ThreadPageRow>> {
   const { offset, limit } = clampPage(q);
-  const total = await countRows(db, 'redbot.opportunity_assessments');
+  const total = await countRows(db, 'opportunity_assessments');
 
   const r = await db.query<{
     thread_id: string; title: string; permalink: string; verdict: string; score: number;
@@ -91,18 +91,25 @@ export async function pageThreads(db: Db, q: PageQuery = {}): Promise<Page<Threa
     reasons: string[]; subreddit: string | null; comment_count: number | null; age_text: string | null;
     draft_id: string | null; draft_status: string | null;
   }>(
-    `SELECT a.thread_id, a.title, a.permalink, a.verdict::text AS verdict, a.score,
+    /* One draft per thread in practice; picking exactly one keeps that true for the join even
+       if a second is ever written, rather than duplicating the thread's row on this screen.
+
+       This was `LEFT JOIN LATERAL (… ORDER BY created_at DESC LIMIT 1) d ON true`. SQLite has
+       no LATERAL, so the newest draft is fetched by two correlated scalar subqueries instead.
+       They agree with each other because both order by the same total key: `created_at DESC,
+       id DESC`. Ordering by created_at alone — which the LATERAL did, since it selected both
+       columns in one pass — would let two drafts written in the same millisecond return the id
+       of one and the status of the other. The LATERAL could not produce that mismatch; two
+       subqueries can, so the tie-break is what makes the translation safe. */
+    `SELECT a.thread_id, a.title, a.permalink, a.verdict AS verdict, a.score,
             a.thesis_why_thread, a.thesis_what_new, a.thesis_why_not_silent, a.reasons,
             t.subreddit, t.comment_count, t.age_text,
-            d.id AS draft_id, d.status::text AS draft_status
-       FROM redbot.opportunity_assessments a
-       LEFT JOIN redbot.threads t ON t.id = a.thread_id
-       /* One draft per thread in practice; DISTINCT ON keeps that true for the join even if a
-          second is ever written, rather than duplicating the thread's row on this screen. */
-       LEFT JOIN LATERAL (
-         SELECT id, status FROM redbot.drafts WHERE thread_id = a.thread_id
-          ORDER BY created_at DESC LIMIT 1
-       ) d ON true
+            (SELECT d.id     FROM drafts d WHERE d.thread_id = a.thread_id
+              ORDER BY d.created_at DESC, d.id DESC LIMIT 1) AS draft_id,
+            (SELECT d.status FROM drafts d WHERE d.thread_id = a.thread_id
+              ORDER BY d.created_at DESC, d.id DESC LIMIT 1) AS draft_status
+       FROM opportunity_assessments a
+       LEFT JOIN threads t ON t.id = a.thread_id
       ORDER BY a.score DESC, a.thread_id
       LIMIT $1 OFFSET $2`,
     [limit, offset]
@@ -142,12 +149,12 @@ export async function threadFunnel(db: Db): Promise<{
   gapsAnalysed: number; drafted: number;
 }> {
   const r = await db.query<Record<string, string>>(
-    `SELECT (SELECT count(*) FROM redbot.threads)                                        AS threads,
-            (SELECT count(*) FROM redbot.opportunity_assessments)                        AS assessed,
-            (SELECT count(*) FROM redbot.opportunity_assessments WHERE verdict='contribute') AS contribute,
-            (SELECT count(*) FROM redbot.opportunity_assessments WHERE verdict='skip')   AS skip,
-            (SELECT count(*) FROM redbot.gap_analyses)                                   AS gaps,
-            (SELECT count(*) FROM redbot.drafts)                                         AS drafted`
+    `SELECT (SELECT count(*) FROM threads)                                        AS threads,
+            (SELECT count(*) FROM opportunity_assessments)                        AS assessed,
+            (SELECT count(*) FROM opportunity_assessments WHERE verdict='contribute') AS contribute,
+            (SELECT count(*) FROM opportunity_assessments WHERE verdict='skip')   AS skip,
+            (SELECT count(*) FROM gap_analyses)                                   AS gaps,
+            (SELECT count(*) FROM drafts)                                         AS drafted`
   );
   const row = r.rows[0] ?? {};
   const n = (k: string) => Number(row[k] ?? 0);
@@ -174,16 +181,16 @@ export async function pageDraftIds(
   const { offset, limit } = clampPage(q);
   const wantStatus = typeof q.status === 'string' && q.status ? q.status : null;
 
-  const totalRes = await db.query<{ n: string }>(
+  const totalRes = await db.query<{ n: number }>(
     wantStatus
-      ? 'SELECT count(*)::text AS n FROM redbot.drafts WHERE status::text = $1'
-      : 'SELECT count(*)::text AS n FROM redbot.drafts',
+      ? 'SELECT count(*) AS n FROM drafts WHERE status = $1'
+      : 'SELECT count(*) AS n FROM drafts',
     wantStatus ? [wantStatus] : []
   );
 
   const rows = await db.query<{ id: string }>(
-    `SELECT id FROM redbot.drafts
-      ${wantStatus ? 'WHERE status::text = $3' : ''}
+    `SELECT id FROM drafts
+      ${wantStatus ? 'WHERE status = $3' : ''}
       ORDER BY created_at DESC, id
       LIMIT $1 OFFSET $2`,
     wantStatus ? [limit, offset, wantStatus] : [limit, offset]
@@ -225,16 +232,16 @@ export interface OutcomePageRow {
  */
 export async function pageOutcomes(db: Db, q: PageQuery = {}): Promise<Page<OutcomePageRow>> {
   const { offset, limit } = clampPage(q);
-  const total = await countRows(db, 'redbot.history');
+  const total = await countRows(db, 'history');
 
   const r = await db.query<{
     id: string; ts: Date; kind: string; account: string | null; subreddit: string | null;
     thread_url: string | null; permalink: string | null; status: string | null;
     summary: string; data: unknown;
   }>(
-    `SELECT id, ts, kind::text AS kind, account, subreddit, thread_url, permalink,
-            status::text AS status, summary, data
-       FROM redbot.history
+    `SELECT id, ts, kind AS kind, account, subreddit, thread_url, permalink,
+            status AS status, summary, data
+       FROM history
       ORDER BY id DESC
       LIMIT $1 OFFSET $2`,
     [limit, offset]
@@ -286,15 +293,15 @@ export interface ObservationPageRow {
  */
 export async function pageObservations(db: Db, q: PageQuery = {}): Promise<Page<ObservationPageRow>> {
   const { offset, limit } = clampPage(q);
-  const total = await countRows(db, 'redbot.observations');
+  const total = await countRows(db, 'observations');
 
   const r = await db.query<{
     ts: Date; account: string | null; kind: string; vector: string; value: unknown;
     note: string | null; checkpoint: string | null; permalink: string | null;
   }>(
-    `SELECT ts, account, kind::text AS kind, vector::text AS vector, value, note,
-            checkpoint::text AS checkpoint, permalink
-       FROM redbot.observations
+    `SELECT ts, account, kind AS kind, vector AS vector, value, note,
+            checkpoint AS checkpoint, permalink
+       FROM observations
       ORDER BY id DESC
       LIMIT $1 OFFSET $2`,
     [limit, offset]
@@ -324,9 +331,9 @@ export async function pageObservations(db: Db, q: PageQuery = {}): Promise<Page<
  */
 export async function draftCounts(db: Db): Promise<{ total: number; pending: number }> {
   const r = await db.query<{ total: string; pending: string }>(
-    `SELECT count(*)::text AS total,
-            count(*) FILTER (WHERE status = 'pending')::text AS pending
-       FROM redbot.drafts`
+    `SELECT count(*) AS total,
+            count(*) FILTER (WHERE status = 'pending') AS pending
+       FROM drafts`
   );
   return { total: Number(r.rows[0]?.total ?? 0), pending: Number(r.rows[0]?.pending ?? 0) };
 }
@@ -343,8 +350,8 @@ export interface CheckpointTally { checkpoint: string; taken: number; latestTs: 
  */
 export async function checkpointSummary(db: Db): Promise<CheckpointTally[]> {
   const r = await db.query<{ checkpoint: string; n: string; latest: Date | null }>(
-    `SELECT checkpoint::text AS checkpoint, count(*)::text AS n, max(ts) AS latest
-       FROM redbot.observations
+    `SELECT checkpoint AS checkpoint, count(*) AS n, max(ts) AS latest
+       FROM observations
       WHERE checkpoint IS NOT NULL
       GROUP BY checkpoint`
   );
@@ -356,6 +363,16 @@ export async function checkpointSummary(db: Db): Promise<CheckpointTally[]> {
 }
 
 /**
+ * The only tables this module may count. An ALLOW-LIST, not a pattern.
+ *
+ * The guard used to be `/^redbot\.[a-z_]+$/`, and dropping the schema prefix would have left
+ * `/^[a-z_]+$/` — which accepts any identifier and so guards almost nothing. Since there are
+ * exactly three call sites and all three pass a literal, naming them is both stricter than the
+ * original and impossible to get wrong later.
+ */
+const COUNTABLE = new Set(['opportunity_assessments', 'history', 'observations']);
+
+/**
  * COUNT(*) on a table named by this module, never by a caller.
  *
  * The table name cannot be a bound parameter, so it is interpolated — which is exactly the
@@ -364,7 +381,7 @@ export async function checkpointSummary(db: Db): Promise<CheckpointTally[]> {
  * loudly instead of reaching the planner.
  */
 async function countRows(db: Db, table: string): Promise<number> {
-  if (!/^redbot\.[a-z_]+$/.test(table)) throw new Error(`refusing to count "${table}"`);
-  const r = await db.query<{ n: string }>(`SELECT count(*)::text AS n FROM ${table}`);
+  if (!COUNTABLE.has(table)) throw new Error(`refusing to count "${table}"`);
+  const r = await db.query<{ n: number }>(`SELECT count(*) AS n FROM ${table}`);
   return Number(r.rows[0]?.n ?? 0);
 }

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "redbot MVP — assists a human engaging on Reddit through a real browser session. One account, one profile, local-first.",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "bin": {
     "redbot": "dist/cli.js"
@@ -14,18 +14,26 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "redbot": "node dist/cli.js",
-    "test": "tsc && node db/reset-test-db.mjs && node --env-file=db/.env.test --test \"dist/test/*.test.js\" \"tools/operator/server.test.mjs\" \"tools/product/server.test.mjs\"",
-    "test:ui": "node --test --test-timeout=180000 tools/product/ui.test.mjs",
-    "db:test-setup": "node db/setup-test-db.mjs",
-    "typecheck": "tsc --noEmit"
+    "test": "tsc && node --env-file=db/sqlite/.env.test db/sqlite/reset-test-db.mjs && node --env-file=db/sqlite/.env.test --test \"dist/test/*.test.js\" \"db/sqlite/schema.test.mjs\" \"tools/operator/server.test.mjs\" \"tools/product/server.test.mjs\"",
+    "test:ui": "node --env-file=db/sqlite/.env.test --test --test-timeout=180000 tools/product/ui.test.mjs",
+    "db:migrate": "node db/sqlite/migrate.mjs up",
+    "db:status": "node db/sqlite/migrate.mjs status",
+    "db:verify": "node db/sqlite/migrate.mjs verify",
+    "typecheck": "tsc --noEmit",
+    "start": "tsc && electron .",
+    "start:nobuild": "electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
-    "pg": "^8.22.0",
     "playwright": "^1.60.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
-    "@types/pg": "^8.20.0",
+    "@types/node": "^22.20.1",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.7.0"
-  }
+  },
+  "productName": "redbot",
+  "main": "electron/main.mjs"
 }

@@ -66,3 +66,16 @@ tools/product/.ui-shots/
 DEPLOY-READINESS-2026-07-30.md
 PIPELINE-FINDINGS.md
 WHY-NOT-DEPLOYABLE.md
+
+# Console telemetry, written at runtime. Lives under the data root now (S1); this rule
+# keeps the old location from being re-committed if an older build writes there.
+tools/operator/run-history.jsonl
+
+# Electron build output and captures — generated, large, and machine-specific.
+release/
+electron/.shots/
+.pkgboot*/
+.provtest/
+.exporttest/
+.eboot*/
+.pkgtest/

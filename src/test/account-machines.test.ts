@@ -1,7 +1,7 @@
 /**
  * What syncs between machines, and what must not.
  *
- * THE SPLIT THIS PINS. `redbot.accounts` describes an account — role, subreddits, ceiling,
+ * THE SPLIT THIS PINS. `accounts` describes an account — role, subreddits, ceiling,
  * quiet hours — and that description is worth sharing between computers. A Chrome profile
  * folder and a debugging port are not: the folder holds a session Windows DPAPI has bound to
  * one user on one machine (measured — the cookies carry the `v10` tag and Local State holds a
@@ -9,7 +9,7 @@
  * On the development machine 9222 is Lenovo Vantage's Edge WebView, which answers the debugging
  * protocol fluently and would be driven as though it were the account's own Chrome.
  *
- * So the binding lives in `redbot.account_machines`, keyed by machine, and these tests are two
+ * So the binding lives in `account_machines`, keyed by machine, and these tests are two
  * machines sharing one database.
  */
 import { test } from 'node:test';
@@ -17,7 +17,8 @@ import assert from 'node:assert/strict';
 import { getPool, closePool } from '../db.js';
 import {
   upsertAccounts, loadAccountsFromDb, boundHandles, bindAccountToMachine,
-  unbindAccountFromMachine, machinesForAccount, deleteAccount
+  unbindAccountFromMachine, machinesForAccount, deleteAccount,
+  setSelectedAccount, clearSelectedAccount, selectedHandleForMachine
 } from '../db/accounts.js';
 import { sanitiseMachineName } from '../machine.js';
 
@@ -120,9 +121,13 @@ test('one machine cannot give two accounts the same port', async () => {
 
     /* The console checks this before it writes; the constraint is what makes it true when two
        clicks race. Two accounts on one port is two Reddit identities in one browser. */
+    /* Postgres named the constraint in the error ("one_account_per_port_per_machine"); SQLite
+       does not carry a table-level constraint's NAME into its message, so it names the columns.
+       The columns are the stronger assertion anyway — a different unique violation on this table
+       would no longer satisfy it. */
     await assert.rejects(
       () => bindAccountToMachine(getPool(), A, 'Sync_Test_Other', 'chrome-profile-z', 9222),
-      /one_account_per_port_per_machine/,
+      /UNIQUE constraint failed: account_machines\.machine, account_machines\.debug_port/,
       'the database must refuse it, not merely the UI'
     );
 
@@ -139,10 +144,10 @@ test('one machine cannot give two accounts the same port', async () => {
 test('an account with no binding falls back to the legacy column, so an old install still works', async () => {
   await clean();
   try {
-    /* Exactly the shape every pre-0013 row has: values in redbot.accounts, no binding anywhere.
+    /* Exactly the shape every pre-0013 row has: values in accounts, no binding anywhere.
        0013 must be a no-op for an install that has only ever run on one computer. */
     await getPool().query(
-      `INSERT INTO redbot.accounts (handle, role, profile_dir, debug_port) VALUES ($1,'legacy','chrome-profile-a',9222)`,
+      `INSERT INTO accounts (handle, role, profile_dir, debug_port) VALUES ($1,'legacy','chrome-profile-a',9222)`,
       [HANDLE]
     );
     const seen = (await loadAccountsFromDb(getPool(), A)).find((x) => x.handle === HANDLE)!;
@@ -189,3 +194,68 @@ test('deleting the account takes every machine’s binding with it', async () =>
 });
 
 test.after(async () => { await closePool(); });
+
+/* ==================================================================== *
+ * Which account this machine acts as (migration 0015)
+ *
+ * `selectedAccount()` used to resolve from REDBOT_ACCOUNT and nothing else. A desktop window has no
+ * shell, so an install with two accounts could never answer: `config.browser.cdpEndpoint` raised
+ * NoAccountError, src/cli.ts refused to dispatch, and `doctor` reported a blocking failure with
+ * nowhere to fix it. These tests pin the three-source precedence and the database invariant.
+ * ==================================================================== */
+test('a selection is recorded per machine, and only one can be selected', async () => {
+  await clean();
+  try {
+    await upsertAccounts(getPool(), [{ handle: HANDLE }], A);
+    await upsertAccounts(getPool(), [{ handle: 'Sync_Test_Other' }], A);
+
+    assert.equal(await selectedHandleForMachine(getPool(), A), null,
+      'nothing is selected until somebody chooses — never a silent default');
+
+    await setSelectedAccount(getPool(), HANDLE, A);
+    assert.equal(await selectedHandleForMachine(getPool(), A), HANDLE);
+
+    /* Switching must MOVE the selection, not add a second. The database enforces this with a
+       partial unique index, so two racing clicks cannot leave two. */
+    await setSelectedAccount(getPool(), 'Sync_Test_Other', A);
+    assert.equal(await selectedHandleForMachine(getPool(), A), 'Sync_Test_Other');
+    const n = await getPool().query(
+      'SELECT handle FROM account_machines WHERE machine = $1 AND selected = 1', [A]);
+    assert.equal(n.rowCount, 1, 'exactly one selection per machine');
+  } finally { await clean(); await deleteAccount(getPool(), 'Sync_Test_Other'); }
+});
+
+test('the choice is per MACHINE — two computers select independently', async () => {
+  await clean();
+  try {
+    await upsertAccounts(getPool(), [{ handle: HANDLE }], A);
+    await upsertAccounts(getPool(), [{ handle: 'Sync_Test_Other' }], A);
+    await setSelectedAccount(getPool(), HANDLE, A);
+    await setSelectedAccount(getPool(), 'Sync_Test_Other', B);
+
+    assert.equal(await selectedHandleForMachine(getPool(), A), HANDLE);
+    assert.equal(await selectedHandleForMachine(getPool(), B), 'Sync_Test_Other',
+      "one machine's choice must not become the other's — that is why 0013 split this off accounts");
+  } finally { await clean(); await deleteAccount(getPool(), 'Sync_Test_Other'); }
+});
+
+test('an account that is not a record cannot be selected', async () => {
+  await clean();
+  try {
+    // Otherwise a selection could name nobody, and every command would refuse with a confusing
+    // "not a configured account" long after the mistake was made.
+    await assert.rejects(
+      () => setSelectedAccount(getPool(), 'Never_Existed_Acct', A),
+      /is not a configured account/);
+  } finally { await clean(); }
+});
+
+test('clearing the selection returns the install to refusing', async () => {
+  await clean();
+  try {
+    await upsertAccounts(getPool(), [{ handle: HANDLE }], A);
+    await setSelectedAccount(getPool(), HANDLE, A);
+    await clearSelectedAccount(getPool(), A);
+    assert.equal(await selectedHandleForMachine(getPool(), A), null);
+  } finally { await clean(); }
+});

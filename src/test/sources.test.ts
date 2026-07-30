@@ -42,7 +42,7 @@ const MINE = ['SourcesTestSub', 'SourcesTestTwo', 'SourcesTestThree'];
  */
 async function clear(): Promise<void> {
   await getPool().query(
-    `DELETE FROM redbot.sources WHERE value = ANY($1) OR value LIKE 'sources-test%'`, [MINE]
+    `DELETE FROM sources WHERE value IN (SELECT j.value FROM json_each($1) j) OR value LIKE 'sources-test%'`, [JSON.stringify(MINE)]
   );
   rmSync(sourcesPath(), { force: true });
 }
@@ -154,7 +154,7 @@ test('a corrupt sources.json is refused by add, and left exactly as written', as
     assert.equal(readFileSync(sourcesPath(), 'utf8'), corrupt);
     // And nothing reached the database either — the two stores stay in lockstep.
     const r2 = await getPool().query(
-      'SELECT 1 FROM redbot.sources WHERE value = $1', ['SourcesTestNever']
+      'SELECT 1 FROM sources WHERE value = $1', ['SourcesTestNever']
     );
     assert.equal(r2.rowCount, 0, 'a refused add must not write a row');
   } finally {

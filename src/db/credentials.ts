@@ -1,5 +1,5 @@
 /**
- * credentials — sealed secrets in redbot.credentials.
+ * credentials — sealed secrets in credentials.
  *
  * This module moves CIPHERTEXT. It never encrypts, never decrypts and never sees a plaintext
  * secret; that is src/vault.ts's job, and keeping the two apart is what makes it possible to
@@ -46,7 +46,7 @@ export async function putCredential(
   db: Db, scope: string, name: string, sealed: SealedSecret
 ): Promise<void> {
   await db.query(
-    `INSERT INTO redbot.credentials
+    `INSERT INTO credentials
        (scope, name, algo, key_id, iv, auth_tag, ciphertext, hint)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT (scope, name) DO UPDATE SET
@@ -67,7 +67,7 @@ export async function putCredential(
 export async function getCredential(db: Db, scope: string, name: string): Promise<SealedSecret | null> {
   const r = await db.query<SealedRow>(
     `SELECT algo, key_id, iv, auth_tag, ciphertext, hint
-       FROM redbot.credentials WHERE scope = $1 AND name = $2`,
+       FROM credentials WHERE scope = $1 AND name = $2`,
     [scope, name]
   );
   const row = r.rows[0];
@@ -86,7 +86,7 @@ export async function getCredential(db: Db, scope: string, name: string): Promis
 export async function listCredentials(db: Db): Promise<CredentialSummary[]> {
   const r = await db.query<SummaryRow>(
     `SELECT scope, name, key_id, hint, created_at, updated_at, last_used_at
-       FROM redbot.credentials ORDER BY scope, name`
+       FROM credentials ORDER BY scope, name`
   );
   return r.rows.map((row) => ({
     scope: row.scope,
@@ -102,7 +102,7 @@ export async function listCredentials(db: Db): Promise<CredentialSummary[]> {
 /** Remove a secret. Reports whether there was one, so a caller can tell "gone" from "never there". */
 export async function deleteCredential(db: Db, scope: string, name: string): Promise<boolean> {
   const r = await db.query(
-    'DELETE FROM redbot.credentials WHERE scope = $1 AND name = $2', [scope, name]
+    'DELETE FROM credentials WHERE scope = $1 AND name = $2', [scope, name]
   );
   return (r.rowCount ?? 0) > 0;
 }
@@ -116,6 +116,8 @@ export async function deleteCredential(db: Db, scope: string, name: string): Pro
  */
 export async function touchCredentialUsed(db: Db, scope: string, name: string): Promise<void> {
   await db.query(
-    'UPDATE redbot.credentials SET last_used_at = now() WHERE scope = $1 AND name = $2', [scope, name]
+    // A template literal, because the SQLite `now` expression contains single quotes of its own.
+    `UPDATE credentials SET last_used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE scope = $1 AND name = $2`, [scope, name]
   );
 }

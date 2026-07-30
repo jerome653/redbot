@@ -1,0 +1,72 @@
+-- +no-transaction
+--
+-- 0001_init — conventions, and the one setting that lives in the file.
+--
+-- The marker above is the same one db/migrate.mjs (Postgres) defined for "the rare statement
+-- the engine refuses to run inside a transaction block". It is needed here for exactly one
+-- reason: `PRAGMA journal_mode = WAL` fails with "cannot change into wal mode from within a
+-- transaction". Nothing else in this directory uses it.
+--
+-- This directory is the SQLite translation of db/migrations/ (Postgres). The numbering is
+-- deliberately 1:1 with that directory: 0011 here is 0011 there. Where SQLite cannot express a
+-- step the same way, the file says so and reaches the same END STATE — it never quietly does
+-- something else.
+--
+-- WHAT CHANGED FROM THE POSTGRES SET, AND WHY. Each of these is a translation, not a redesign:
+--
+--   * No schema. SQLite has no `CREATE SCHEMA`, so `redbot.threads` becomes `threads`. The
+--     Postgres set used a named schema so a second application could share the database; a
+--     single-user desktop file has nobody to share with, and the qualification bought nothing.
+--
+--   * No enum types. The 29 `CREATE TYPE ... AS ENUM` become `TEXT ... CHECK (col IN (...))`.
+--     The property 0001_init.up.sql (Postgres) actually asked for is kept verbatim: "closed
+--     vocabularies from the TypeScript source become native enums, so a typo is rejected by the
+--     database rather than discovered in a report". A CHECK rejects the typo at the same moment,
+--     with a message that names the column.
+--
+--   * Timestamps are TEXT holding ISO-8601 UTC, `YYYY-MM-DDTHH:MM:SS.sssZ` — exactly what
+--     Date#toISOString() produces, which is exactly what the engine already writes. That string
+--     sorts lexicographically, so `ORDER BY ts DESC` and `ts <= $1` keep working unchanged.
+--     `strftime('%Y-%m-%dT%H:%M:%fZ','now')` reproduces the same shape byte for byte, so it is
+--     the direct replacement for `now()`. Every such column carries a shape CHECK, because
+--     losing the `timestamptz` type means losing the guarantee that came with it.
+--
+--   * `text[]` and `jsonb` are both TEXT holding JSON, with `CHECK (json_valid(col))`. The
+--     application already writes these with JSON.stringify; src/db.ts parses them on the way
+--     out. An array column defaults to '[]' where Postgres defaulted to '{}'.
+--
+--   * `bytea` becomes BLOB. Note that SQLite hands a BLOB back as a Uint8Array, not a Buffer;
+--     src/db.ts wraps it, because src/vault.ts is typed for Buffer.
+--
+--   * `boolean` becomes INTEGER CHECK (col IN (0,1)). src/db.ts converts 0/1 back to
+--     false/true, because the row mappers are typed for boolean.
+--
+--   * `bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY` becomes
+--     `INTEGER PRIMARY KEY AUTOINCREMENT`. AUTOINCREMENT rather than a bare rowid alias
+--     specifically so a deleted id is never handed out again — identity semantics, and
+--     src/db/summary.ts orders by `id DESC` to find the newest reading, which a reused id
+--     would silently corrupt.
+--
+--   * `COMMENT ON` does not exist. All 46 comments are preserved as `--` comments beside the
+--     thing they describe. They are documentation this project treats as load-bearing, so none
+--     of them was dropped in translation.
+--
+--   * Postgres regex CHECKs (`col ~ '^...$'`) become `length()` + `GLOB` pairs. GLOB is
+--     case-sensitive and its `[^...]` class is negated, so `col NOT GLOB '*[^A-Za-z0-9_-]*'`
+--     is "contains no character outside this set". A trailing `-` inside a GLOB class is a
+--     literal hyphen, not a range — which is why every such class here ends with `-`.
+--
+--   * The `redbot.set_updated_at()` plpgsql function has no SQLite equivalent, so each of the
+--     ten tables that had the trigger gets its own AFTER UPDATE trigger. See the note on
+--     recursion in 0002.
+--
+-- WAL is set here rather than by the application because it is a property of the FILE, not of
+-- a connection: it survives in the database header, so every later process — the console, a
+-- spawned CLI child — inherits it without having to remember. It is what allows a reader and a
+-- writer in two processes at once, which is the shape this application already has.
+PRAGMA journal_mode = WAL;
+
+-- Checked by src/db.ts on every connection as well, because unlike journal_mode this one is
+-- per-connection and defaults OFF in SQLite. Eleven tables below declare REFERENCES with
+-- ON DELETE CASCADE / RESTRICT / SET NULL; without this they are decoration.
+PRAGMA foreign_keys = ON;

@@ -9,7 +9,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT } from './config.js';
+import { paths } from './config.js';
 import { loadThreads, loadGaps, loadAssessments, loadDrafts } from './store.js';
 import {
   loadReviews, summarizeReviews, REJECT_REASONS, EDIT_REASONS, APPROVE_REASONS, reviewsPath,
@@ -22,7 +22,8 @@ import { RESTATES } from './novelty.js';
 import { prefilter } from './commands/opportunity.js';
 import type { GapAnalysis } from './types.js';
 
-export const reportsDir = join(ROOT, 'reports');
+/** Re-exported so existing importers keep working; the location itself lives in config.ts. */
+export const reportsDir = paths.reports;
 
 const pct = (n: number, d: number): string =>
   d === 0 ? 'no data (0 samples)' : `${n}/${d} (${Math.round((n / d) * 100)}%)`;

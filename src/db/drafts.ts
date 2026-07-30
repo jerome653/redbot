@@ -78,11 +78,11 @@ const SELECT = `
          novelty_issues, has_disclosure, lint_issues, created_at, model, account, status,
          cert_verdict, cert_at, cert_claims, cert_fatal_contradictions,
          published_url, comment_permalink, comment_id, decided_at
-    FROM redbot.drafts`;
+    FROM drafts`;
 
 export async function upsertDraft(db: Db, d: Draft): Promise<void> {
   await db.query(
-    `INSERT INTO redbot.drafts
+    `INSERT INTO drafts
        (id, thread_id, permalink, title, body,
         contribution_why_thread, contribution_what_new, contribution_why_not_silent,
         novelty_issues, has_disclosure, lint_issues, created_at, model, account, status,
@@ -117,7 +117,7 @@ export async function upsertDraft(db: Db, d: Draft): Promise<void> {
       d.contribution?.whyThread ?? null,
       d.contribution?.whatNew ?? null,
       d.contribution?.whyNotSilent ?? null,
-      d.noveltyIssues ?? [], d.hasDisclosure, d.lintIssues ?? [],
+      JSON.stringify(d.noveltyIssues ?? []), d.hasDisclosure, JSON.stringify(d.lintIssues ?? []),
       d.createdAt, d.model, d.account ?? null, d.status,
       d.certification?.verdict ?? null,
       d.certification?.at ?? null,
@@ -141,17 +141,21 @@ export async function loadDraftsFromDb(db: Db): Promise<Draft[]> {
  * assessment — and it only ever shows one page of them. Loading every draft to project
  * twenty-five was the expensive half of `/api/state`.
  *
- * An empty id list returns nothing WITHOUT going to the database: `= ANY('{}')` is a valid
- * query that scans and matches nothing, and the round trip is pure waste on a fresh install
- * where there are no drafts at all.
+ * An empty id list returns nothing WITHOUT going to the database: `json_each('[]')` is a valid
+ * query that yields no rows and matches nothing, and the round trip is pure waste on a fresh
+ * install where there are no drafts at all. (Postgres spelled the same non-problem
+ * `= ANY('{}')`.)
  */
 export async function loadDraftsByIds(db: Db, ids: string[]): Promise<Draft[]> {
   if (!ids.length) return [];
-  const r = await db.query<DraftRow>(`${SELECT} WHERE id = ANY($1) ORDER BY created_at, id`, [ids]);
+  const r = await db.query<DraftRow>(
+    `${SELECT} WHERE id IN (SELECT j.value FROM json_each($1) j) ORDER BY created_at, id`,
+    [JSON.stringify(ids)]
+  );
   return r.rows.map(toDraft);
 }
 
 export async function countDrafts(db: Db): Promise<number> {
-  const r = await db.query<{ n: string }>('SELECT count(*)::text AS n FROM redbot.drafts');
+  const r = await db.query<{ n: number }>('SELECT count(*) AS n FROM drafts');
   return Number(r.rows[0]?.n ?? 0);
 }

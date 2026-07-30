@@ -35,20 +35,20 @@ before(async () => {
   await cleanup();
   for (let i = 0; i < SEEDED; i++) {
     await db.query(
-      `INSERT INTO redbot.threads (id, permalink, title, subreddit, comment_count, age_text, collected_at, source)
-       VALUES ($1,$2,$3,'WordPress',5,'1 h ago', now(), 'read')`,
+      `INSERT INTO threads (id, permalink, title, subreddit, comment_count, age_text, collected_at, source)
+       VALUES ($1,$2,$3,'WordPress',5,'1 h ago', strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'read')`,
       [threadId(i), `/r/WordPress/${TAG}/${i}`, `${TAG} thread ${i}`]
     );
     /* HALF the assessments share one score on purpose. Ties are where an unstable sort shows a
        row on two pages, and a seed without them would let the bug through. */
     await db.query(
-      `INSERT INTO redbot.opportunity_assessments (thread_id, permalink, title, verdict, score, reasons, assessed_at)
-       VALUES ($1,$2,$3,$4,$5,'{}', now())`,
+      `INSERT INTO opportunity_assessments (thread_id, permalink, title, verdict, score, reasons, assessed_at)
+       VALUES ($1,$2,$3,$4,$5,'[]', strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
       [threadId(i), `/r/WordPress/${TAG}/${i}`, `${TAG} thread ${i}`,
        i % 3 === 0 ? 'skip' : 'contribute', i < SEEDED / 2 ? 50 : (i % 90)]
     );
     await db.query(
-      `INSERT INTO redbot.history (ts, kind, account, summary) VALUES (now(), 'read', $1, $2)`,
+      `INSERT INTO history (ts, kind, account, summary) VALUES (strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'read', $1, $2)`,
       [`${TAG}_acct`, `${TAG} entry ${i}`]
     );
   }
@@ -58,9 +58,9 @@ after(async () => { await cleanup(); await closePool(); });
 
 async function cleanup(): Promise<void> {
   const db = getPool();
-  await db.query(`DELETE FROM redbot.history WHERE summary LIKE '${TAG}%' OR account = '${TAG}_acct'`);
-  await db.query(`DELETE FROM redbot.opportunity_assessments WHERE title LIKE '${TAG}%'`);
-  await db.query(`DELETE FROM redbot.threads WHERE title LIKE '${TAG}%'`);
+  await db.query(`DELETE FROM history WHERE summary LIKE '${TAG}%' OR account = '${TAG}_acct'`);
+  await db.query(`DELETE FROM opportunity_assessments WHERE title LIKE '${TAG}%'`);
+  await db.query(`DELETE FROM threads WHERE title LIKE '${TAG}%'`);
 }
 
 test('a limit is clamped rather than trusted', () => {
@@ -188,8 +188,8 @@ test('a log page is cut by the database, and page two is the rows before it', as
   const RUN = 'pagetest-log';
   for (let i = 0; i < 40; i++) {
     await db.query(
-      `INSERT INTO redbot.trace (ts, run_id, stage, event, level)
-       VALUES (now(), $1, 'collect', $2, 'info')`, [RUN, `ev${String(i).padStart(3, '0')}`]
+      `INSERT INTO trace (ts, run_id, stage, event, level)
+       VALUES (strftime('%Y-%m-%dT%H:%M:%fZ','now'), $1, 'collect', $2, 'info')`, [RUN, `ev${String(i).padStart(3, '0')}`]
     );
   }
   try {
@@ -216,6 +216,6 @@ test('a log page is cut by the database, and page two is the rows before it', as
     assert.ok(lastOfPageTwo < firstOfPageOne,
               `page two must sit earlier in the log than page one (${lastOfPageTwo} < ${firstOfPageOne})`);
   } finally {
-    await db.query('DELETE FROM redbot.trace WHERE run_id = $1', [RUN]);
+    await db.query('DELETE FROM trace WHERE run_id = $1', [RUN]);
   }
 });

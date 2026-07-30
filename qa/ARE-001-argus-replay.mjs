@@ -25,7 +25,6 @@
  *
  * Run:  node qa/ARE-001-argus-replay.mjs
  */
-import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { certify } from '../dist/argus/certify.js';
@@ -33,17 +32,34 @@ import { FALSIFIABLE_TYPES } from '../dist/argus/types.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
-const CERTS = join(ROOT, 'data', 'certifications.jsonl');
 
-if (!existsSync(CERTS)) {
-  console.error('No certifications.jsonl on disk. Nothing to replay.');
-  process.exit(1);
+/**
+ * Certifications come from the DATABASE, not from data/certifications.jsonl.
+ *
+ * Two defects were stacked here (DEPLOY-READINESS B3). The file has not been written since the
+ * record moved into the database, and all of `data/` is gitignored — so the input could never
+ * exist on a fresh checkout. And absence was treated as FAILURE, which made this gate red by
+ * construction on every clean install.
+ *
+ * Absent input is now a SKIP with exit 0. A red that means "there is nothing to measure" is
+ * indistinguishable from a red that means "the engine is wrong", and the first kind teaches
+ * people to ignore the second.
+ */
+const { selectCertifications } = await import('../dist/db/certifications.js');
+const { getPool, closePool, ping } = await import('../dist/db.js');
+
+const health = await ping();
+if (!health.ok) {
+  console.log(`SKIP — the database is not usable: ${health.detail}`);
+  process.exit(0);
 }
 
-const records = readFileSync(CERTS, 'utf8')
-  .split('\n').filter((l) => l.trim())
-  .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-  .filter(Boolean);
+const records = await selectCertifications(getPool());
+if (!records.length) {
+  console.log('SKIP — no certifications on record. Nothing to replay. Run: node dist/cli.js certify');
+  await closePool();
+  process.exit(0);
+}
 
 // EB-35: count distinct drafts, not records. Replay the richest record per draft.
 const richest = new Map();

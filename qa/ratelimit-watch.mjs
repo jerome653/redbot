@@ -1,6 +1,10 @@
 /** Phase 8: measure 429 recovery. Polls reddit via raw CDP, logs first success. */
-import { writeFileSync, appendFileSync } from 'node:fs';
+import { writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 const OUT = 'qa/evidence/phase8-recovery.log';
+/* qa/evidence/ has no tracked files, so it does not exist on a fresh clone and every
+   gate here used to crash with ENOENT before running a single check (B2). */
+mkdirSync(dirname(OUT), { recursive: true });
 const start = Date.now();
 appendFileSync(OUT, `watch started ${new Date().toISOString()}\n`);
 

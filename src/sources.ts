@@ -17,7 +17,7 @@
  *   absent   → the empty state. Nothing configured yet; adding the first source works.
  *   corrupt  → FAILS CLOSED and says so. Never silently empty, never overwritten.
  *
- * `redbot.sources` is the system of record; the file is the seed you import from and the
+ * `sources` is the system of record; the file is the seed you import from and the
  * fallback when the database is unreachable — the same precedence `config.loadAccounts` uses.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';

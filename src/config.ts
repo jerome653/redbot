@@ -4,7 +4,7 @@
  */
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(HERE, '..');
@@ -34,7 +34,21 @@ export const paths = {
   /** Phase 3: contribute-or-skip, derived mechanically from the gaps. */
   assessments: join(DATA, 'assessments.json'),
   drafts: join(DATA, 'drafts.json'),
-  history: join(DATA, 'history.jsonl')
+  history: join(DATA, 'history.jsonl'),
+  /**
+   * Generated reports.
+   *
+   * Under DATA, not under ROOT — and that move is the point. `src/reports.ts` and
+   * `src/argus/reports.ts` each had their OWN `join(ROOT, 'reports')`, which put generated
+   * output inside the program's own directory. That is read-only under Program Files and it is
+   * REPLACED by an update, so on a packaged install those writes either fail or are silently
+   * discarded on the next version.
+   *
+   * Declared here rather than in either module so there is one answer to "where do reports go".
+   * Two constants for one directory is two things to move next time, and they diverge the moment
+   * somebody moves only the one they were looking at.
+   */
+  reports: join(DATA, 'reports')
 };
 
 export function ensureData(): void {
@@ -83,7 +97,7 @@ export function loadAccountsFile(): AccountRecord[] {
 /**
  * Accounts, from the database, cached for the synchronous readers.
  *
- * `redbot.accounts` is the system of record. But `loadAccounts()` has to stay SYNCHRONOUS:
+ * `accounts` is the system of record. But `loadAccounts()` has to stay SYNCHRONOUS:
  * it resolves `config.browser` (below), which every command reads, and Postgres is async.
  * So the CLI primes this cache once at startup (`primeAccounts`, called from cli.ts) and the
  * sync readers serve it from memory.
@@ -101,15 +115,29 @@ let accountCache: AccountRecord[] | null = null;
  * reach for when something is broken. On failure the cache stays null and the seed file
  * answers instead, which is the behaviour every version before the database had.
  */
+/**
+ * The account this machine acts as, primed alongside the accounts themselves.
+ *
+ * Cached for the same reason `accountCache` is: `selectedAccount()` must stay SYNCHRONOUS because
+ * `config.browser` resolves through it, and the database is async. Null means "not primed or none
+ * recorded" — the difference does not matter to the readers, because both mean "the environment
+ * variable is the only answer available".
+ */
+let selectedCache: string | null = null;
+
 export async function primeAccounts(): Promise<void> {
   try {
-    const [{ getPool }, { loadAccountsFromDb }] = await Promise.all([
+    const [{ getPool }, accounts] = await Promise.all([
       import('./db.js'), import('./db/accounts.js')
     ]);
-    const rows = await loadAccountsFromDb(getPool());
+    const rows = await accounts.loadAccountsFromDb(getPool());
     // An empty table is not an answer, it is an un-imported install: leave the cache null so
     // the seed file still works on a machine where `redbot accounts import` has not been run.
     if (rows.length) accountCache = rows;
+
+    /* The per-machine selection (0015). Primed here rather than read on demand so that
+       `selectedAccount()` can answer without becoming async — see selectedCache above. */
+    selectedCache = await accounts.selectedHandleForMachine(getPool());
   } catch {
     /* database unavailable — the seed file answers. Reported by `redbot doctor`, not here. */
   }
@@ -118,6 +146,17 @@ export async function primeAccounts(): Promise<void> {
 /** Drop the cache so the next read re-resolves. For tests and for `accounts import`. */
 export function forgetAccounts(): void {
   accountCache = null;
+  selectedCache = null;
+}
+
+/**
+ * The recorded selection, for callers that need it without the AccountRecord.
+ *
+ * Exported so the console can show what is currently selected without repeating the precedence
+ * rule that `selectedAccount()` implements.
+ */
+export function selectedHandle(): string | null {
+  return process.env.REDBOT_ACCOUNT ?? selectedCache;
 }
 
 /**
@@ -131,18 +170,46 @@ export function loadAccounts(): AccountRecord[] {
   return accountCache ?? loadAccountsFile();
 }
 
-/** The account named by REDBOT_ACCOUNT, or null. Throws if the name is not in the file. */
+/**
+ * Which account redbot acts as, or null when that is genuinely undecided.
+ *
+ * THREE SOURCES, IN THIS ORDER, and the order is the whole design:
+ *
+ *   1. `REDBOT_ACCOUNT` — an explicit, per-invocation override. It wins over everything, because a
+ *      person typing it means it, and because the entire test suite depends on being able to say
+ *      "run as this one" without touching stored state.
+ *   2. The per-machine selection recorded in `account_machines.selected` (migration 0015), primed
+ *      into `selectedCache` by `primeAccounts()`.
+ *   3. The only configured account, when there is exactly one. Unambiguous by arithmetic: there is
+ *      no other answer, so demanding a selection would be ceremony.
+ *
+ * Reading ONLY the environment variable is what made the desktop app unusable: there is no shell in
+ * a window, so an install with two accounts could never say which one it was, `config.browser` threw
+ * NoAccountError, and `src/cli.ts` refused every command.
+ *
+ * Null with several accounts and no selection is still a REFUSAL, deliberately. src/cli.ts explains
+ * what the alternative cost: a work pass ran to completion as whoever happened to be first in the
+ * list and reported "Nothing eligible this pass" with exit 0 — success-looking, and acting as the
+ * wrong person.
+ */
 export function selectedAccount(): AccountRecord | null {
-  const want = process.env.REDBOT_ACCOUNT;
-  if (!want) return null;
-  const found = loadAccounts().find((a) => a.handle.toLowerCase() === want.toLowerCase());
+  const accounts = loadAccounts();
+  const want = process.env.REDBOT_ACCOUNT ?? selectedCache;
+
+  if (!want) {
+    // Exactly one configured account needs no choosing. More than one does.
+    return accounts.length === 1 ? accounts[0]! : null;
+  }
+
+  const found = accounts.find((a) => a.handle.toLowerCase() === want.toLowerCase());
   if (!found) {
-    const known = loadAccounts().map((a) => a.handle).join(', ') || '(none configured)';
-    // Not "is not in data/accounts.json" any more — redbot.accounts is the record, and naming
+    const known = accounts.map((a) => a.handle).join(', ') || '(none configured)';
+    const from = process.env.REDBOT_ACCOUNT ? 'REDBOT_ACCOUNT' : 'the selected account for this machine';
+    // Not "is not in data/accounts.json" any more — accounts is the record, and naming
     // only the file sent people to edit a seed the engine may not even be reading.
     throw new Error(
-      `REDBOT_ACCOUNT="${want}" is not a configured account. Known: ${known}\n` +
-      '  Accounts live in redbot.accounts; see `redbot accounts`.'
+      `${from}="${want}" is not a configured account. Known: ${known}\n` +
+      '  Accounts live in accounts; see `redbot accounts`.'
     );
   }
   return found;
@@ -293,7 +360,25 @@ export const config = {
      *
      * With neither set, the CLI provider refuses to run.
      */
-    operator: process.env.REDBOT_OPERATOR ?? null,
+
+    /**
+     * Resolved FRESH ON EVERY READ, in this order:
+     *
+     *   1. REDBOT_OPERATOR      — a shell, a test, or a spawned child that named one
+     *   2. the stored choice    — whoever picked an operator on the console's Setup screen
+     *
+     * A getter, not a value, and that is the whole point. The console SERVER is long-lived, so a
+     * value captured at module load cannot see a choice made two minutes later — which is exactly
+     * how `/api/setup` came to report "no Claude operator is selected" while the picker on screen
+     * showed one selected. Same reasoning as `primeAccounts()` refreshing the account cache
+     * before anything reads through it.
+     *
+     * The environment still WINS, so every test and every `REDBOT_OPERATOR=x redbot …` behaves
+     * exactly as it did before this became durable.
+     */
+    get operator(): string | null {
+      return process.env.REDBOT_OPERATOR ?? storedOperatorSelection();
+    },
     claudeConfigDirOverride: process.env.REDBOT_CLAUDE_CONFIG_DIR ?? null,
 
     apiUrl: 'https://api.anthropic.com/v1/messages',
@@ -405,6 +490,90 @@ export interface OperatorRecord {
 
 export const operatorsPath = join(DATA, 'operators', 'operators.json');
 
+/**
+ * Which operator this machine acts as, when the environment does not say.
+ *
+ * A sibling file rather than a field inside `operators.json`, because that file is a REGISTRY of
+ * who exists — written by someone with filesystem access — and a per-machine preference is a
+ * different kind of fact with a different lifetime. Mixing them would mean a selection could be
+ * lost by hand-editing the registry, and a registry entry could be clobbered by a click.
+ *
+ * A file rather than a database row, unlike the account selection (migration 0015): every reader
+ * of `config.llm.operator` is SYNCHRONOUS — `claudeConfigDir()` is called from inside
+ * `completeViaCli` — and the database façade is async. `DATA` is already per-machine, so a file
+ * under it carries the same "this machine" scope the `account_machines` row does.
+ */
+export const operatorSelectionPath = join(DATA, 'operators', 'selected.json');
+
+/** letters, digits, dot, dash, underscore — the shape every operator name is held to. */
+const OPERATOR_NAME = /^[a-z0-9][a-z0-9._-]{0,31}$/i;
+
+/**
+ * The stored operator choice, or null.
+ *
+ * FAILS CLOSED AND SILENT, deliberately: this is read from a getter that sits under thirteen
+ * call sites including `claudeConfigDir()`. A malformed file must degrade to "nobody selected" —
+ * which every caller already handles, and which refuses to run rather than guessing — instead of
+ * throwing from the middle of an unrelated command. The name is re-validated on read because the
+ * file is on disk and a hand-edit is not a code path anyone controls.
+ */
+export function storedOperatorSelection(): string | null {
+  try {
+    if (!existsSync(operatorSelectionPath)) return null;
+    const raw = JSON.parse(readFileSync(operatorSelectionPath, 'utf8')) as { operator?: unknown };
+    const name = typeof raw?.operator === 'string' ? raw.operator : null;
+    return name && OPERATOR_NAME.test(name) ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remember (or forget, with null) which operator this machine acts as.
+ *
+ * Validates before writing, so a bad name cannot reach the file and then be silently ignored on
+ * read — the two halves would disagree and the screen would show a choice that does nothing.
+ * Refuses a name that is not in the registry for the same reason `/api/operator/select` does:
+ * a billing identity is never invented, only chosen from ones already declared.
+ */
+export function setStoredOperatorSelection(name: string | null): void {
+  if (name === null) {
+    if (existsSync(operatorSelectionPath)) rmSync(operatorSelectionPath, { force: true });
+    return;
+  }
+  if (!OPERATOR_NAME.test(name)) {
+    throw new OperatorAuthError(
+      `Invalid operator name "${name}" — letters, digits, dot, dash, underscore only.`
+    );
+  }
+  if (!operatorRecord(name)) {
+    throw new OperatorAuthError(
+      `"${name}" is not a registered operator. Add one first: redbot operators add ${name}`
+    );
+  }
+  mkdirSync(dirname(operatorSelectionPath), { recursive: true });
+  writeFileSync(operatorSelectionPath, JSON.stringify({ operator: name }, null, 2) + '\n', 'utf8');
+}
+
+/**
+ * Has this operator actually signed in, or do they just have an empty folder?
+ *
+ * MEASURED, not assumed: a signed-in folder on this machine holds `.credentials.json` alongside
+ * `.claude.json`, `sessions/` and the rest; a folder created by `operators add` and never signed
+ * into is completely empty. The credentials file is the only one of those that means "a login
+ * happened here".
+ *
+ * This distinction is the difference between a Setup screen that says `ready` and a run that
+ * fails at the first model call — `redbot operators` has always CLAIMED to report it ("own
+ * folder, NOT signed in yet") but tested `existsSync(configDir)`, which `operators add` makes
+ * true before anyone signs in, so that branch could never fire for a dedicated operator.
+ *
+ * Never reads the file. Presence is the whole signal; the contents are a credential.
+ */
+export function operatorSignedIn(configDir: string): boolean {
+  return existsSync(join(configDir, '.credentials.json'));
+}
+
 /** A registered operator, with enough status to pick one without reading credentials. */
 export interface OperatorInfo {
   name: string;
@@ -416,7 +585,11 @@ export interface OperatorInfo {
    * calls for this operator bill whoever owns that login, so it is always surfaced.
    */
   shared: boolean;
-  /** True when the credential folder actually exists — a login has been set up there. */
+  /**
+   * True when a login has actually HAPPENED in that folder — not merely that the folder exists.
+   * `operators add` and the console's "Register operator" both create the folder before anyone
+   * signs in, so folder-existence reported every brand-new operator as ready.
+   */
   ready: boolean;
   declaredBy?: string;
   note?: string;
@@ -448,7 +621,7 @@ export function listOperators(): OperatorInfo[] {
         name,
         configDir: rec.configDir,
         shared,
-        ready: existsSync(rec.configDir),
+        ready: operatorSignedIn(rec.configDir),
         ...(rec.declaredBy ? { declaredBy: rec.declaredBy } : {}),
         ...(rec.note ? { note: rec.note } : {})
       };
@@ -484,6 +657,7 @@ export function claudeConfigDir(): string {
   if (!config.llm.operator) {
     throw new OperatorAuthError(
       'No Claude operator set — redbot will not use this machine\'s default Claude login.\n\n' +
+      '  Pick one on the console\'s Setup screen, which remembers the choice, or name one here:\n' +
       '  PowerShell:  $env:REDBOT_OPERATOR = "yourname"\n' +
       '  bash:        export REDBOT_OPERATOR=yourname\n\n' +
       'Then sign in once as that operator (opens Claude, run /login inside it):\n' +
@@ -495,7 +669,8 @@ export function claudeConfigDir(): string {
 
   if (!/^[a-z0-9][a-z0-9._-]{0,31}$/i.test(config.llm.operator)) {
     throw new OperatorAuthError(
-      `Invalid REDBOT_OPERATOR "${config.llm.operator}" — letters, digits, dot, dash, underscore only.`
+      `Invalid operator name "${config.llm.operator}" — letters, digits, dot, dash, underscore ` +
+      `only. It came from ${process.env.REDBOT_OPERATOR ? 'REDBOT_OPERATOR' : operatorSelectionPath}.`
     );
   }
 

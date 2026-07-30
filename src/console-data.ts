@@ -143,13 +143,13 @@ export async function loadConsoleDomain(scope: DomainScope = {}): Promise<Consol
 
 /** The logs the console offers, and the table each one actually lives in now. */
 export const LOG_TABLES: Record<string, string> = {
-  history:        'redbot.history',
-  observations:   'redbot.observations',
-  reviews:        'redbot.reviews',
-  regret:         'redbot.regret',
-  interactions:   'redbot.interactions',
-  trace:          'redbot.trace',
-  certifications: 'redbot.certifications'
+  history:        'history',
+  observations:   'observations',
+  reviews:        'reviews',
+  regret:         'regret',
+  interactions:   'interactions',
+  trace:          'trace',
+  certifications: 'certifications'
 };
 
 export interface LogRows {

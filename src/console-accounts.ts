@@ -8,7 +8,7 @@
  * Doing it here, in one place, is what keeps the product console and the operator console from
  * each growing their own version of the allocator.
  *
- * `redbot.accounts` is the system of record. `data/accounts.json` is written too, and stays a
+ * `accounts` is the system of record. `data/accounts.json` is written too, and stays a
  * seed and a fallback — `src/config.ts` resolves `config.browser` synchronously at module load
  * and cannot await a query, so a machine whose database is down must still be able to work out
  * which Chrome to attach to. Writing both is what makes that fallback true rather than stale.
@@ -197,7 +197,7 @@ export async function createConsoleAccount(body: {
 /**
  * The fields a person may change after an account exists.
  *
- * `handle` is absent because it is the primary key of `redbot.accounts` — "changing" it is an
+ * `handle` is absent because it is the primary key of `accounts` — "changing" it is an
  * INSERT of a second account, not an edit, and the profile folder and its signed-in session
  * would stay behind with the old name.
  *
@@ -339,7 +339,7 @@ export interface DeleteResult {
  * costs you a re-add; the other order costs you the account. The folder is named in the result
  * so it can be deleted by hand, deliberately, by someone who means it.
  *
- * **History is counted first, and refused by default.** `redbot.jobs.account` is
+ * **History is counted first, and refused by default.** `jobs.account` is
  * `ON DELETE CASCADE` (0008_jobs.up.sql:27): deleting the row takes every job for that account
  * with it. Drafts are `ON DELETE SET NULL` (0006_drafts.up.sql:38) — kept, but they stop saying
  * who wrote them. A one-click button that silently destroys a run history is the kind of thing
@@ -504,6 +504,55 @@ export async function setUpAccountHere(body: { handle?: unknown }): Promise<Port
 }
 
 /** The next port nothing has claimed and nothing is listening on. For the "pick one" button. */
+/**
+ * Choose which account this machine acts as.
+ *
+ * THE CONTROL THAT MAKES THE DESKTOP APP USABLE. `selectedAccount()` (src/config.ts) resolved only
+ * from `REDBOT_ACCOUNT`, and a window has no shell to export it in — so an install with more than
+ * one account could never say which one it was: `config.browser.cdpEndpoint` raised NoAccountError,
+ * `src/cli.ts` refused to dispatch, and `doctor` reported a blocking failure with no way to clear it
+ * from inside the app.
+ *
+ * Validation lives HERE rather than in tools/product/server.mjs, next to the same `HANDLE_RE` that
+ * create, update and delete use. A second copy of the rule in the HTTP layer is a second rule, and
+ * the two would disagree the first time one of them was tightened.
+ *
+ * Changes ONE flag. It cannot create or rename an account: `setSelectedAccount` refuses a handle
+ * that is not already a record, and the database enforces at most one selection per machine with a
+ * partial unique index, so two clicks racing cannot produce two.
+ */
+export async function selectConsoleAccount(
+  body: { handle?: unknown }
+): Promise<{ ok: boolean; error?: string; selected?: string | null }> {
+  const handle = String(body.handle ?? '').trim();
+  if (!HANDLE_RE.test(handle)) {
+    return { ok: false, error: 'A Reddit username is 3–20 characters: letters, numbers, underscore or dash.' };
+  }
+
+  const reason = dbUnavailableReason();
+  if (reason) {
+    return { ok: false, error: `Choosing the account needs the database — that is where the choice lives. ${reason}` };
+  }
+
+  try {
+    const { getPool } = await import('./db.js');
+    const { setSelectedAccount, selectedHandleForMachine } = await import('./db/accounts.js');
+    await setSelectedAccount(getPool(), handle);
+
+    /* Refresh the synchronous cache in THIS process. `config.browser` resolves the endpoint through
+       it, so without this the very next request in the same server would still resolve the previous
+       account's port — the write would be correct and the behaviour stale. */
+    const { primeAccounts } = await import('./config.js');
+    await primeAccounts();
+
+    /* Read it back rather than echoing the input: what a person is told should be what the database
+       holds, not what they asked for. */
+    return { ok: true, selected: await selectedHandleForMachine(getPool()) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function suggestFreePort(): Promise<number> {
   const known = await knownAccounts();
   return firstFreePort(known.map((a) => a.debugPort).filter((p): p is number => typeof p === 'number'));

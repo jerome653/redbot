@@ -23,7 +23,7 @@ interface HistoryRow {
 
 export async function appendHistoryRow(db: Db, e: HistoryEntry): Promise<void> {
   await db.query(
-    `INSERT INTO redbot.history
+    `INSERT INTO history
        (ts, kind, account, subreddit, thread_url, permalink, status, summary, data)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [
@@ -48,7 +48,7 @@ export async function loadHistoryFromDb(
   const bounded = limit > 0;
   const r = await db.query<HistoryRow>(
     `SELECT ts, kind, account, subreddit, thread_url, permalink, status, summary, data
-       FROM redbot.history
+       FROM history
       ${bounded ? 'ORDER BY id DESC LIMIT $1 OFFSET $2' : 'ORDER BY id'}`,
     bounded ? [limit, offset] : []
   );
@@ -70,6 +70,6 @@ export async function loadHistoryFromDb(
 }
 
 export async function countHistory(db: Db): Promise<number> {
-  const r = await db.query<{ n: string }>('SELECT count(*)::text AS n FROM redbot.history');
+  const r = await db.query<{ n: number }>('SELECT count(*) AS n FROM history');
   return Number(r.rows[0]?.n ?? 0);
 }

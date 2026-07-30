@@ -14,7 +14,7 @@
  */
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT, DATA, paths, config, claudeConfigDir, OperatorAuthError, NoAccountError } from '../config.js';
+import { ROOT, DATA, paths, config, claudeConfigDir, OperatorAuthError } from '../config.js';
 import { isBrowserUp } from '../browser.js';
 import { policy, limitsByProvenance } from '../policy.js';
 import { loadDrafts, loadThreads, loadGaps, loadAssessments } from '../store.js';
@@ -24,13 +24,119 @@ import { loadTrace } from '../trace.js';
 import { corpora } from '../corpus.js';
 import { say } from '../log.js';
 import { hoursSinceLastBackup, listSnapshots } from '../backup.js';
+import { checkRequirements } from '../requirements.js';
 
-type Status = 'PASS' | 'WARN' | 'FAIL';
+/**
+ * `N/A` exists because of a specific trap, not for tidiness.
+ *
+ * Two checks here can only be answered inside a DEVELOPMENT CHECKOUT: build freshness compares
+ * `src/*.ts` mtimes against `dist/*.js`, and secret protection reads `.gitignore`. A packaged
+ * install has neither — it ships `dist/` and no source tree, and it is not a git working tree at
+ * all.
+ *
+ * Left alone, each failed in its own wrong direction. Build freshness silently PASSED: the mtime
+ * walk swallows a missing directory and returns 0, so `stale = 0 > distNewest` is false and the
+ * check reported "compiled output is newer than every source file" while comparing against
+ * nothing — a green light that could never go red, which is precisely the failure commit 1daa598
+ * exists to prevent. Secret protection went the other way and FAILED, telling every installed
+ * copy that "Chrome profiles and session cookies are committable" when there is no repository to
+ * commit them to.
+ *
+ * So neither may be PASS and neither may be FAIL. `N/A` is counted separately in the verdict
+ * line, so a check that did not run cannot inflate the pass count either.
+ */
+type Status = 'PASS' | 'WARN' | 'FAIL' | 'N/A';
 
 interface Check {
   name: string;
   status: Status;
   detail: string;
+}
+
+/**
+ * Is this a development checkout rather than an installed copy?
+ *
+ * `.git` is the signal, not the absence of `dist/` — a developer who has not built yet is still
+ * in a checkout, and a packaged app always has `dist/`. Checked with existsSync rather than by
+ * shelling out to git: this must work on a machine with no git installed, which an installed
+ * copy generally is.
+ */
+function isCheckout(): boolean {
+  return existsSync(join(ROOT, '.git'));
+}
+
+/**
+ * The build-freshness verdict, as a pure function of the four facts it depends on.
+ *
+ * Extracted from `doctor()` so the three branches — no build, packaged build, real comparison —
+ * can be tested without constructing a fake directory tree. `gitignoreActivePatterns` above is
+ * exported for exactly the same reason, and the bug it was extracted after is the same shape:
+ * a check whose verdict nobody could exercise.
+ */
+export function buildFreshness(
+  hasDist: boolean, hasSrc: boolean, srcNewest: number, distNewest: number
+): Check {
+  if (!hasDist) {
+    return { name: 'build', status: 'FAIL', detail: 'dist/ does not exist — run `npm run build`' };
+  }
+  if (!hasSrc) {
+    /* A packaged install. There is nothing to compare the build against, so this check cannot be
+       answered — and must not answer anyway. See the note on Status above: reporting PASS here is
+       how a build check becomes a green light that cannot go red. */
+    return {
+      name: 'build freshness', status: 'N/A',
+      detail: 'packaged build — no source tree to compare against'
+    };
+  }
+  const stale = srcNewest > distNewest;
+  const drift = Math.round((srcNewest - distNewest) / 1000);
+  return {
+    name: 'build freshness',
+    status: stale ? 'FAIL' : 'PASS',
+    detail: stale
+      ? `source is ${drift}s newer than the build — you are running old code. Run \`npm run build\``
+      : 'compiled output is newer than every source file'
+  };
+}
+
+/** The four required rules. Named here so the test and the check cannot disagree about them. */
+export const REQUIRED_IGNORES = ['data/chrome-profile', 'data/operators', 'data/*.json', 'data/*.jsonl'];
+
+/**
+ * The secret-protection verdict, as a pure function of the two facts it depends on.
+ *
+ * `gitignore` is the file's text, or null when there is no file. `checkout` is whether this is a
+ * git working tree. The pairing matters: absent-file means two completely different things in the
+ * two cases, and conflating them is what made this check FAIL on every installed copy.
+ */
+export function secretProtection(gitignore: string | null, checkout: boolean): Check {
+  if (gitignore === null) {
+    if (!checkout) {
+      /* An installed copy: no repository, so nothing can be committed and there is no rule to
+         check. This is NOT a pass — the guard did not run — and it is emphatically not a FAIL. The
+         risk this check exists for is a DEVELOPMENT risk. */
+      return {
+        name: 'secret protection', status: 'N/A',
+        detail: 'not a git checkout — nothing here can be committed'
+      };
+    }
+    /* A checkout with the file deleted. Still a real failure, and the reason this is not simply
+       skipped whenever the file is absent. */
+    return {
+      name: 'secret protection', status: 'FAIL',
+      detail: 'no .gitignore — Chrome profiles and session cookies are committable'
+    };
+  }
+  const active = gitignoreActivePatterns(gitignore);
+  // Match against active rules only — a pattern that appears solely in a comment does not count.
+  const missing = REQUIRED_IGNORES.filter((r) => !active.some((line) => line.includes(r)));
+  return {
+    name: 'secret protection',
+    status: missing.length ? 'FAIL' : 'PASS',
+    detail: missing.length
+      ? `.gitignore is missing: ${missing.join(', ')}`
+      : `all ${REQUIRED_IGNORES.length} required patterns present`
+  };
 }
 
 /**
@@ -70,20 +176,16 @@ export async function doctor(): Promise<number> {
 
   /* ---- build freshness: the check that catches "I fixed it but ran the old code" ---- */
   const distDir = join(ROOT, 'dist');
-  if (!existsSync(distDir)) {
-    add('build', 'FAIL', 'dist/ does not exist — run `npm run build`');
-  } else {
-    const srcNewest = newestMtime(join(ROOT, 'src'), '.ts');
-    const distNewest = newestMtime(distDir, '.js');
-    const stale = srcNewest > distNewest;
-    const drift = Math.round((srcNewest - distNewest) / 1000);
-    add(
-      'build freshness',
-      stale ? 'FAIL' : 'PASS',
-      stale
-        ? `source is ${drift}s newer than the build — you are running old code. Run \`npm run build\``
-        : 'compiled output is newer than every source file'
+  const srcDir = join(ROOT, 'src');
+  const hasDist = existsSync(distDir);
+  const hasSrc = existsSync(srcDir);
+  {
+    const r = buildFreshness(
+      hasDist, hasSrc,
+      hasSrc ? newestMtime(srcDir, '.ts') : 0,
+      hasDist ? newestMtime(distDir, '.js') : 0
     );
+    add(r.name, r.status, r.detail);
   }
 
   /* ---- data integrity ---- */
@@ -116,20 +218,11 @@ export async function doctor(): Promise<number> {
   }
 
   /* ---- secrets: the DEFECT-01 guard ---- */
-  const gitignore = join(ROOT, '.gitignore');
-  if (!existsSync(gitignore)) {
-    add('secret protection', 'FAIL', 'no .gitignore — Chrome profiles and session cookies are committable');
-  } else {
-    const text = readFileSync(gitignore, 'utf8');
-    const active = gitignoreActivePatterns(text);
-    const required = ['data/chrome-profile', 'data/operators', 'data/*.json', 'data/*.jsonl'];
-    // Match against active rules only — a pattern that appears solely in a comment does not count.
-    const missing = required.filter((r) => !active.some((line) => line.includes(r)));
-    add(
-      'secret protection',
-      missing.length ? 'FAIL' : 'PASS',
-      missing.length ? `.gitignore is missing: ${missing.join(', ')}` : `all ${required.length} required patterns present`
-    );
+  {
+    const gitignore = join(ROOT, '.gitignore');
+    const text = existsSync(gitignore) ? readFileSync(gitignore, 'utf8') : null;
+    const r = secretProtection(text, isCheckout());
+    add(r.name, r.status, r.detail);
   }
 
   /* ---- evidence backup (EB-28 / D-04) ---- */
@@ -147,42 +240,58 @@ export async function doctor(): Promise<number> {
     }
   }
 
-  /* ---- llm auth ---- */
+  /* ---- can it run at all? the shared requirement set ----
+   *
+   * From src/requirements.ts, which the console's /api/setup also serves. Before this, "is the
+   * install ready" had two answers that disagreed: the console checked four conditions and never
+   * mentioned Chrome, while doctor checked sixteen and failed on it. One list, two readers.
+   *
+   * A BLOCKING requirement is a FAIL and an ADVISORY one is a WARN, which is the same severity
+   * doctor already gave these individually — `debuggable chrome` was a WARN when nothing was
+   * listening, and a missing operator a FAIL. The mapping preserves that rather than reclassifying
+   * anything.
+   */
+  {
+    const reqs = await checkRequirements();
+    for (const r of reqs) {
+      add(r.id === 'llm' ? 'llm operator' : r.id === 'browser' ? 'debuggable chrome' : r.id,
+        r.ok ? 'PASS' : (r.tier === 'blocking' ? 'FAIL' : 'WARN'),
+        r.detail);
+    }
+  }
+
+  /* ---- llm auth: where the credentials actually live ----
+   *
+   * The requirement above answers "is a model reachable"; this answers "and out of which
+   * directory", which is what a person needs when it is not. Kept separate for that reason.
+   */
   try {
     const dir = claudeConfigDir();
     const exists = existsSync(dir);
     add(
-      'llm operator',
+      'llm config dir',
       exists ? 'PASS' : 'WARN',
       `${config.llm.provider} · operator "${config.llm.operator ?? '(unset)'}" · ${dir}${exists ? '' : ' (directory missing — sign in there first)'}`
     );
   } catch (e) {
-    add('llm operator', e instanceof OperatorAuthError ? 'FAIL' : 'WARN',
+    add('llm config dir', e instanceof OperatorAuthError ? 'FAIL' : 'WARN',
       e instanceof Error ? e.message.split('\n')[0]! : String(e));
   }
 
-  /* ---- browser ---- */
-  /**
-   * Resolved behind a guard, because it can now REFUSE.
+  /* ---- browser ----
    *
-   * `config.browser.cdpEndpoint` used to answer 127.0.0.1:9222 whenever no account was
-   * selected — a port a real, unrelated browser often holds. It throws a `NoAccountError`
-   * instead now, and reporting that is precisely doctor's job: an install that cannot say
-   * which Chrome it drives is broken, and dying here would report nothing at all.
+   * `debuggable chrome` and `headed browser` now come from the shared requirement set above; what
+   * remains here is only what that set does not answer. The endpoint is still resolved behind a
+   * guard, because `config.browser.cdpEndpoint` can REFUSE: it used to answer 127.0.0.1:9222
+   * whenever no account was selected — a port a real, unrelated browser often holds — and throws a
+   * `NoAccountError` instead now.
    */
   let endpoint: string | null = null;
   try {
     endpoint = config.browser.cdpEndpoint;
-  } catch (e) {
-    add('debuggable chrome', e instanceof NoAccountError ? 'FAIL' : 'WARN',
-      e instanceof Error ? e.message.split('\n')[0]! : String(e));
-  }
+  } catch { /* already reported by the `account` requirement above */ }
 
   const up = endpoint ? await isBrowserUp(endpoint) : false;
-  if (endpoint) {
-    add('debuggable chrome', up ? 'PASS' : 'WARN',
-      up ? `reachable at ${endpoint}` : `nothing at ${endpoint} — reading and publishing will refuse`);
-  }
 
   /**
    * Is that browser HEADED?
@@ -328,13 +437,23 @@ export async function doctor(): Promise<number> {
     const line = `${c.name.padEnd(pad)}  ${c.detail}`;
     if (c.status === 'PASS') say.ok(line);
     else if (c.status === 'WARN') say.warn(line);
+    else if (c.status === 'N/A') say.step(`n/a ${line}`);
     else say.fail(line);
   }
 
   const fails = checks.filter((c) => c.status === 'FAIL').length;
   const warns = checks.filter((c) => c.status === 'WARN').length;
+  const skipped = checks.filter((c) => c.status === 'N/A').length;
+  const passes = checks.filter((c) => c.status === 'PASS').length;
   say.info('');
-  say.step(`${checks.length - fails - warns} pass · ${warns} warn · ${fails} fail`);
+  /* Counted explicitly rather than as `checks.length - fails - warns`, which was the old
+     arithmetic and would have silently counted every N/A as a pass — reintroducing the exact
+     inflation the N/A state was added to prevent. The skipped count is only shown when there is
+     one, so a development checkout's output is unchanged. */
+  say.step(
+    `${passes} pass · ${warns} warn · ${fails} fail` +
+    (skipped ? ` · ${skipped} n/a` : '')
+  );
   if (fails) say.fail('Something is wrong with the installation. Fix the FAILs before trusting a run.');
 
   return fails ? 1 : 0;

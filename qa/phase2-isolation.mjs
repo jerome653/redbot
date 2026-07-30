@@ -12,9 +12,13 @@
  * Run: node qa/phase2-isolation.mjs
  */
 import { chromium } from 'playwright';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const OUT = 'qa/evidence/phase2-isolation.log';
+/* qa/evidence/ has no tracked files, so it does not exist on a fresh clone and every
+   gate here used to crash with ENOENT before running a single check (B2). */
+mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, `PHASE 2 — profile isolation, adversarial\n${new Date().toISOString()}\n\n`);
 const log = (s) => { console.log(s); appendFileSync(OUT, s + '\n'); };
 

@@ -39,9 +39,25 @@ const sharedInsideData = join(TMP, 'shared-login', 'claude');
 const foreignRoot = ['X:', 'nowhere', 'claude-login'].join('/');
 const ambientPosix = ['', 'opt', 'shared', 'claude-login'].join('/');
 
+const dedicatedGreg = join(TMP, 'operators', 'greg', 'claude');
+
 mkdirSync(join(TMP, 'operators', 'alice', 'claude'), { recursive: true });
 mkdirSync(sharedInsideData, { recursive: true });
 // bob's folder is deliberately absent: `ready` must report the disk, not the declaration.
+/**
+ * greg's folder EXISTS and holds no credentials — registered, never signed in.
+ *
+ * This is the case the whole `ready` change is about, and it is why the fixture grew a fifth
+ * operator instead of reusing alice. `operators add` and the console's "Register operator" both
+ * create the folder before anybody logs in, so the old rule — `existsSync(configDir)` — called
+ * greg ready. A Setup screen showed every row green and the run died at the first model call.
+ */
+mkdirSync(dedicatedGreg, { recursive: true });
+
+/* A signed-in folder is one that holds `.credentials.json`; the contents are never read, so a
+   placeholder is enough to pin the rule. Measured on a real login before it was relied on. */
+writeFileSync(join(TMP, 'operators', 'alice', 'claude', '.credentials.json'), '{}');
+writeFileSync(join(sharedInsideData, '.credentials.json'), '{}');
 
 writeFileSync(
   join(TMP, 'operators', 'operators.json'),
@@ -49,6 +65,7 @@ writeFileSync(
     alice: { configDir: dedicatedForward, declaredBy: 'alice', note: 'dedicated login' },
     bob: { configDir: dedicatedBack },
     carol: { configDir: sharedInsideData, declaredBy: 'carol', note: 'the team login' },
+    greg: { configDir: dedicatedGreg, declaredBy: 'greg', note: 'registered, not signed in' },
     erin: { configDir: foreignRoot },
     frank: { configDir: ambientPosix },
     dave: { declaredBy: 'dave' }
@@ -92,14 +109,24 @@ test('listOperators reports the shape a picker reads', () => {
     assert.equal(typeof o.ready, 'boolean');
     assert.equal(typeof o.configDir, 'string');
   }
-  assert.deepEqual(ops.map((o) => o.name).sort(), ['alice', 'bob', 'carol', 'erin', 'frank']);
+  assert.deepEqual(ops.map((o) => o.name).sort(), ['alice', 'bob', 'carol', 'erin', 'frank', 'greg']);
   // An entry with no configDir is dropped rather than surfaced with an empty one: a picker
   // offering a credential-less operator would run against whatever login the box happens to hold.
   assert.equal(ops.some((o) => o.name === 'dave'), false, 'an entry with no configDir is not an operator');
 
-  assert.equal(op('alice').ready, true, 'the credential folder exists');
-  assert.equal(op('bob').ready, false, 'declared, but nobody has logged in there yet');
-  assert.equal(op('carol').ready, true);
+  /**
+   * `ready` now means SIGNED IN, not "the folder is there".
+   *
+   * OLD INTENT: `ready === existsSync(configDir)` — alice passed because her folder existed.
+   * NEW INTENT: `ready === a login happened here`. alice still passes, but now because she has
+   * `.credentials.json`; greg is the case that separates the two rules and the old code got it
+   * wrong. Not a loosened assertion — a stricter one, over a fixture that can tell them apart.
+   */
+  assert.equal(op('alice').ready, true, 'signed in — .credentials.json is present');
+  assert.equal(op('bob').ready, false, 'declared, but the folder does not even exist');
+  assert.equal(op('greg').ready, false,
+    'REGRESSION: folder exists, nobody ever signed in — the old existsSync rule called this ready');
+  assert.equal(op('carol').ready, true, 'a shared login that has been signed into is still ready');
   assert.equal(op('alice').declaredBy, 'alice');
   assert.equal(op('alice').note, 'dedicated login');
   assert.equal(op('bob').declaredBy, undefined, 'a field the file omits stays absent');
@@ -128,7 +155,9 @@ test('an accepted operator name resolves inside data/operators', async () => {
 test('a rejected operator name never yields a credential directory', async () => {
   for (const name of ['has space', '../escape', 'a/b', '..']) {
     const { claudeConfigDir } = await configFor(name);
-    assert.throws(claudeConfigDir, /Invalid REDBOT_OPERATOR/, `accepted ${JSON.stringify(name)}`);
+    // The message stopped naming REDBOT_OPERATOR unconditionally once a name can also come from
+    // the stored selection; it now names whichever source supplied it. Same guarantee.
+    assert.throws(claudeConfigDir, /Invalid operator name/, `accepted ${JSON.stringify(name)}`);
   }
 });
 

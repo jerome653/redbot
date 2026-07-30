@@ -1,5 +1,5 @@
 /**
- * threads — redbot.threads + redbot.thread_comments.
+ * threads — threads + thread_comments.
  *
  * Upsert by id, newest wins, which is the contract saveThreads has always had.
  * Comments are replaced rather than merged: they have no stable
@@ -36,7 +36,7 @@ interface CommentRow {
 export async function upsertThreads(db: Db, threads: Thread[]): Promise<number> {
   for (const t of threads) {
     await db.query(
-      `INSERT INTO redbot.threads
+      `INSERT INTO threads
          (id, permalink, title, subreddit, author, upvotes, comment_count,
           age_text, age_minutes, body, collected_at, source, query)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
@@ -59,10 +59,10 @@ export async function upsertThreads(db: Db, threads: Thread[]): Promise<number> 
       ]
     );
 
-    await db.query('DELETE FROM redbot.thread_comments WHERE thread_id = $1', [t.id]);
+    await db.query('DELETE FROM thread_comments WHERE thread_id = $1', [t.id]);
     for (const [i, cm] of (t.comments ?? []).entries()) {
       await db.query(
-        `INSERT INTO redbot.thread_comments (thread_id, position, author, body, depth)
+        `INSERT INTO thread_comments (thread_id, position, author, body, depth)
          VALUES ($1,$2,$3,$4,$5)`,
         [t.id, i, cm.author, cm.body, cm.depth]
       );
@@ -82,19 +82,19 @@ export async function upsertThreads(db: Db, threads: Thread[]): Promise<number> 
  */
 export async function loadThreadsFromDb(db: Db, ids?: string[]): Promise<Thread[]> {
   if (ids && !ids.length) return [];
-  const where = ids ? 'WHERE id = ANY($1)' : '';
-  const commentWhere = ids ? 'WHERE thread_id = ANY($1)' : '';
-  const params = ids ? [ids] : [];
+  const where = ids ? 'WHERE id IN (SELECT j.value FROM json_each($1) j)' : '';
+  const commentWhere = ids ? 'WHERE thread_id IN (SELECT j.value FROM json_each($1) j)' : '';
+  const params = ids ? [JSON.stringify(ids)] : [];
 
   const t = await db.query<ThreadRow>(
     `SELECT id, permalink, title, subreddit, author, upvotes, comment_count,
             age_text, age_minutes, body, collected_at, source, query
-       FROM redbot.threads ${where} ORDER BY collected_at DESC, id`,
+       FROM threads ${where} ORDER BY collected_at DESC, id`,
     params
   );
   const cm = await db.query<CommentRow>(
     `SELECT thread_id, author, body, depth
-       FROM redbot.thread_comments ${commentWhere} ORDER BY thread_id, position`,
+       FROM thread_comments ${commentWhere} ORDER BY thread_id, position`,
     params
   );
 
@@ -127,7 +127,7 @@ export async function loadThreadsFromDb(db: Db, ids?: string[]): Promise<Thread[
 }
 
 export async function countThreads(db: Db): Promise<number> {
-  const r = await db.query<{ n: string }>('SELECT count(*)::text AS n FROM redbot.threads');
+  const r = await db.query<{ n: number }>('SELECT count(*) AS n FROM threads');
   return Number(r.rows[0]?.n ?? 0);
 }
 
@@ -135,7 +135,7 @@ export async function countThreads(db: Db): Promise<number> {
 export async function existingThreadIds(db: Db, ids: string[]): Promise<Set<string>> {
   if (!ids.length) return new Set();
   const r = await db.query<{ id: string }>(
-    'SELECT id FROM redbot.threads WHERE id = ANY($1::text[])', [ids]
+    'SELECT id FROM threads WHERE id IN (SELECT j.value FROM json_each($1) j)', [JSON.stringify(ids)]
   );
   return new Set(r.rows.map((x) => x.id));
 }

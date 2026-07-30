@@ -32,12 +32,19 @@
  */
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, readdirSync, statSync, appendFileSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync, appendFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, relative, sep } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..', '..');
+/**
+ * Where working state lives — resolved the same way src/config.ts and tools/product/server.mjs
+ * resolve it, and for the same reason: a test points it at a temp directory, and a packaged app
+ * points it at the OS's per-user directory. Defined locally rather than imported from dist/config
+ * so this server still starts when the build is missing, which is the state it is most useful in.
+ */
+const DATA = process.env.REDBOT_DATA ? resolve(process.env.REDBOT_DATA) : join(ROOT, 'data');
 
 const portArg = process.argv.indexOf('--port');
 const PORT = portArg > -1 ? Number(process.argv[portArg + 1]) : 7890;
@@ -219,56 +226,36 @@ const readJson = (p) => {
 const HANDLE_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
 /* ------------------------------------------------------------------ *
- * Postgres — read-only, for the queue
+ * The database — read-only, for the queue
  *
- * This console had no dependencies. `pg` is now one of redbot's two, and reading the
- * queue needs it: the alternative is shelling out to the CLI per page load, or reading a
- * file that no longer holds the queue. Nothing here writes — every mutation still goes
- * through `node dist/cli.js job ...`.
+ * This console had no dependencies. Reading the queue needs one: the alternative is shelling
+ * out to the CLI per page load, or reading a file that no longer holds the queue. Nothing here
+ * writes — every mutation still goes back through `node dist/cli.js job ...`.
  *
- * The pool is created lazily so the console still starts, and still serves every other
- * page, when Postgres is down.
+ * It used to build its OWN `pg.Pool` here, with its own copy of the connection settings read
+ * from db/.env. That is gone, and not merely translated: the pool is now `dist/db.js`'s, the
+ * same one the engine and the product console use. Two connection helpers for one database was
+ * two places to configure, and src/db.ts says why that is a bad idea in as many words — "two
+ * readers of the same file is two chances to disagree about what the file says". A SQLite
+ * database also has no host, port, user or password to disagree about; it has a path, and
+ * `dist/db.js` owns resolving it.
+ *
+ * Loaded lazily, so the console still starts and still serves every other page when the build
+ * is missing or the database has not been created yet.
  * ------------------------------------------------------------------ */
 
-let pgPool = null;
-
-function dbSettings() {
-  const file = join(ROOT, 'db', '.env');
-  const env = {};
-  if (existsSync(file)) {
-    for (const line of readFileSync(file, 'utf8').split('\n')) {
-      const s = line.trim();
-      if (!s || s.startsWith('#')) continue;
-      const eq = s.indexOf('=');
-      if (eq > 0) env[s.slice(0, eq).trim()] = s.slice(eq + 1).trim();
-    }
-  }
-  const pick = (k, d) => process.env[k] ?? env[k] ?? d;
-  return {
-    host: pick('POSTGRES_HOST', '127.0.0.1'),
-    port: Number(pick('POSTGRES_PORT', 5432)),
-    database: pick('POSTGRES_DB', 'redbot'),
-    user: pick('POSTGRES_USER', 'redbot'),
-    password: pick('POSTGRES_PASSWORD', '')
-  };
-}
+let dbPool = null;
 
 async function dbQuery(text, values) {
-  if (!pgPool) {
-    const { default: pg } = await import('pg');
-    pgPool = new pg.Pool({
-      ...dbSettings(),
-      max: 2,
-      connectionTimeoutMillis: 3000,
-      options: '-c search_path=redbot,public'
-    });
-    pgPool.on('error', () => { /* surfaced at the next query */ });
+  if (!dbPool) {
+    const { getPool } = await import('../../dist/db.js');
+    dbPool = getPool();
   }
-  return pgPool.query(text, values);
+  return dbPool.query(text, values);
 }
 
 async function accounts() {
-  // redbot.accounts is the system of record; the seed file answers only when the database is
+  // accounts is the system of record; the seed file answers only when the database is
   // empty or unreachable. `source` says which, so a stale seed cannot pass for the record.
   const { accounts: list, from, unavailable } = await consoleAccounts();
   return {
@@ -306,7 +293,7 @@ async function jobsFor(handle) {
     const { rows } = await dbQuery(
       `SELECT id, account, kind, state, args, run_at, after_id, max_attempts, every_minutes,
               note, attempts, created_at, updated_at, started_at, finished_at, detail, code
-         FROM redbot.jobs WHERE account = $1 ORDER BY created_at, id`,
+         FROM jobs WHERE account = $1 ORDER BY created_at, id`,
       [handle]
     );
     const jobs = rows.map((r) => ({
@@ -428,7 +415,7 @@ async function chromeStatus() {
 
 /** Why replay can or cannot run — never surfaced as an error. */
 async function replayAvailability() {
-  // Certifications are rows in redbot.certifications now. Counting the old JSONL file made
+  // Certifications are rows in certifications now. Counting the old JSONL file made
   // replay report itself unavailable on a machine that had certified plenty.
   const dom = await domain();
   if (dom.unavailable) {
@@ -576,7 +563,7 @@ function readable(rel) {
  * **What was wrong.** These six logs were `data/*.jsonl` files, and `src/store.ts` stopped
  * writing them when the store moved to Postgres. This function then reported, verbatim,
  * "data/history.jsonl does not exist yet — nothing has written to it. No command has produced
- * this log." on a machine whose `redbot.history` table held rows. Not a missing feature: a
+ * this log." on a machine whose `history` table held rows. Not a missing feature: a
  * false statement, and the most misleading kind — an operator checking whether anything ran
  * was told nothing had.
  *
@@ -884,7 +871,7 @@ async function search(q, limit = 200) {
     const base = join(ROOT, spec.path);
     if (existsSync(base)) walk(base, spec.path, 0, spec.only);
   }
-  // Certifications live in redbot.certifications. Scanning the old file found nothing, so a
+  // Certifications live in certifications. Scanning the old file found nothing, so a
   // search for a claim or a rule name silently reported "no matches" on a machine full of them.
   const dom = await domain();
   dom.certifications.forEach((c, i) => {
@@ -892,7 +879,7 @@ async function search(q, limit = 200) {
     const text = JSON.stringify(c);
     if (!text.toLowerCase().includes(needle)) return;
     scanned++;
-    hits.push({ path: 'redbot.certifications', line: i + 1, text: text.trim().slice(0, 300) });
+    hits.push({ path: 'certifications', line: i + 1, text: text.trim().slice(0, 300) });
   });
 
   const byFile = {};
@@ -990,16 +977,32 @@ async function queue() {
  * Activity · charts · readiness · settings
  *
  * Everything below READS. The only file this server writes is its own
- * run log (tools/operator/run-history.jsonl), which records the exit
- * code and duration of commands the operator ran FROM THIS CONSOLE.
- * It is the console's own telemetry, not engine data, and it recomputes
- * nothing — the exit codes belong to the commands.
+ * run log, which records the exit code and duration of commands the
+ * operator ran FROM THIS CONSOLE. It is the console's own telemetry,
+ * not engine data, and it recomputes nothing — the exit codes belong
+ * to the commands.
  * ------------------------------------------------------------------ */
 
-const RUNLOG = join(HERE, 'run-history.jsonl');
+/**
+ * The run log lives under the DATA root, not beside this file.
+ *
+ * It used to be `join(HERE, 'run-history.jsonl')` — inside the program's own directory, and
+ * TRACKED IN GIT. Two problems, one of which only appears once this is packaged:
+ *
+ *   - Every session dirtied the working tree, because a tracked file was being appended to at
+ *     runtime (DEPLOY-READINESS S1).
+ *   - The install directory is read-only under Program Files and is REPLACED by an update, so
+ *     the append would either fail or be silently discarded on the next version.
+ *
+ * `appendFileSync` cannot create parent directories, so the directory is ensured on first write
+ * rather than at module load: this server must still start when the data root does not exist yet.
+ */
+const RUNLOG_DIR = join(DATA, 'run-logs');
+const RUNLOG = join(RUNLOG_DIR, 'operator-console.jsonl');
 
 function recordRun(key, code, ms) {
   try {
+    mkdirSync(RUNLOG_DIR, { recursive: true });
     appendFileSync(RUNLOG, JSON.stringify({ at: new Date().toISOString(), key, code, ms }) + '\n');
   } catch { /* telemetry must never break a command */ }
 }
@@ -1020,7 +1023,7 @@ async function activity(limit = 40) {
   // feed showing only artefact mtimes — it looked like redbot had done nothing but run scripts.
   const dom = await domain();
   for (const e of dom.history) {
-    out.push({ at: e.ts, kind: e.kind, summary: e.summary, source: 'redbot.history' });
+    out.push({ at: e.ts, kind: e.kind, summary: e.summary, source: 'history' });
   }
   // Certifications are rows too, and the newest one's own timestamp is a truer event than
   // the mtime of a file nothing writes any more.
@@ -1028,7 +1031,7 @@ async function activity(limit = 40) {
   if (lastCert) {
     out.push({ at: lastCert.certifiedAt, kind: 'certify',
                summary: `certification recorded — ${lastCert.draftId} (${lastCert.verdict})`,
-               source: 'redbot.certifications' });
+               source: 'certifications' });
   }
   // Artefacts whose mtime IS the event: when they were last produced.
   const artefacts = [
@@ -1049,7 +1052,7 @@ async function activity(limit = 40) {
     }
   }
   for (const r of runHistory().runs) {
-    out.push({ at: r.at, kind: 'console', summary: `${r.key} ran from the console — exit ${r.code} in ${r.ms} ms`, source: 'run-history.jsonl' });
+    out.push({ at: r.at, kind: 'console', summary: `${r.key} ran from the console — exit ${r.code} in ${r.ms} ms`, source: 'run-logs/operator-console.jsonl' });
   }
   return out.filter((x) => x.at).sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
 }
@@ -1061,7 +1064,7 @@ async function charts() {
   // dropped downstream. Both numbers are shown, and they are allowed to differ.
   const growth = [];
   {
-    // From redbot.history, not data/history.jsonl — the file stopped being written when the
+    // From history, not data/history.jsonl — the file stopped being written when the
     // store moved, which left this chart permanently empty and reading as "nothing collected".
     let cum = 0;
     for (const e of (await domain()).history) {
@@ -1083,13 +1086,13 @@ async function charts() {
       available: growth.length > 0,
       series: growth,
       currentThreads: (await domain()).threads.length,
-      note: 'Cumulative threads added by collection runs (redbot.history). The current corpus is smaller because threads are deduplicated and dropped downstream — both figures are real.'
+      note: 'Cumulative threads added by collection runs (history). The current corpus is smaller because threads are deduplicated and dropped downstream — both figures are real.'
     },
     verdictDistribution: {
       available: certs.available,
       counts: dist,
       total: certs.available ? certs.records.length : 0,
-      note: 'Verdicts across every certification record in redbot.certifications.'
+      note: 'Verdicts across every certification record in certifications.'
     },
     confusion: last?.confusion
       ? { available: true, matrix: last.confusion, note: 'Benchmark expected|actual pairs from qa/benchmark/last-run.json.' }

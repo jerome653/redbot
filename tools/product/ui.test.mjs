@@ -49,7 +49,10 @@ before(async () => {
   PORT = await freePort();
   DATA = mkdtempSync(join(tmpdir(), 'redbot-ui-'));
   child = spawn(process.execPath, [join(HERE, 'server.mjs'), '--port', String(PORT)],
-                { cwd: ROOT, env: { ...process.env, REDBOT_DATA: DATA, POSTGRES_DB: 'redbot_test' },
+                // REDBOT_DATA is a throwaway directory (a fresh install); REDBOT_DB is inherited
+                // from --env-file and takes precedence, so the child still uses the test DATABASE
+                // rather than creating an empty unmigrated one inside the temp directory.
+                { cwd: ROOT, env: { ...process.env, REDBOT_DATA: DATA },
                   stdio: ['ignore', 'pipe', 'pipe'] });
   let banner = '';
   await new Promise((res, rej) => {
