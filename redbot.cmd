@@ -4,27 +4,21 @@ rem  Launch redbot as a desktop app WITHOUT a packaged build.
 rem
 rem  WHY THIS EXISTS.
 rem
-rem  Smart App Control (Windows 11) blocks unsigned executables outright — it is not the
-rem  one-click "Run anyway" SmartScreen prompt. Measured on this machine:
+rem  A convenience: it runs the app straight from a source checkout, with no packaging step.
+rem  Useful while developing, because `npm run dist` takes minutes and this takes seconds.
 rem
-rem      release\win-unpacked\redbot.exe
-rem        -> "was blocked by your organization's Device Guard policy"
+rem  HISTORY, AND A CORRECTION. This file previously claimed that Smart App Control blocks the
+rem  packaged executable outright, and that running through Electron's signed binary was the
+rem  only way to launch it. That was measured once and is NOT true on this machine now.
+rem  Re-measured 2026-07-30 with SAC still enforcing
+rem  (HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy VerifiedAndReputablePolicyState = 1):
 rem
-rem  and HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy has
-rem  VerifiedAndReputablePolicyState = 1. Neither artefact carried a Mark-of-the-Web, so this
-rem  was never about the file having been downloaded: SAC checks EVERY executable.
+rem      release\win-unpacked\redbot.exe                 -> launched, console reached
+rem      %LOCALAPPDATA%\Programs\redbot\redbot.exe       -> launched, console reached
 rem
-rem  A code-signing certificate would not fix it on its own either — Microsoft's own guidance
-rem  says signed binaries still have to accumulate reputation, and that EV no longer buys an
-rem  exemption.
-rem
-rem  What IS permitted is Electron's official prebuilt binary, which is signed and has
-rem  reputation. So this runs the SAME application code through that binary instead of through
-rem  a packaged copy. It is not a bypass and it weakens nothing: the app, the database and the
-rem  console are identical — only the executable that hosts them differs.
-rem
-rem  For testing, this is the path. Packaging is for distribution, and distribution is what
-rem  needs the certificate.
+rem  So the packaged and installed builds run fine unsigned here. The installer is still
+rem  unsigned, which means SmartScreen will warn anyone who downloads it — that is a
+rem  distribution problem needing a certificate, not a reason to avoid the packaged build.
 rem ---------------------------------------------------------------------------
 
 setlocal

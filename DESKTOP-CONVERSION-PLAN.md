@@ -1138,9 +1138,13 @@ is 5.9 MB; `win-unpacked` is 364 MB, which is Electron plus the full `playwright
 - **`playwright-core` was NOT substituted for `playwright`.** SPIKE-B proved `connectOverCDP` works
   from `playwright-core`, which would cut the install, but the import sites were left alone. That is
   the single biggest packaging win still on the table.
-- **No NSIS installer was built** — only `--dir` (`npm run pack`). `npm run dist` is configured and
-  unrun, so the installer itself is unproven. **No code signing**, so it will show a SmartScreen
-  warning.
+- ~~**No NSIS installer was built**~~ — **superseded 2026-07-30.** `npm run dist` was run, the
+  installer built, and it installs to `%LOCALAPPDATA%\Programs\redbot` with Start Menu and desktop
+  shortcuts. Two things were measured while doing it: a stale `HKCU\Software\<APP_GUID>\
+  InstallLocation` makes the NSIS installer silently reuse an old directory
+  (`multiUser.nsh:26-28`), and uninstall does **not** delete `%APPDATA%\redbot` — `vault.key` and
+  the database survived a full uninstall/reinstall cycle. **No code signing**, so a download still
+  shows a SmartScreen warning; that is unchanged.
 - **No app icon.** electron-builder reported `default Electron icon is used`.
 - **§12.7 legacy-data-root migration is detect-only.** It reports the old `data/` and refuses to
   move anything, which is the designed behaviour, but the Setup-screen confirmation flow described

@@ -115,7 +115,13 @@ before(async () => {
 
   child = spawn(process.execPath, [join(HERE, 'server.mjs'), '--port', String(PORT)],
                 { cwd: ROOT,
-                  env: { ...CHILD_ENV, REDBOT_DATA: DATA, REDBOT_CHROME_USER_DATA: CHROME_DATA },
+                  env: { ...CHILD_ENV, REDBOT_DATA: DATA, REDBOT_CHROME_USER_DATA: CHROME_DATA,
+                         /* The update check must not spend the real repository's unauthenticated
+                            rate limit, and a suite that asks GitHub a question gets a different
+                            answer on the day somebody publishes a release. Pointed at a name that
+                            cannot exist, so the endpoint takes its failure path deterministically —
+                            which is the path worth testing anyway: it must still answer 200. */
+                         REDBOT_UPDATE_REPO: 'redbot-tests/does-not-exist-9f3a' },
                   stdio: ['ignore', 'pipe', 'pipe'] });
   let banner = '';
   await new Promise((res, rej) => {
@@ -1566,6 +1572,41 @@ test('a fresh install with nothing in it still answers', async () => {
   assert.equal(typeof s.pulse.published, 'number');
 });
 
+
+/**
+ * The update endpoint.
+ *
+ * The contract that matters is NOT "it finds a release" — that depends on what somebody published
+ * this morning. It is that this endpoint can NEVER be the reason a screen fails to render. The
+ * shared console is started against a repository name that cannot exist, so this exercises the
+ * failure path deterministically and without asking GitHub anything: it must still answer 200,
+ * with a shape the page can read.
+ */
+test('/api/update always answers, even when the check cannot succeed', async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/update`);
+  assert.equal(res.status, 200, 'a failed update check is still a 200 — the page must not error');
+
+  const r = await res.json();
+  assert.equal(typeof r.ok, 'boolean');
+  assert.match(r.current, /^\d+\.\d+\.\d+/, 'the running version is always reported');
+  if (r.ok === false) {
+    assert.equal(typeof r.reason, 'string');
+    assert.ok(r.reason.length, 'a failure says why, in words');
+    assert.equal(r.newer, undefined, 'a failed check never claims an update is available');
+  } else {
+    assert.equal(typeof r.newer, 'boolean');
+  }
+});
+
+test('/api/update is cached, so opening screens cannot hammer GitHub', async () => {
+  // GitHub allows 60 unauthenticated requests an hour per address. The page asks on every load.
+  await fetch(`http://127.0.0.1:${PORT}/api/update`).then((r) => r.json());
+  const second = await fetch(`http://127.0.0.1:${PORT}/api/update`).then((r) => r.json());
+  assert.equal(second.cached, true, 'the second call inside the window is served from memory');
+
+  const forced = await fetch(`http://127.0.0.1:${PORT}/api/update?force=1`).then((r) => r.json());
+  assert.equal(forced.cached, false, 'force=1 is the only way to spend a request on demand');
+});
 
 /* ------------------------------------------------------------------ *
  * KEEP THIS BLOCK LAST. The fresh-clone test below kills the shared console child to

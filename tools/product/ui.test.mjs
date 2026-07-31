@@ -52,7 +52,12 @@ before(async () => {
                 // REDBOT_DATA is a throwaway directory (a fresh install); REDBOT_DB is inherited
                 // from --env-file and takes precedence, so the child still uses the test DATABASE
                 // rather than creating an empty unmigrated one inside the temp directory.
-                { cwd: ROOT, env: { ...process.env, REDBOT_DATA: DATA },
+                { cwd: ROOT,
+                  // The update check is pointed at a repository that cannot exist so this suite
+                  // never asks GitHub anything: a render test must not depend on what was
+                  // published this morning, and 75 screens must not spend a rate limit.
+                  env: { ...process.env, REDBOT_DATA: DATA,
+                         REDBOT_UPDATE_REPO: 'redbot-tests/does-not-exist-9f3a' },
                   stdio: ['ignore', 'pipe', 'pipe'] });
   let banner = '';
   await new Promise((res, rej) => {

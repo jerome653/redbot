@@ -303,6 +303,27 @@ select.sel option{background:var(--glass-2);color:var(--ink)}
   background:var(--amber-soft);border:1px solid color-mix(in srgb,var(--amber) 26%,transparent);
 }
 .banner b{color:var(--ink)}
+/* The update notice. Jade rather than ember: a newer version being available is good news, and
+   ember in this console means "something is wrong" — spending it here would cheapen the one
+   signal that has to keep working. Sits above the banner but reads quieter than it. */
+.upd{
+  flex:none;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;
+  margin:0 0 .5rem;padding:.6rem .9rem;border-radius:12px;
+  border:1px solid color-mix(in srgb,var(--jade) 30%,transparent);
+  background:var(--jade-soft);color:var(--ink-2);font-size:.85rem;position:relative;z-index:1
+}
+.upd b{color:var(--ink)}
+.upd a.updbtn{
+  color:var(--ink);text-decoration:none;padding:.35rem .8rem;border-radius:9px;
+  border:1px solid color-mix(in srgb,var(--jade) 40%,transparent);
+  background:color-mix(in srgb,var(--jade) 12%,transparent);font-size:.8rem;white-space:nowrap
+}
+.upd a.updbtn:hover{background:color-mix(in srgb,var(--jade) 22%,transparent)}
+.upd .updx{
+  margin-left:auto;cursor:pointer;background:none;border:0;color:var(--ink-3);
+  font:inherit;font-size:1rem;line-height:1;padding:.2rem .4rem
+}
+.upd .updx:hover{color:var(--ink)}
 
 /* ---------- the ticker: five figures, in the ledge ---------- */
 .ticker{
@@ -1158,6 +1179,10 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 
   </div>
 </aside>
+
+<!-- A newer release exists. Rendered by updateCheck(); hidden until there is something to say,
+     and never allowed to sit above the setup gate's own banner in importance. -->
+<div class="upd" id="updateBar" hidden></div>
 
 <p class="banner" id="banner">Loading…</p>
 
@@ -3378,6 +3403,143 @@ function setup(){
   };
   addOp.append(opName,opBtn);b.append(addOp);b.append(signIn);
 
+  /* ---- dashboard sync ----
+   *
+   * Only the three things redbot itself holds: where the dashboard is, this install's ingest
+   * token, and a read-only share token. The service's own REDBOT_ADMIN_TOKEN and
+   * REDBOT_SHARE_TOKEN_SECRET are deliberately NOT here — the first mints and revokes tokens for
+   * every install, the second signs them, and putting either on a desktop would hand a
+   * service-wide credential to every operator. Both tokens are sealed in the vault, never echoed
+   * back, and nothing here ships in the installer.
+   */
+  if(s.sync&&s.sync.available){
+    b.append(el('div','srcgrp','dashboard sync'));
+    const sy=s.sync;
+
+    b.append(setupRow(sy.url?'ok':'bad','Endpoint',
+      sy.url?esc(sy.url)+(sy.urlFromEnv?' (from REDBOT_SYNC_URL)':''):'not set — nothing is sent'));
+    if(sy.installId) b.append(setupRow('ok','This install',esc(sy.installId)+
+      ' — the id a token is minted against'));
+
+    if(!sy.urlFromEnv){
+      const urlRow=el('div');urlRow.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.5rem 0';
+      const urlIn=el('input');
+      urlIn.placeholder='https://your-dashboard.example.com';
+      urlIn.value=sy.url||'';
+      urlIn.setAttribute('aria-label','Dashboard endpoint');
+      urlIn.style.cssText='flex:1;min-width:240px;font:inherit;font-size:.85rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+      const urlBtn=el('button','mini');urlBtn.textContent='Save endpoint';
+      urlBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+      urlBtn.onclick=async()=>{
+        const r=await fetch('/api/sync/url',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({url:urlIn.value})}).then(x=>x.json());
+        if(!r.ok){toast(r.error||'could not save');return}
+        toast(r.url?'Saved':'Cleared');await again();
+      };
+      urlRow.append(urlIn,urlBtn);b.append(urlRow);
+    }
+
+    /* One builder for both tokens — they differ only in which secret name they land under. */
+    const tokenRow=(kind,label,st,hint)=>{
+      b.append(setupRow(st.present?'ok':'bad',label,
+        st.present?`stored, sealed, ending ${esc(st.hint)} — from ${esc(st.from)}`
+                  :esc(st.note||'not set')));
+      const row=el('div');row.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.35rem 0 .6rem';
+      const inp=el('input');
+      inp.type='password';inp.autocomplete='off';inp.placeholder=hint;
+      inp.setAttribute('aria-label',label);
+      inp.style.cssText='flex:1;min-width:240px;font:inherit;font-size:.85rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+      const btn=el('button','mini');btn.textContent='Store it';
+      btn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+      btn.onclick=async()=>{
+        if(!inp.value.trim()){toast('Paste the token first');return}
+        const r=await fetch('/api/sync/token',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({kind,value:inp.value})}).then(x=>x.json());
+        /* Cleared whatever the answer — a token must not sit in a form field afterwards. */
+        inp.value='';
+        if(!r.ok){toast(r.error||'could not store');return}
+        toast(`Stored — ends ${r.hint}`);await again();
+      };
+      row.append(inp,btn);
+      if(st.present){
+        const rm=el('button','mini');rm.textContent='Remove';
+        rm.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+        rm.onclick=async()=>{
+          const r=await fetch('/api/sync/token/remove',{method:'POST',headers:{'content-type':'application/json'},
+            body:JSON.stringify({kind})}).then(x=>x.json());
+          if(!r.ok){toast(r.error||'could not remove');return}
+          toast('Removed');await again();
+        };
+        row.append(rm);
+      }
+      b.append(row);
+    };
+
+    tokenRow('push','Ingest token',sy.pushToken,'paste the ingest token');
+    tokenRow('share','Share token',sy.shareToken,'paste a share token (optional)');
+
+    /* Live reachability. Its own row, filled in asynchronously, because it makes a network call
+       and must not delay the screen rendering. */
+    const hRow=el('div','syncHealth');
+    hRow.id='syncHealth';
+    hRow.style.cssText='padding:.35rem 0 .2rem';
+    hRow.innerHTML='<span class="tag">checking…</span> <span class="tiny">contacting the dashboard</span>';
+    b.append(hRow);
+
+    const hBtns=el('div');hBtns.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;padding:.2rem 0 .6rem';
+    const mkBtn=(label,fn)=>{const x=el('button','mini');x.textContent=label;
+      x.style.cssText='padding:.5rem .95rem;font-size:.8rem';x.onclick=fn;return x};
+
+    const paintHealth=(h)=>{
+      const node=$('#syncHealth');
+      if(!node)return;
+      if(!h){node.innerHTML='<span class="tag no">unknown</span> <span class="tiny">could not check</span>';return}
+      if(h.configured===false){
+        node.innerHTML='<span class="tag no">not configured</span> <span class="tiny">'+
+          esc(h.reason||'set an endpoint and a token above')+'</span>';return;
+      }
+      const bits=[];
+      bits.push(h.ok?'<span class="tag ok">reachable</span>':'<span class="tag stop">unreachable</span>');
+      bits.push('<span class="tiny">'+esc(String(h.detail||'').slice(0,90))+'</span>');
+      if(typeof h.ms==='number')bits.push('<span class="tiny">'+h.ms+' ms</span>');
+      if(h.lastPushAt)bits.push('<span class="tiny">last push '+ago(h.lastPushAt)+'</span>');
+      else bits.push('<span class="tiny">nothing pushed yet</span>');
+      if(typeof h.streamsAcknowledged==='number')
+        bits.push('<span class="tiny">'+h.streamsAcknowledged+' stream(s) acknowledged</span>');
+      if(h.cached)bits.push('<span class="tiny">(cached)</span>');
+      node.innerHTML=bits.join(' ');
+    };
+
+    const checkHealth=async(force)=>{
+      paintHealth(null);
+      $('#syncHealth').innerHTML='<span class="tag">checking…</span>';
+      try{ paintHealth(await fetch('/api/sync/health'+(force?'?force=1':'')).then(x=>x.json())); }
+      catch{ paintHealth(null); }
+    };
+
+    hBtns.append(mkBtn('Check now',()=>checkHealth(true)));
+    hBtns.append(mkBtn('Push now',async()=>{
+      toast('Pushing…');
+      try{
+        const r=await fetch('/api/sync/push',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({})}).then(x=>x.json());
+        if(r.skipped){toast(r.skipped)}
+        else if(!r.ok){toast(r.error||(r.blocked?r.blocked[0].why:'push failed'))}
+        else{toast(r.sent?r.sent+' event(s) sent':'nothing new to send')}
+      }catch(e){toast('push failed')}
+      await checkHealth(true);
+    }));
+    b.append(hBtns);
+    /* Kicked off after the screen is built, never awaited by it. */
+    setTimeout(()=>checkHealth(false),0);
+
+    b.append(el('div','tiny',
+      'Both tokens are sealed with AES-256-GCM before they touch the database and are never shown '+
+      'again — only the last four characters. Paste only the token itself, not a '+
+      '<code>NAME=value</code> line. The dashboard’s own admin and signing secrets are NOT '+
+      'entered here and never leave the server that owns them.'));
+  }
+
   /* ---- how the model is reached ---- */
   b.append(el('div','srcgrp','how redbot reaches the model'));
   const prov=el('div');prov.style.cssText='display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;padding:.35rem 0';
@@ -3626,6 +3788,69 @@ async function load(){
 }
 load().catch(e=>{$('#banner').textContent='Could not load: '+e.message});
 pulseCheck(); setInterval(pulseCheck,15000);
+
+/**
+ * Offer a newer redbot, if there is one.
+ *
+ * DELIBERATELY SEPARATE FROM load(). An update notice must never be able to stop the console
+ * rendering, so this is its own promise with its own catch — a failure here leaves the bar hidden
+ * and nothing else changes. src/update.ts already fails closed; this is the second layer.
+ *
+ * The links carry target="_blank", which electron/main.mjs turns into shell.openExternal — the
+ * download opens in the OPERATOR'S OWN BROWSER, and the installer they run is one they fetched
+ * themselves from GitHub. Nothing is downloaded by this app and nothing is installed by it. In a
+ * plain browser the same markup opens a tab, so the console keeps working outside the desktop
+ * shell exactly as it does today.
+ *
+ * Dismissal is remembered PER VERSION: closing the notice for 0.2.0 must not hide 0.3.0. That is
+ * the same reasoning as the setup gate refusing a "setup complete" flag — a remembered answer to
+ * a question that has since changed is worse than no answer.
+ */
+async function updateCheck(force){
+  const bar=$('#updateBar');
+  if(!bar)return;
+  let r;
+  try{ r=await fetch('/api/update'+(force?'?force=1':'')).then(x=>x.json()); }
+  catch{ return; }
+  if(!r||!r.ok||!r.newer||!r.release){ bar.hidden=true; return; }
+
+  let dismissed=null;
+  try{ dismissed=localStorage.getItem('redbot.updateDismissed'); }catch{}
+  if(!force&&dismissed===r.latest){ bar.hidden=true; return; }
+
+  const rel=r.release;
+  bar.textContent='';
+  const say=el('span',null,
+    `<b>redbot ${esc(rel.tag)} is available.</b> You are running ${esc(r.current)}.`
+    +(rel.prerelease?' <span class="tag no">prerelease</span>':''));
+  bar.append(say);
+
+  /* The installer, when the release published one. Absent is normal — a source-only release is
+     still worth telling somebody about, they just go to the page instead. */
+  if(rel.download){
+    const mb=rel.download.size?` (${(rel.download.size/1048576).toFixed(0)} MB)`:'';
+    const dl=el('a','updbtn','Download the installer'+mb);
+    dl.href=rel.download.url; dl.target='_blank'; dl.rel='noreferrer';
+    bar.append(dl);
+  }
+  const page=el('a','updbtn','Release notes');
+  page.href=rel.url; page.target='_blank'; page.rel='noreferrer';
+  bar.append(page);
+
+  const x=el('button','updx','×');
+  x.title='Hide this until the next version';
+  x.setAttribute('aria-label','Hide this update notice');
+  x.onclick=()=>{
+    try{ localStorage.setItem('redbot.updateDismissed',r.latest); }catch{}
+    bar.hidden=true;
+  };
+  bar.append(x);
+  bar.hidden=false;
+}
+updateCheck().catch(()=>{});
+/* Once a day is plenty for a window somebody leaves open all week; the server caches for six
+   hours regardless, so this is not one request per firing. */
+setInterval(()=>updateCheck().catch(()=>{}),24*3600*1000);
 
 /* What is on each port is the one thing here that changes without anybody clicking — a browser
    can be closed from its own window, or a port taken by another program. Polled only while the

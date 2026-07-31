@@ -94,7 +94,19 @@ let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccou
     portStatusImpl = null, stopBrowserImpl = null, setUpHereImpl = null,
     boundHandlesImpl = null, machineImpl = null, pagesApi = null, summaryApi = null,
     selectAccountImpl = null, selectedHandleImpl = null,
-    dbStatus = null, sourcesApi = null, requirementsApi = null, configApi = null;
+    dbStatus = null, sourcesApi = null, requirementsApi = null, configApi = null,
+    updateApi = null, pushApi = null, pushStateApi = null, pushSchedulerApi = null,
+    pushClientApi = null;
+
+/**
+ * The push scheduler lives HERE rather than in the Electron shell.
+ *
+ * This process already holds the database open, so a push reads through the same connection
+ * instead of opening a second one against the same file. It is also the only process that knows
+ * when a run finishes — which is the trigger that carries information, because it is the one
+ * moment the numbers change.
+ */
+let pushScheduler = null;
 /**
  * The vault, for the Setup screen.
  *
@@ -181,6 +193,13 @@ try {
    * One typed implementation, three readers.
    */
   configApi = (await import('../../dist/config.js'));
+  updateApi = (await import('../../dist/update.js'));
+  /* Dashboard sync: the same module the CLI uses, so the Setup screen and `redbot push` cannot
+     disagree about where the endpoint is or which secret name holds a token. */
+  pushApi = (await import('../../dist/push/index.js'));
+  pushStateApi = (await import('../../dist/push/state.js'));
+  pushSchedulerApi = (await import('../../dist/push/scheduler.js'));
+  pushClientApi = (await import('../../dist/push/client.js'));
 } catch (e) {
   console.error(
     '\n  This console reads the database through the compiled build, which is missing or stale.\n' +
@@ -1117,6 +1136,9 @@ function runAction(key, opts) {
     child.on('close', (code) => {
       clearTimeout(timer); running = null; runningAccount = null; runningChild = null;
       runLogFinish(code);
+      /* The moment the numbers changed. Fire-and-forget: the run's response must not wait on a
+         network call, and a push that fails leaves its cursor alone and retries on the heartbeat. */
+      try { pushScheduler?.trigger('run-end'); } catch { /* never let a push break a run */ }
       /* A run somebody stopped is not a run that failed. Reported separately so the screen can
          say "Stopped" rather than showing a red error for the thing it was asked to do. */
       const stopped = runningStopped;
@@ -1182,6 +1204,12 @@ let selectedOperator = process.env.REDBOT_OPERATOR || configApi.storedOperatorSe
  * the screen disagree with the run.
  */
 let selectedProvider = process.env.REDBOT_LLM === 'api' ? 'api' : 'cli';
+
+/** Last answer from the update check, so the page asking on every load costs one request a day. */
+let updateCache = { at: 0, value: null };
+
+/** Last dashboard reachability answer. Short-lived: it is a liveness reading, not a fact. */
+let syncHealthCache = { at: 0, value: null };
 const llmProvider = () => selectedProvider;
 
 function readOperators() {
@@ -1331,6 +1359,29 @@ async function setupStatus() {
     apiKeyFromEnv: Boolean(process.env.ANTHROPIC_API_KEY),
     provider: llmProvider(),
     providerFromEnv: process.env.REDBOT_LLM === 'api' ? 'api' : null,
+    /**
+     * Dashboard sync, reported the same way secrets always are here: whether a token EXISTS and
+     * its last four characters, never the value. `installId` is not a secret — it is the
+     * partition key the dashboard stores under, and an operator needs to read it out to have a
+     * token minted for this install.
+     */
+    sync: await (async () => {
+      if (!pushApi) return { available: false };
+      try {
+        const push = await pushApi.resolveToken();
+        const share = await pushApi.resolveShareToken();
+        return {
+          available: true,
+          url: pushApi.syncUrl(),
+          urlFromEnv: Boolean(process.env.REDBOT_SYNC_URL),
+          installId: pushApi.pushStatus().installId,
+          pushToken: push.token ? { present: true, from: push.from, hint: push.token.slice(-4) } : { present: false, note: push.note ?? null },
+          shareToken: share.token ? { present: true, from: share.from, hint: share.token.slice(-4) } : { present: false, note: share.note ?? null }
+        };
+      } catch (e) {
+        return { available: false, error: e && e.message ? e.message : String(e) };
+      }
+    })(),
     operators,
     selectedOperator,
     /* Same rule as apiKeyFromEnv: the environment wins over the stored choice, so say when one
@@ -1731,6 +1782,107 @@ const server = createServer((req, res) => {
         }
       }
 
+      /**
+       * Dashboard sync configuration.
+       *
+       * THE TOKENS GO TO THE VAULT, sealed, exactly like the Anthropic key — same POST-body rule,
+       * same never-echoed response. The endpoint URL is not a secret and is persisted beside the
+       * push watermarks, because a desktop app has no shell to export `REDBOT_SYNC_URL` in.
+       *
+       * WHAT IS DELIBERATELY NOT HERE: `REDBOT_ADMIN_TOKEN` and `REDBOT_SHARE_TOKEN_SECRET`.
+       * Those are the SERVICE's secrets — the first mints and revokes tokens for every install,
+       * the second signs them. Accepting either here would put a service-wide credential on every
+       * operator's desktop, which is the failure src/config.ts opens by naming. redbot holds only
+       * the two tokens issued TO it.
+       */
+      if (url.pathname === '/api/sync/url') {
+        if (!pushApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing' }));
+        const raw = typeof body.url === 'string' ? body.url.trim() : '';
+        if (raw && !/^https?:\/\//i.test(raw)) {
+          return send(400, JSON.stringify({ ok: false, error: 'that is not an http(s) URL' }));
+        }
+        try {
+          const { readPushState, writePushState } = pushStateApi;
+          const state = readPushState();
+          if (raw) writePushState({ ...state, syncUrl: raw });
+          else { const { syncUrl, ...rest } = state; void syncUrl; writePushState(rest); }
+          return send(200, JSON.stringify({ ok: true, url: raw || null }));
+        } catch (e) {
+          return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+        }
+      }
+
+      /**
+       * Store a sync token. THE VALUE ARRIVES IN THE BODY AND IS NEVER SENT BACK — the same rule
+       * as /api/vault/key, for the same reason: a query string lands in access logs and history.
+       */
+      if (url.pathname === '/api/sync/token') {
+        if (!vaultApi || !pushApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing' }));
+        const reason = vaultApi.vaultUnavailableReason();
+        if (reason) return send(400, JSON.stringify({ ok: false, error: reason }));
+
+        const kind = body.kind === 'share' ? 'share' : body.kind === 'push' ? 'push' : null;
+        if (!kind) return send(400, JSON.stringify({ ok: false, error: 'kind must be "push" or "share"' }));
+        const name = kind === 'push' ? pushApi.SYNC_PUSH_TOKEN : pushApi.SYNC_SHARE_TOKEN;
+
+        const value = typeof body.value === 'string' ? body.value.trim() : '';
+        if (!value) return send(400, JSON.stringify({ ok: false, error: 'no token given' }));
+        if (value.length > 4096) return send(400, JSON.stringify({ ok: false, error: 'that is too long to be a token' }));
+        /* A pasted `NAME=value` line is the mistake this whole feature invites, and it cost a
+           401 while wiring it up. Refuse it with the fix named rather than storing it. */
+        if (/^[A-Z][A-Z0-9_]*=/.test(value)) {
+          return send(400, JSON.stringify({
+            ok: false,
+            error: 'that looks like a NAME=value line. Paste only the part after the "=".'
+          }));
+        }
+        try {
+          await vaultApi.putSecret(name, value);
+          return send(200, JSON.stringify({ ok: true, name, hint: value.slice(-4) }));
+        } catch (e) {
+          return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+        }
+      }
+
+      /**
+       * Push now — the retry button.
+       *
+       * Goes through the SCHEDULER rather than calling `pushOnce` directly, so a manual retry
+       * obeys the same one-at-a-time guard as the timer. Two pushes racing would re-send the same
+       * events and let whichever finished last decide the cursor; a button a person can hammer is
+       * exactly how that would happen.
+       */
+      if (url.pathname === '/api/sync/push') {
+        if (!pushScheduler) return send(503, JSON.stringify({ ok: false, error: 'the scheduler is not running' }));
+        if (pushScheduler.busy) {
+          return send(200, JSON.stringify({ ok: true, skipped: 'a push is already in flight' }));
+        }
+        syncHealthCache = { at: 0, value: null };   // the next health read must be fresh
+        const report = await pushScheduler.trigger('manual');
+        if (!report) {
+          return send(200, JSON.stringify({ ok: false, error: 'not configured — set an endpoint and a token' }));
+        }
+        const blocked = report.streams.filter((s) => s.stopped);
+        return send(200, JSON.stringify({
+          ok: !report.fatal && !blocked.length,
+          sent: report.sent,
+          ...(report.fatal ? { error: report.fatal } : {}),
+          ...(blocked.length ? { blocked: blocked.map((s) => ({ stream: s.stream, why: s.stopped })) } : {})
+        }));
+      }
+
+      if (url.pathname === '/api/sync/token/remove') {
+        if (!vaultApi || !pushApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing' }));
+        const kind = body.kind === 'share' ? 'share' : 'push';
+        const name = kind === 'push' ? pushApi.SYNC_PUSH_TOKEN : pushApi.SYNC_SHARE_TOKEN;
+        try {
+          const removed = await vaultApi.removeSecret(name);
+          return send(200, JSON.stringify({ ok: true, removed }));
+        } catch (e) {
+          return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+        }
+      }
+
       if (url.pathname === '/api/vault/key/remove') {
         if (!vaultApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing — run npm run build' }));
         try {
@@ -2100,6 +2252,94 @@ const server = createServer((req, res) => {
   }
 
   /* Who can run, and who is currently selected to pay. No credential paths cross this line. */
+  /**
+   * Is there a newer redbot? See src/update.ts for what this does and deliberately does not do.
+   *
+   * CACHED, because the page asks on every load and GitHub allows 60 unauthenticated requests an
+   * hour per address. Six hours is far below that even if somebody restarts the app all morning,
+   * and an update that is six hours stale is not a problem an update NOTICE has. `?force=1`
+   * exists for the "check now" button, and is the only path that can spend a request on demand.
+   *
+   * A failure is cached too, briefly. Without that, an offline machine re-attempts a DNS lookup
+   * on every screen change and the console feels slow for a feature nobody asked to run.
+   */
+  /**
+   * Is the dashboard reachable, and what happened last time we pushed?
+   *
+   * Separate from `/api/setup` because that is read on every screen change and this makes a
+   * NETWORK call — folding it in would put a round trip in front of every navigation. Cached for
+   * thirty seconds so a person clicking "Check now" twice does not double the traffic, with
+   * `?force=1` for the button itself.
+   */
+  if (url.pathname === '/api/sync/health') {
+    if (!pushApi) return send(200, JSON.stringify({ ok: false, reason: 'the compiled build is missing' }));
+    const force = url.searchParams.get('force') === '1';
+    if (!force && syncHealthCache.value && Date.now() - syncHealthCache.at < 30_000) {
+      return send(200, JSON.stringify({ ...syncHealthCache.value, cached: true }));
+    }
+    (async () => {
+      const { baseUrl } = pushApi.pushConfig();
+      if (!baseUrl) {
+        const v = { ok: false, configured: false, reason: 'no endpoint set' };
+        syncHealthCache = { at: Date.now(), value: v };
+        return send(200, JSON.stringify({ ...v, cached: false }));
+      }
+      const { token } = await pushApi.resolveToken();
+      const started = Date.now();
+      const health = await new pushClientApi.PushClient({ baseUrl, token: token ?? '' }).health();
+      const state = pushStateApi.readPushState();
+      const lastSent = Object.entries(state.lastSentAt ?? {})
+        .sort((a, b) => String(b[1]).localeCompare(String(a[1])))[0] ?? null;
+      const v = {
+        ok: health.ok,
+        configured: Boolean(baseUrl && token),
+        hasToken: Boolean(token),
+        url: baseUrl,
+        detail: health.detail,
+        ms: Date.now() - started,
+        checkedAt: new Date().toISOString(),
+        lastPushAt: lastSent ? lastSent[1] : null,
+        lastPushStream: lastSent ? lastSent[0] : null,
+        streamsAcknowledged: Object.keys(state.cursors ?? {}).length,
+        busy: Boolean(pushScheduler?.busy)
+      };
+      syncHealthCache = { at: Date.now(), value: v };
+      send(200, JSON.stringify({ ...v, cached: false }));
+    })().catch((e) => send(200, JSON.stringify({ ok: false, reason: e && e.message ? e.message : String(e) })));
+    return;
+  }
+
+  if (url.pathname === '/api/update') {
+    const force = url.searchParams.get('force') === '1';
+    const ttl = updateCache.value && updateCache.value.ok ? 6 * 3600_000 : 10 * 60_000;
+    if (!force && updateCache.value && Date.now() - updateCache.at < ttl) {
+      return send(200, JSON.stringify({ ...updateCache.value, cached: true }));
+    }
+    if (!updateApi) {
+      return send(200, JSON.stringify({ ok: false, current: '0.0.0', reason: 'the compiled build is missing' }));
+    }
+    /**
+     * Promise chaining rather than `await`, because THIS callback is synchronous — only the POST
+     * body branch below is async. Written with `await` first and caught immediately by running it:
+     * `SyntaxError: Unexpected reserved word`, the server child died on import, and the window
+     * closed before it opened. Making the shared callback async to suit one new route would put
+     * every other route behind a promise for no reason.
+     */
+    updateApi.checkForUpdate()
+      .then((r) => {
+        updateCache = { at: Date.now(), value: r };
+        send(200, JSON.stringify({ ...r, cached: false }));
+      })
+      .catch((e) => {
+        /* checkForUpdate is written not to throw; this is the belt to those braces. An update
+           check must never be the reason a screen fails to render. */
+        const r = { ok: false, current: '0.0.0', reason: e && e.message ? e.message : String(e) };
+        updateCache = { at: Date.now(), value: r };
+        send(200, JSON.stringify({ ...r, cached: false }));
+      });
+    return;
+  }
+
   if (url.pathname === '/api/operators') {
     const operators = readOperators();
     const sel = operators.find((o) => o.name === selectedOperator) || null;
@@ -2163,4 +2403,46 @@ server.listen(PORT, '127.0.0.1', () => {
     `  Bound to 127.0.0.1 and refuses cross-origin requests — there is no other guard.\n` +
     `  Ctrl+C to stop.\n`
   );
+
+  /**
+   * Start pushing on this install's own schedule.
+   *
+   * Silent when unconfigured — no endpoint or no token means `trigger()` returns null and nothing
+   * is logged, because an operator who has not set up a dashboard should see no evidence that one
+   * exists. Configuration is re-read on every trigger, so pasting a token on the Setup screen
+   * starts it working on the next tick without a restart.
+   */
+  if (pushSchedulerApi) {
+    try {
+      pushScheduler = pushSchedulerApi.createScheduler({
+        log: (line) => process.stdout.write(`  ${line}\n`)
+      });
+      pushScheduler.start();
+      /* On start, so the dashboard learns this install is alive without waiting a full interval. */
+      pushScheduler.trigger('start');
+    } catch (e) {
+      process.stdout.write(`  push scheduler unavailable: ${e && e.message ? e.message : e}\n`);
+    }
+  }
 });
+
+/**
+ * A last push on the way out, so the dashboard's final view is not mid-session.
+ *
+ * Bounded: a shutdown must not hang on a network call, so this waits at most three seconds and
+ * then exits regardless. The cursor is untouched by an abandoned push, so the events go next time.
+ */
+let shuttingDown = false;
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    if (shuttingDown) process.exit(0);
+    shuttingDown = true;
+    const done = () => process.exit(0);
+    const bail = setTimeout(done, 3000);
+    bail.unref?.();
+    Promise.resolve(pushScheduler?.trigger('quit'))
+      .then(() => pushScheduler?.stop())
+      .catch(() => {})
+      .finally(() => { clearTimeout(bail); done(); });
+  });
+}

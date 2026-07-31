@@ -21,6 +21,7 @@ import { session } from './commands/session.js';
 import { observe } from './commands/observe.js';
 import { opportunity } from './commands/opportunity.js';
 import { doctor } from './commands/doctor.js';
+import { push, pull } from './commands/push.js';
 import { backupCmd } from './commands/backup.js';
 import { regret } from './commands/regret.js';
 import { certifyCmd } from './commands/certify.js';
@@ -239,6 +240,14 @@ async function main(): Promise<number> {
     case 'accounts': return accounts(positional[0], positional[1]);
     /** `--search "<q>"` adds a saved search; a bare value is a subreddit. */
     case 'sources': return sources(positional[0], positional[1], { search: flagValue('search'), why: flagValue('why') });
+    /* Sends only what the dashboard has not acknowledged. `push dry-run` builds and validates
+       without transmitting, which is the safe first run on an install that has never pushed. */
+    case 'push':    return push(positional[0], {
+      only: flagValue('only'), batch: flagValue('batch'), force: flags.has('--force')
+    });
+    /* The receiving half of account sync. Uses the SHARE token, and changes nothing without
+       --apply, because it writes to accounts a person set up by hand. */
+    case 'pull':    return pull(positional[0], { apply: flags.has('--apply') });
     case 'read':    return read(positional[0]);
     case 'search':  return search(positional[0], undefined, flagValue('commit'));
     case 'draft':   return draft(positional[0]);
