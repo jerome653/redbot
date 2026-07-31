@@ -65,6 +65,57 @@ export async function isBrowserUp(endpoint = config.browser.cdpEndpoint): Promis
   }
 }
 
+/** The browser's own user-agent, from CDP. `null` when it could not be read. */
+export async function browserUserAgent(endpoint = config.browser.cdpEndpoint): Promise<string | null> {
+  try {
+    const res = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(2500) });
+    if (!res.ok) return null;
+    return ((await res.json()) as { 'User-Agent'?: string })['User-Agent'] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Pure, so the classification can be tested without a browser. */
+export function isHeadlessUA(ua: string | null): boolean {
+  return ua !== null && /headless/i.test(ua);
+}
+
+/**
+ * Refusing to attach to a headless browser, and why it is refused HERE.
+ *
+ * MEASURED 2026-07-27, and it cost an account 24 hours. The product console inherits the shell it
+ * was started in and deliberately will not take a CDP endpoint from the request (H5), so a console
+ * started without `REDBOT_CDP` resolved `accounts.json` and attached to whatever was on that
+ * port — which was a headless Chrome belonging to another job. Reddit answers a headless browser
+ * with a block page **served as HTTP 200 with the block in the body**. `reply` navigated, saw the
+ * block, and recorded a `login.fail` — twice. Two of those inside 24 hours is the health engine's
+ * Stop rule, so redbot locked the account out of publishing for a day on evidence it had generated
+ * about the wrong browser.
+ *
+ * `doctor` already reported this as a FAIL, but nothing consulted it before acting. The check
+ * therefore belongs at the one place every command passes through, and it must fire BEFORE any
+ * navigation: a block page that is never fetched cannot be written to the account's record.
+ *
+ * An unreadable user-agent is allowed through rather than refused. `isBrowserUp` has just
+ * succeeded against the same endpoint, so a missing field is a shape difference in the CDP
+ * payload, not evidence of headlessness — and refusing on it would ground redbot over a detail
+ * that has never been observed. `doctor` reports that case as a WARN and still does.
+ */
+export class HeadlessBrowserError extends Error {
+  constructor(endpoint: string, ua: string) {
+    super(
+      `The browser at ${endpoint} is HEADLESS (${ua}).\n` +
+      `Reddit answers a headless browser with a block page delivered as HTTP 200, and a blocked ` +
+      `page recorded against your account counts as a login failure — two in a day stops publishing.\n` +
+      `Nothing was opened and nothing was recorded.\n\n` +
+      `Open a headed Chrome on the account's profile, or point redbot at one you already have:\n` +
+      `  REDBOT_CDP=http://127.0.0.1:<port>`
+    );
+    this.name = 'HeadlessBrowserError';
+  }
+}
+
 /**
  * Attach to the operator's Chrome and open our own tab.
  *
@@ -74,6 +125,10 @@ export async function isBrowserUp(endpoint = config.browser.cdpEndpoint): Promis
 export async function attach(): Promise<Session> {
   const endpoint = config.browser.cdpEndpoint;
   if (!(await isBrowserUp(endpoint))) throw new NoBrowserError(endpoint);
+
+  // Before the connection, not after: the damage this prevents is written by the first navigation.
+  const ua = await browserUserAgent(endpoint);
+  if (isHeadlessUA(ua)) throw new HeadlessBrowserError(endpoint, ua as string);
 
   const browser = await chromium.connectOverCDP(endpoint, { noDefaults: true } as never);
   const context = browser.contexts()[0];

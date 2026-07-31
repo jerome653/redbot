@@ -15,7 +15,7 @@
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ROOT, DATA, paths, config, claudeConfigDir, OperatorAuthError } from '../config.js';
-import { isBrowserUp } from '../browser.js';
+import { isBrowserUp, browserUserAgent, isHeadlessUA } from '../browser.js';
 import { policy, limitsByProvenance } from '../policy.js';
 import { loadDrafts, loadThreads, loadGaps, loadAssessments } from '../store.js';
 import { loadObservations } from '../health.js';
@@ -312,18 +312,20 @@ export async function doctor(): Promise<number> {
    * design around, it is the choice that took reading from 0 threads to 25.
    */
   if (up) {
-    let ua: string | null = null;
-    try {
-      const r = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(2500) });
-      if (r.ok) ua = ((await r.json()) as { 'User-Agent'?: string })['User-Agent'] ?? null;
-    } catch { /* unreachable is already reported by the check above */ }
+    // The same two functions `attach()` refuses on, so the report and the refusal cannot drift
+    // apart — D-01's lesson: two stages answering one question diverge by default.
+    //
+    // The endpoint resolved above is passed in rather than re-read: `config.browser.cdpEndpoint`
+    // THROWS when no account is selected, and this branch is reached with that already handled.
+    const ua = endpoint ? await browserUserAgent(endpoint) : null;
 
     if (ua === null) {
       add('headed browser', 'WARN', 'could not read the browser user-agent — cannot tell whether it is headless');
-    } else if (/headless/i.test(ua)) {
+    } else if (isHeadlessUA(ua)) {
       add('headed browser', 'FAIL',
         'the attached browser is HEADLESS — Reddit answers it with a block page served as HTTP 200, ' +
-        'so reads return nothing and every action fails silently. Attach a headed Chrome; redbot ' +
+        'so reads return nothing and every action fails silently. `attach()` now refuses this before ' +
+        'it can navigate, so nothing reaches the account record. Attach a headed Chrome; redbot ' +
         'cannot run on a server or any display-less host.');
     } else {
       add('headed browser', 'PASS', 'headed — Reddit serves browsers, not clients');
