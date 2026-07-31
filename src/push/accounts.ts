@@ -225,22 +225,40 @@ export async function pullAccounts(
 
   const incoming = Array.isArray(res.body?.accounts) ? res.body.accounts as PortableAccount[] : [];
   const local = await portableAccounts();
-  const byHandle = new Map(local.map((a) => [String(a.handle), a]));
+
+  /**
+   * Match handles CASE-INSENSITIVELY, and that is not tidiness.
+   *
+   * `accounts.handle` is `TEXT PRIMARY KEY` with no `COLLATE NOCASE`, so SQLite compares it
+   * byte-for-byte. A remote `quirky_owl_8028` arriving against a local `Quirky_Owl_8028` would
+   * therefore look absent, be planned as a create, and the INSERT WOULD SUCCEED — two rows, two
+   * Chrome profiles and two debug ports for one Reddit account, which is one account posting as
+   * itself twice. Reddit treats the two spellings as the same user; so must this.
+   */
+  const key = (h: unknown) => String(h ?? '').trim().toLowerCase();
+  const byHandle = new Map(local.map((a) => [key(a.handle), a]));
 
   const plan: PullPlanEntry[] = [];
+  const seen = new Set<string>();
   for (const remote of incoming) {
     const handle = String(remote.handle ?? '').trim();
     if (!handle) continue;
-    const here = byHandle.get(handle);
+    /* A list that names the same account twice must not be applied twice either. */
+    if (seen.has(key(handle))) continue;
+    seen.add(key(handle));
+
+    const here = byHandle.get(key(handle));
     if (!here) { plan.push({ handle, action: 'create' }); continue; }
     const changed = diff(here, remote);
+    /* Update the row that EXISTS, under the spelling it already has — using the incoming
+       spelling would insert a second row rather than update the first. */
     plan.push(changed.length
-      ? { handle, action: 'update', changed }
-      : { handle, action: 'unchanged' });
+      ? { handle: String(here.handle), action: 'update', changed }
+      : { handle: String(here.handle), action: 'unchanged' });
   }
 
-  const remoteHandles = new Set(incoming.map((a) => String(a.handle)));
-  const withdrawn = local.map((a) => String(a.handle)).filter((h) => !remoteHandles.has(h));
+  const remoteHandles = new Set(incoming.map((a) => key(a.handle)));
+  const withdrawn = local.map((a) => String(a.handle)).filter((h) => !remoteHandles.has(key(h)));
 
   return {
     fetched: true,
@@ -265,13 +283,15 @@ export async function applyAccounts(
   incoming: PortableAccount[], plan: PullPlanEntry[]
 ): Promise<{ applied: number; errors: string[] }> {
   const { createConsoleAccount, updateConsoleAccount } = await import('../console-accounts.js');
-  const byHandle = new Map(incoming.map((a) => [String(a.handle), a]));
+  /* Keyed case-insensitively for the same reason the plan is: an `update` entry carries the
+     LOCAL spelling, which may differ in case from the incoming one it came from. */
+  const byHandle = new Map(incoming.map((a) => [String(a.handle ?? '').trim().toLowerCase(), a]));
   const errors: string[] = [];
   let applied = 0;
 
   for (const entry of plan) {
     if (entry.action === 'unchanged') continue;
-    const a = byHandle.get(entry.handle);
+    const a = byHandle.get(entry.handle.toLowerCase());
     if (!a) continue;
 
     const common = {

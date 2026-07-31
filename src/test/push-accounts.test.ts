@@ -264,6 +264,43 @@ describe('pulling the list', () => {
     assert.equal(still.rows.length, 1, 'a pull must never delete a local account');
   });
 
+  test('a handle that differs only in CASE is never created twice', async () => {
+    /**
+     * REGRESSION, and the one that would have produced real damage. `accounts.handle` is
+     * `TEXT PRIMARY KEY` with no `COLLATE NOCASE`, so SQLite compares it byte-for-byte: a remote
+     * `striking_mousse6841` against a local `Striking_Mousse6841` looks ABSENT, gets planned as a
+     * create, and the INSERT SUCCEEDS. Two rows, two Chrome profiles, two debug ports — one
+     * Reddit account posting as itself twice. Reddit treats the spellings as one user.
+     */
+    const m = remote([
+      { handle: 'striking_mousse6841', role: 'reviews', speaks: 'things',
+        subreddits: '["WordPress"]', timezone: 'Asia/Manila',
+        quiet_start: 0, quiet_end: 8, daily_ceiling: 1, note: 'seeded' }
+    ]);
+    const client = new PushClient({ baseUrl: 'https://push.invalid', token: 's', fetchImpl: m.fetchImpl });
+    const r = await pullAccounts(client, {});
+
+    const creates = r.plan.filter((p) => p.action === 'create');
+    assert.deepEqual(creates, [], 'a case-variant handle must not be planned as a new account');
+    const entry = r.plan.find((p) => p.handle.toLowerCase() === 'striking_mousse6841');
+    assert.ok(entry, 'it is still planned');
+    assert.equal(entry!.handle, 'Striking_Mousse6841',
+      'and carries the LOCAL spelling, so an update hits the existing row');
+    assert.equal(r.withdrawn.includes('Striking_Mousse6841'), false,
+      'nor may it look withdrawn just because the case differs');
+  });
+
+  test('the same account listed twice is planned once', async () => {
+    const m = remote([
+      { handle: 'Dup_Account', role: 'a', speaks: 'x', subreddits: '[]', timezone: 'Asia/Manila', quiet_start: 0, quiet_end: 8, daily_ceiling: 1 },
+      { handle: 'dup_account', role: 'b', speaks: 'y', subreddits: '[]', timezone: 'Asia/Manila', quiet_start: 0, quiet_end: 8, daily_ceiling: 1 }
+    ]);
+    const client = new PushClient({ baseUrl: 'https://push.invalid', token: 's', fetchImpl: m.fetchImpl });
+    const r = await pullAccounts(client, {});
+    const dup = r.plan.filter((p) => p.handle.toLowerCase() === 'dup_account');
+    assert.equal(dup.length, 1, 'a list naming one account twice must not be applied twice');
+  });
+
   test('an unchanged list costs a 304 and no plan', async () => {
     const m = remote([], 7, '"v7"');
     const client = new PushClient({ baseUrl: 'https://push.invalid', token: 's', fetchImpl: m.fetchImpl });

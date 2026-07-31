@@ -3517,6 +3517,65 @@ function setup(){
       catch{ paintHealth(null); }
     };
 
+    /* ---- pulling the shared account list ----
+     *
+     * Plan first, apply second, and never in one click: this is the only path where another
+     * machine's data reaches accounts a person set up by hand. An account already here is shown
+     * as "unchanged" or "update" and is never re-created — matching is case-insensitive because
+     * `accounts.handle` is a case-SENSITIVE primary key, so `quirky_owl` arriving against
+     * `Quirky_Owl` would otherwise insert a second row for one Reddit account.
+     */
+    const pullOut=el('div','tiny');
+    pullOut.style.cssText='padding:.2rem 0';
+    let lastPlan=null;
+
+    const renderPlan=(r)=>{
+      if(!r.ok){pullOut.innerHTML='<span class="tag no">could not read</span> '+esc(r.error||'');return}
+      const rows=(r.plan||[]).map(p=>{
+        const cls=p.action==='create'?'ok':p.action==='update'?'no':'';
+        const extra=p.changed&&p.changed.length?' ('+esc(p.changed.join(', '))+')':'';
+        return '<div><span class="tag '+cls+'">'+esc(p.action)+'</span> '+esc(p.handle)+extra+'</div>';
+      }).join('');
+      const w=(r.withdrawn||[]).length
+        ? '<div style="padding-top:.4rem"><span class="tag no">not in the list</span> '+
+          esc(r.withdrawn.join(', '))+' — nothing is removed; use Accounts to delete one.</div>'
+        : '';
+      pullOut.innerHTML=(rows||'<div>the shared list is empty</div>')+w+
+        '<div style="padding-top:.4rem">'+(r.actionable?r.actionable+' account(s) would change.':'nothing to apply.')+'</div>';
+    };
+
+    hBtns.append(mkBtn('Pull accounts',async()=>{
+      pullOut.innerHTML='<span class="tag">reading…</span>';
+      try{
+        /* POST, not GET: both handlers live in the server's POST branch, which is where the
+           body and origin guards are. A GET here fell through to the 404 route and rendered
+           "could not read not found", which looked like the dashboard was down. */
+        const r=await fetch('/api/sync/accounts/plan',{method:'POST',
+          headers:{'content-type':'application/json'},body:JSON.stringify({})}).then(x=>x.json());
+        lastPlan=r; renderPlan(r);
+        if(r.ok&&r.actionable)toast(r.actionable+' account(s) would change — press Apply');
+        else if(r.ok)toast('nothing to apply');
+        else toast(r.error||'could not read the list');
+      }catch{ pullOut.innerHTML='<span class="tag no">could not read</span>'; }
+    }));
+
+    hBtns.append(mkBtn('Apply',async()=>{
+      if(!lastPlan||!lastPlan.ok){toast('Press "Pull accounts" first');return}
+      if(!lastPlan.actionable){toast('nothing to apply');return}
+      toast('Applying…');
+      try{
+        const r=await fetch('/api/sync/accounts/apply',{method:'POST',
+          headers:{'content-type':'application/json'},body:JSON.stringify({})}).then(x=>x.json());
+        if(!r.ok){toast((r.errors&&r.errors[0])||r.error||'could not apply');}
+        else{toast(r.applied+' account(s) applied')}
+        pullOut.innerHTML='<span class="tag '+(r.ok?'ok':'no')+'">'+
+          (r.ok?'applied '+r.applied:'failed')+'</span> '+
+          '<span class="tiny">each still needs “Set it up” here and a Reddit sign-in by hand.</span>';
+        lastPlan=null;
+        await again();
+      }catch{ toast('could not apply'); }
+    }));
+
     hBtns.append(mkBtn('Check now',()=>checkHealth(true)));
     hBtns.append(mkBtn('Push now',async()=>{
       toast('Pushing…');
@@ -3530,6 +3589,7 @@ function setup(){
       await checkHealth(true);
     }));
     b.append(hBtns);
+    b.append(pullOut);
     /* Kicked off after the screen is built, never awaited by it. */
     setTimeout(()=>checkHealth(false),0);
 

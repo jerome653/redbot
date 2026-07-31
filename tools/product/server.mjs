@@ -96,7 +96,7 @@ let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccou
     selectAccountImpl = null, selectedHandleImpl = null,
     dbStatus = null, sourcesApi = null, requirementsApi = null, configApi = null,
     updateApi = null, pushApi = null, pushStateApi = null, pushSchedulerApi = null,
-    pushClientApi = null;
+    pushClientApi = null, pushAccountsApi = null;
 
 /**
  * The push scheduler lives HERE rather than in the Electron shell.
@@ -200,6 +200,7 @@ try {
   pushStateApi = (await import('../../dist/push/state.js'));
   pushSchedulerApi = (await import('../../dist/push/scheduler.js'));
   pushClientApi = (await import('../../dist/push/client.js'));
+  pushAccountsApi = (await import('../../dist/push/accounts.js'));
 } catch (e) {
   console.error(
     '\n  This console reads the database through the compiled build, which is missing or stale.\n' +
@@ -1868,6 +1869,57 @@ const server = createServer((req, res) => {
           sent: report.sent,
           ...(report.fatal ? { error: report.fatal } : {}),
           ...(blocked.length ? { blocked: blocked.map((s) => ({ stream: s.stream, why: s.stopped })) } : {})
+        }));
+      }
+
+      /**
+       * Pull the shared account list.
+       *
+       * TWO STEPS ON PURPOSE. `plan` fetches and compares, writing nothing; `apply` writes. This
+       * is the one path where a remote machine's data reaches local accounts a person set up by
+       * hand, so it shows what would change before it changes it.
+       *
+       * Uses the SHARE token, which is a different credential with different powers — an ingest
+       * token is refused here by the service, which is the point of issuing two.
+       */
+      if (url.pathname === '/api/sync/accounts/plan' || url.pathname === '/api/sync/accounts/apply') {
+        if (!pushApi || !pushAccountsApi) {
+          return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing' }));
+        }
+        const baseUrl = pushApi.syncUrl();
+        if (!baseUrl) return send(400, JSON.stringify({ ok: false, error: 'no endpoint set' }));
+        const share = await pushApi.resolveShareToken();
+        if (!share.token) {
+          return send(400, JSON.stringify({
+            ok: false,
+            error: `no share token — ${share.note ?? 'none stored'}. Paste one above.`
+          }));
+        }
+
+        const state = pushStateApi.readPushState();
+        const client = new pushClientApi.PushClient({ baseUrl, token: share.token });
+        /* No If-None-Match here: a person pressing "Pull accounts" is asking to look NOW, and a
+           304 would answer with nothing to show them. The ETag is for the background path. */
+        const r = await pushAccountsApi.pullAccounts(client, {});
+        if (r.stopped) return send(200, JSON.stringify({ ok: false, error: r.stopped }));
+
+        const actionable = r.plan.filter((p) => p.action === 'create' || p.action === 'update');
+        if (url.pathname === '/api/sync/accounts/plan') {
+          return send(200, JSON.stringify({
+            ok: true, listVersion: r.listVersion ?? null,
+            plan: r.plan, withdrawn: r.withdrawn, actionable: actionable.length
+          }));
+        }
+
+        if (!actionable.length) {
+          return send(200, JSON.stringify({ ok: true, applied: 0, note: 'nothing to apply' }));
+        }
+        const done = await pushAccountsApi.applyAccounts(r.incoming, r.plan);
+        if (r.etag) pushStateApi.writePushState({ ...state, accountsEtag: r.etag });
+        return send(200, JSON.stringify({
+          ok: !done.errors.length, applied: done.applied,
+          ...(done.errors.length ? { errors: done.errors } : {}),
+          withdrawn: r.withdrawn
         }));
       }
 
