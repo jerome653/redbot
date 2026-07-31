@@ -37,16 +37,25 @@
  * 3. The vault master key has nowhere to live. See electron/vault-key.mjs.
  * ---------------------------------------------------------------------------
  */
-import { app, BrowserWindow, shell, dialog, safeStorage, Menu } from 'electron';
+import { app, BrowserWindow, shell, dialog, safeStorage, Menu, ipcMain } from 'electron';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { ensureVaultKey } from './vault-key.mjs';
+import { createUpdater } from './updater.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
+
+/**
+ * `electron-updater` is CommonJS and has to be loaded SYNCHRONOUSLY, because the updater calls for
+ * it on first use rather than at import time (see electron/updater.mjs — touching it outside
+ * Electron throws). `await import()` would make that call site async for no gain.
+ */
+const require = createRequire(import.meta.url);
 
 /**
  * A working directory that EXISTS ON DISK.
@@ -98,6 +107,58 @@ app.setName('redbot');
 let serverChild = null;
 let win = null;
 let bootError = null;
+let updater = null;
+
+/**
+ * Applying an update, from the console's Setup screen.
+ *
+ * WHY THIS IS IN THE MAIN PROCESS AND NOT BEHIND AN /api ROUTE. The console server is a child
+ * running as plain Node (ELECTRON_RUN_AS_NODE=1) — it cannot quit and relaunch this app, and
+ * `electron-updater` does not work outside the Electron main process at all. See preload.cjs for
+ * the full argument, and updater.mjs for what the updater does and does not do on its own.
+ *
+ * NOTHING HERE RUNS BY ITSELF. There is no check on launch, no timer, and no install-on-quit;
+ * `createUpdater` turns electron-updater's automatic download and install off explicitly, and
+ * electron/updater.test.mjs pins that. The only way an update installs is a click that reaches
+ * `redbot:update-apply`.
+ */
+function wireUpdater() {
+  updater = createUpdater({
+    loadAutoUpdater: () => require('electron-updater').autoUpdater,
+    isPackaged: app.isPackaged,
+    currentVersion: app.getVersion(),
+    log: boot_log,
+    /* Dev runs refuse to update unless asked, because a dev build installing a release build over
+       itself is not something to do by accident. */
+    allowDev: process.env.REDBOT_DEV_UPDATES === '1',
+    broadcast: (state) => {
+      if (win && !win.isDestroyed()) win.webContents.send('redbot:update-status', state);
+    }
+  });
+
+  /**
+   * Only OUR window may drive the updater.
+   *
+   * `ipcMain.handle` answers any frame that has the preload attached, and while nothing else
+   * should ever have it, "should" is not a check. This is the same instinct as the server's
+   * `hostIsLocal` guard: cheap, and it removes the need to reason about whether some future
+   * window could reach an installer.
+   */
+  const fromOurWindow = (event) =>
+    win && !win.isDestroyed() && event.sender === win.webContents;
+
+  const guard = (name, fn) => ipcMain.handle(name, (event) => {
+    if (!fromOurWindow(event)) {
+      boot_log(`updater W  refused ${name} from an unexpected frame`);
+      return { ok: false, reason: 'refused' };
+    }
+    return fn();
+  });
+
+  guard('redbot:update-check', () => updater.check());
+  guard('redbot:update-apply', () => updater.apply());
+  guard('redbot:update-snapshot', () => updater.snapshot());
+}
 
 /** A port the OS says is free. Bind :0, read it back, release it — the same trick the tests use. */
 function freePort() {
@@ -220,6 +281,11 @@ async function boot() {
   });
 
   win.once('ready-to-show', () => win.show());
+
+  /* Registered BEFORE the page loads: the Setup screen asks for a snapshot as soon as it renders,
+     and a handler attached after loadURL would miss that first call and leave the card blank. */
+  wireUpdater();
+
   await win.loadURL(`http://127.0.0.1:${port}/`);
 
   if (bootError) {

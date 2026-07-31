@@ -22,6 +22,7 @@ files:
   - electron/main.mjs              # the shell
   - electron/preload.cjs
   - electron/vault-key.mjs
+  - electron/updater.mjs           # in-place updates, driven only by the button
   - tools/product/**/*             # the console: server + the single-file UI
   - db/sqlite/migrate.mjs          # the schema, and the runner that applies it
   - db/sqlite/migrations/**/*
@@ -36,6 +37,39 @@ files:
   - '!db/sqlite/*.test.mjs'
   - '!db/sqlite/reset-test-db.mjs'
   - '!db/sqlite/.env.test'
+  - '!electron/*.test.mjs'
+
+# WHERE AN UPDATE COMES FROM.
+#
+# This block is what makes in-place updates possible at all: electron-builder writes it into the
+# package as `resources/app-update.yml`, and that file is the ONLY thing that tells the installed
+# app where to look. Without it, electron-updater throws "app-update.yml is missing" and the Apply
+# button reports exactly that. It also makes `latest.yml` — the manifest carrying the SHA512 the
+# download is checked against — part of what has to be uploaded to a release.
+#
+# The repository matches `UPDATE_REPO` in src/update.ts, which is what the passive update NOTICE
+# already reads. Two different repositories for "is there an update" and "install the update" would
+# be a trap.
+#
+# NOTE ON TRUST. There is no code-signing certificate (see `win:` below). electron-updater only
+# verifies a publisher signature when `publisherName` is present in app-update.yml, which requires
+# signing — so for this build the integrity check is the SHA512 in latest.yml, fetched over HTTPS
+# from GitHub. That means whoever controls this repository's releases controls what the app will
+# install. That is the same trust an operator extends by downloading the installer by hand, but it
+# is now extended once per click instead of once per download, which is the trade this makes.
+publish:
+  - provider: github
+    owner: jerome653
+    repo: redbot
+    # SET EXPLICITLY, because the default is `draft` and a draft release is INVISIBLE to the
+    # updater — it appears in neither the releases Atom feed nor /releases/latest, so the app would
+    # report "no published versions" while the release sat there looking published.
+    #
+    # `release` rather than `prerelease` only because a plain visible release is the least
+    # surprising thing to publish. Either works: electron/updater.mjs sets `allowPrerelease = true`,
+    # which makes the updater read the Atom feed and find prereleases too. A DRAFT is the one thing
+    # that cannot work, whatever the updater is configured to do.
+    releaseType: release
 
 # Playwright is a runtime dependency because src/browser.ts attaches to the operator's Chrome over
 # CDP. Only `playwright-core` is needed for connectOverCDP — the browser binaries it downloads are

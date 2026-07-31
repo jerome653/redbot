@@ -1,6 +1,6 @@
 {
   "name": "redbot",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "type": "module",
   "description": "redbot MVP — assists a human engaging on Reddit through a real browser session. One account, one profile, local-first.",
@@ -14,7 +14,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "redbot": "node dist/cli.js",
-    "test": "tsc && node --env-file=db/sqlite/.env.test db/sqlite/reset-test-db.mjs && node --env-file=db/sqlite/.env.test --test \"dist/test/*.test.js\" \"db/sqlite/schema.test.mjs\" \"tools/operator/server.test.mjs\" \"tools/product/server.test.mjs\"",
+    "test": "tsc && node --env-file=db/sqlite/.env.test db/sqlite/reset-test-db.mjs && node --env-file=db/sqlite/.env.test --test \"dist/test/*.test.js\" \"db/sqlite/schema.test.mjs\" \"tools/operator/server.test.mjs\" \"tools/product/server.test.mjs\" \"electron/updater.test.mjs\"",
     "test:ui": "node --env-file=db/sqlite/.env.test --test --test-timeout=180000 tools/product/ui.test.mjs",
     "db:migrate": "node db/sqlite/migrate.mjs up",
     "db:status": "node db/sqlite/migrate.mjs status",
@@ -26,6 +26,7 @@
     "dist": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "playwright": "^1.60.0"
   },
   "devDependencies": {
