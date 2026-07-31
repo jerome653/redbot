@@ -301,7 +301,8 @@ export function makeState(now = Date.now(), over = {}) {
         knows: ['wordpress', 'mysql'], subreddits: ['WordPress', 'Wordpress_Help'],
         timezone: 'Europe/London', quietHours: [23, 7], dailyCeiling: 4,
         profileDir: 'chrome-profile-a', debugPort: 9222, note: null,
-        profileExists: true,
+        /* A real Chrome session: the folder exists AND a browser has written a profile into it. */
+        profileExists: true, profileState: 'used',
         karma: 212, karmaMeasuredAt: iso(now, 2880), karmaVector: 'comment',
         karmaNote: 'measured by probe-karma from the profile page',
         observations: 6, published: 0, stage: 'established'
@@ -313,7 +314,16 @@ export function makeState(now = Date.now(), over = {}) {
         knows: ['woocommerce'], subreddits: ['woocommerce'],
         timezone: 'Europe/London', quietHours: [22, 7], dailyCeiling: 2,
         profileDir: 'chrome-profile-b', debugPort: 9223, note: null,
-        profileExists: false,
+        /**
+         * Deliberately still MISSING.
+         *
+         * This is the only account in the shared fixture whose folder is absent, and an existing
+         * assertion depends on it — "a profile folder that is not on disk must be flagged". Flipping
+         * it to the new `empty` state to demonstrate that state removed the only coverage of this
+         * one, and the suite said so. The `empty` case is covered by a test that supplies its own
+         * state, so the two do not compete for the same fixture account.
+         */
+        profileExists: false, profileState: 'missing',
         karma: 1, karmaMeasuredAt: iso(now, 60), karmaVector: 'comment',
         karmaNote: 'measured by probe-karma from the profile page',
         observations: 3, published: 0, stage: 'warming'
@@ -393,6 +403,37 @@ export const SETUP = {
   ],
   selectedOperator: 'dan',
   operatorReady: true
+};
+
+/**
+ * What `/api/dependencies` answers — the software that has to be INSTALLED, as opposed to
+ * configured. See src/dependencies.ts for why that is a separate question from `requirements`.
+ *
+ * Everything present, because this fixture's job is to get the Setup wizard past its first step so
+ * the later ones can be driven. The MISSING cases are covered exhaustively and without a browser in
+ * `src/test/dependencies.test.ts`; repeating them here would be slower and prove less.
+ *
+ * `claude-cli` is optional-and-met on purpose: SETUP above chooses the `api` provider, and on that
+ * path nothing calls the CLI. A fixture that marked it required would describe an install that
+ * cannot exist.
+ */
+export const DEPENDENCIES = {
+  ok: true,
+  missing: [],
+  checkedAt: '2026-07-31T12:00:00.000Z',
+  dependencies: [
+    { id: 'node', label: 'Node runtime', required: true, ok: true,
+      detail: 'Node 22.13.0', found: null, fix: { hint: '', url: null } },
+    { id: 'playwright', label: 'Playwright', required: true, ok: true,
+      detail: 'version 1.60.0 — attaches to your Chrome over CDP', found: null,
+      fix: { hint: '', url: null } },
+    { id: 'chrome', label: 'Google Chrome', required: true, ok: true,
+      detail: 'installed', found: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      fix: { hint: '', url: null } },
+    { id: 'claude-cli', label: 'Claude CLI', required: false, ok: true,
+      detail: 'not needed — this install calls the model with an API key', found: null,
+      fix: { hint: '', url: null } }
+  ]
 };
 
 /**

@@ -137,6 +137,43 @@ export async function provision(
     schema = await ensureSchema(notes);
   }
 
+  /**
+   * Chrome profile folders for accounts that already have a NAME and no directory.
+   *
+   * The repair half of the fix in src/profiles.ts. New accounts get their folder at allocation, but
+   * accounts created before that — every one pulled from the dashboard — sit in the database with
+   * `chrome-profile-c` recorded and nothing on disk, and the Accounts screen reports the folder as
+   * missing. Without this the only way out is to delete and re-pull the account.
+   *
+   * AFTER the schema, because the account rows are in the database this call has just migrated.
+   * It only ever creates a directory whose name is already recorded — never renames, never
+   * reassigns, never touches a folder that exists — so it is idempotent and safe on every launch.
+   *
+   * The `tree()` comment above explains why per-account directories are not in that static list:
+   * provisioning a folder for an account nobody has made would be seeding. This is the opposite —
+   * the account exists and named the folder itself.
+   *
+   * Fails soft: an install that cannot read its accounts yet must still finish booting, because
+   * the console is the only place the reason can be reported.
+   */
+  if (opts.runMigrations !== false) {
+    try {
+      const { knownAccounts } = await import('./console-accounts.js');
+      const { ensureProfileDirs } = await import('./profiles.js');
+      const accounts = await knownAccounts();
+      const r = ensureProfileDirs(DATA, accounts);
+      for (const dir of r.created) {
+        created.push(join(DATA, dir));
+        notes.push(`created the Chrome profile folder ${dir}, which an account had recorded but never had`);
+      }
+      for (const f of r.failed) {
+        notes.push(`could not create the Chrome profile folder ${f.dir}: ${f.reason}`);
+      }
+    } catch (e) {
+      notes.push(`could not check Chrome profile folders: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   const vaultKey = vaultUnavailableReason() === null ? 'available' : 'missing';
   if (vaultKey === 'missing') {
     notes.push('no vault master key is reachable — stored secrets cannot be opened until one is set');

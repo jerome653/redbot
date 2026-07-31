@@ -96,7 +96,7 @@ let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccou
     selectAccountImpl = null, selectedHandleImpl = null,
     dbStatus = null, sourcesApi = null, requirementsApi = null, configApi = null,
     updateApi = null, pushApi = null, pushStateApi = null, pushSchedulerApi = null,
-    pushClientApi = null, pushAccountsApi = null;
+    pushClientApi = null, pushAccountsApi = null, dependenciesApi = null, profilesApi = null;
 
 /**
  * The push scheduler lives HERE rather than in the Electron shell.
@@ -185,6 +185,15 @@ try {
    * machine that could not drive a browser. One list, two readers; see src/requirements.ts.
    */
   requirementsApi = (await import('../../dist/requirements.js'));
+  /**
+   * What has to be INSTALLED, as opposed to configured — see src/dependencies.ts for the line
+   * between the two. Kept out of `/api/setup` on purpose: locating an executable on PATH spawns a
+   * process, and `/api/setup` is read on every screen change.
+   */
+  dependenciesApi = (await import('../../dist/dependencies.js'));
+  /* Chrome profile folders: allocation, creation and what is actually in one. The console
+     must not have its own idea of "is this profile real" beside src/profiles.ts. */
+  profilesApi = (await import('../../dist/profiles.js'));
   /**
    * The operator registry, from the SAME module the CLI and the requirement check read.
    *
@@ -489,6 +498,18 @@ async function buildState(opts = {}) {
       note: cfg ? cfg.note : null,
       /* a profile folder that actually exists on disk, not merely named in the config */
       profileExists: cfg && cfg.profileDir ? existsSync(join(DATA, cfg.profileDir)) : false,
+      /**
+       * THREE states, not two — see src/profiles.ts.
+       *
+       * redbot now creates the folder when it allocates the name, so "exists" stopped meaning what
+       * it used to. An empty directory redbot made this second would answer `profileExists: true`
+       * while holding no Reddit session at all, which is precisely the "looks ready and cannot
+       * post" reading that src/push/accounts.ts warns about. `used` is the only value that means a
+       * browser has ever written a profile here.
+       */
+      profileState: profilesApi && cfg && cfg.profileDir
+        ? profilesApi.profileState(DATA, cfg.profileDir)
+        : (cfg && cfg.profileDir ? 'missing' : 'missing'),
       karma: karma ? karma.value : null,
       karmaMeasuredAt: karma ? karma.ts : null,
       karmaVector: karma ? karma.vector : null,
@@ -1207,6 +1228,9 @@ let selectedOperator = process.env.REDBOT_OPERATOR || configApi.storedOperatorSe
 let selectedProvider = process.env.REDBOT_LLM === 'api' ? 'api' : 'cli';
 
 /** Last answer from the update check, so the page asking on every load costs one request a day. */
+/** Last dependency scan. Locating executables spawns processes; see the /api/dependencies route. */
+let depsCache = { at: 0, value: null };
+
 let updateCache = { at: 0, value: null };
 
 /** Last dashboard reachability answer. Short-lived: it is a liveness reading, not a fact. */
@@ -1227,8 +1251,26 @@ function readOperators() {
     shared: o.shared,
     // `ready` now means SIGNED IN, not "the folder exists" — see config.ts operatorSignedIn().
     ready: o.ready,
-    note: o.note || ''
-    // configDir is deliberately NOT included — it is a filesystem path and never leaves the machine.
+    note: o.note || '',
+    /**
+     * The sign-in command, ready to copy.
+     *
+     * This DOES carry `configDir`, reversing what this function used to say, so the reasoning is
+     * worth stating rather than deleting. The old note was "a filesystem path never leaves the
+     * machine" — but signing in is the one step redbot cannot do for anybody (it is an interactive
+     * Claude session), so the console's only useful move is to hand over the exact command. Two
+     * places already emitted this same string with the same path: `/api/operator/create` returns it
+     * on registration, and `src/requirements.ts` puts it in the sign-in hint. Withholding it here
+     * only meant an operator who dismissed that one message could never see it again.
+     *
+     * The path is under the operator's OWN per-user data directory, it is rendered to the same
+     * person on the same machine, and it is not a credential — the login it initiates never passes
+     * through redbot. `configDir` itself is still not sent as a bare field; only this command is.
+     */
+    signIn: {
+      powershell: `$env:CLAUDE_CONFIG_DIR = "${o.configDir}"; claude`,
+      bash: `CLAUDE_CONFIG_DIR="${o.configDir}" claude`
+    }
   }));
 }
 
@@ -2358,6 +2400,50 @@ const server = createServer((req, res) => {
       syncHealthCache = { at: Date.now(), value: v };
       send(200, JSON.stringify({ ...v, cached: false }));
     })().catch((e) => send(200, JSON.stringify({ ok: false, reason: e && e.message ? e.message : String(e) })));
+    return;
+  }
+
+  /**
+   * Is the software redbot depends on actually installed?
+   *
+   * SEPARATE FROM /api/setup, and cached, because locating an executable spawns `where` — cheap
+   * once, wasteful on every screen change, and `/api/setup` is read on all of them. Two minutes is
+   * long enough that opening Setup repeatedly costs nothing and short enough that installing Chrome
+   * in another window shows up without restarting the app. `?force=1` is the "Check again" button.
+   *
+   * Answers 200 with `ok:false` rather than an error status: a dependency check that fails to run
+   * must not be indistinguishable from a dependency that is missing.
+   */
+  if (url.pathname === '/api/dependencies') {
+    const force = url.searchParams.get('force') === '1';
+    if (!force && depsCache.value && Date.now() - depsCache.at < 120_000) {
+      return send(200, JSON.stringify({ ...depsCache.value, cached: true }));
+    }
+    if (!dependenciesApi) {
+      return send(200, JSON.stringify({ ok: false, dependencies: [], reason: 'the compiled build is missing' }));
+    }
+    /* Promise chaining, not await: this callback is synchronous — only the POST body branch is
+       async. The same reason /api/update gives, and the same SyntaxError if it is forgotten. */
+    Promise.resolve()
+      .then(() => dependenciesApi.checkDependencies({
+        /* The Claude CLI is only required on the CLI path, so the check has to know which is set. */
+        provider: configApi && configApi.config ? configApi.config.llm.provider : 'cli'
+      }))
+      .then((dependencies) => {
+        const v = {
+          ok: true,
+          dependencies,
+          missing: dependenciesApi.missingDependencies(dependencies).map((d) => d.id),
+          checkedAt: new Date().toISOString()
+        };
+        depsCache = { at: Date.now(), value: v };
+        send(200, JSON.stringify({ ...v, cached: false }));
+      })
+      .catch((e) => {
+        const v = { ok: false, dependencies: [], reason: e && e.message ? e.message : String(e) };
+        depsCache = { at: Date.now(), value: v };
+        send(200, JSON.stringify({ ...v, cached: false }));
+      });
     return;
   }
 

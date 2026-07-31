@@ -27,7 +27,7 @@ import { dirname, join, resolve } from 'node:path';
 import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { chromium } from 'playwright';
-import { makeState, makePulse, OPERATORS, RUN_LOG_IDLE, RUN_HISTORY, SETUP, CHROME_PROFILES, PORTS } from './ui-fixture.mjs';
+import { makeState, makePulse, OPERATORS, RUN_LOG_IDLE, RUN_HISTORY, SETUP, DEPENDENCIES, CHROME_PROFILES, PORTS } from './ui-fixture.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..', '..');
@@ -169,6 +169,7 @@ async function open(opts = {}) {
     if (path === '/api/run/history') return json(route, RUN_HISTORY);
     if (path === '/api/actions') return json(route, { running: null, actions: [] });
     if (path === '/api/setup') return json(route, SETUP);
+    if (path === '/api/dependencies') return json(route, DEPENDENCIES);
     if (path === '/api/chrome/profiles') return json(route, CHROME_PROFILES);
     if (path === '/api/ports') return json(route, opts.ports || PORTS);
     return json(route, {});
@@ -184,6 +185,29 @@ async function open(opts = {}) {
 async function tab(page, v) {
   await page.click(`.step[data-v="${v}"]`);
   await page.waitForFunction((k) => !document.querySelector('#v-' + k)?.hidden, v, { timeout: 5000 });
+}
+
+/**
+ * Open a Setup wizard step by its title, the way a person does.
+ *
+ * The wizard collapses finished steps and opens only the current one, so a control can be present
+ * and correct while being hidden — which is exactly how it should behave, and exactly what makes a
+ * test that assumes a step is open fragile. Two tests below drive controls inside "Sign in to the
+ * model"; without this they passed only because that step happened to be the first unfinished one,
+ * and inserting any step before it would have broken them for no real reason.
+ *
+ * Idempotent: a step that is already open is left alone.
+ */
+async function openStep(page, title) {
+  const head = page.locator('#v-setup .wiz-h').filter({ hasText: title }).first();
+  await head.waitFor({ state: 'visible', timeout: 5000 });
+  if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click();
+  await page.waitForFunction(
+    (t) => {
+      const h = [...document.querySelectorAll('#v-setup .wiz-h')]
+        .find((x) => x.textContent.includes(t));
+      return !!h && h.getAttribute('aria-expanded') === 'true';
+    }, title, { timeout: 5000 });
 }
 
 const shot = (page, name) => page.screenshot({ path: join(SHOTS, name + '.png') });
@@ -706,6 +730,79 @@ test('no screen offers a Chrome-profile picker, because none of them drive one',
 
     assert.deepEqual(errors, [], 'the accounts screen must render clean without it');
     await shot(page, 'accounts-editor-no-chrome-picker');
+  } finally { await context.close(); }
+});
+
+/**
+ * A folder that exists is not a folder anybody is signed in to.
+ *
+ * redbot now CREATES the Chrome profile folder when it allocates the name, which fixed a pulled
+ * account reporting `Sign-in folder chrome-profile-c missing` — but it also broke the old reading
+ * of "exists". A directory made a second ago holds no Reddit session, and `src/push/accounts.ts`
+ * warns in as many words against anything that "looks ready and cannot post". Both fixture accounts
+ * have `profileExists: true`; only one has ever been used, and the screen must not call them the
+ * same thing.
+ */
+test('the accounts screen separates a signed-in profile from an empty folder', async () => {
+  /**
+   * Its OWN state, rather than a change to the shared fixture.
+   *
+   * The first version of this flipped `sgen-support` to the `empty` state in ui-fixture.mjs, which
+   * silently stole the only account covering "a profile folder that is not on disk must be
+   * flagged" — that assertion went from meaningful to unsatisfiable and the suite failed. One
+   * fixture account cannot demonstrate two mutually exclusive states, so this test brings its own.
+   */
+  const state = makeState(NOW);
+  state.accounts = state.accounts.map((a) => (a.handle === 'sgen-support'
+    ? { ...a, profileExists: true, profileState: 'empty' }
+    : a));
+
+  const { context, page, errors } = await open({ state });
+  try {
+    await tab(page, 'accounts');
+    const txt = await page.textContent('#v-accounts');
+
+    assert.match(txt, /signed-in profile/, 'a used profile must be reported as a real session');
+    assert.match(txt, /created, not signed in yet/,
+      'an empty folder must NOT be reported as ready just because it exists');
+    /* And it must say what to do about it, not merely label it. */
+    assert.match(txt, /Chrome has never written to it/);
+
+    const cards = await page.evaluate(() => [...document.querySelectorAll('#v-accounts .card')]
+      .map((c) => ({
+        handle: c.querySelector('.chead b')?.textContent ?? '',
+        text: c.textContent ?? ''
+      })));
+    const used = cards.find((c) => c.handle === 'docs-architect');
+    const empty = cards.find((c) => c.handle === 'sgen-support');
+    assert.ok(used && empty, 'both accounts should render');
+    assert.match(used.text, /signed-in profile/);
+    assert.doesNotMatch(used.text, /created, not signed in yet/,
+      'a real session must not be labelled as an unused folder');
+    assert.match(empty.text, /created, not signed in yet/);
+    assert.doesNotMatch(empty.text, /signed-in profile/,
+      'an unused folder must not claim a session');
+
+    assert.deepEqual(errors, [], 'the accounts screen must render clean');
+    await shot(page, 'accounts-profile-states');
+  } finally { await context.close(); }
+});
+
+/**
+ * The third state, on the shared fixture: a folder that is not there at all.
+ *
+ * Kept beside the test above so the pair is obvious — `missing` and `empty` are different facts
+ * and the screen must not collapse them. This is the state a dashboard pull used to leave behind.
+ */
+test('a profile folder that was never created still reads as missing', async () => {
+  const { context, page, errors } = await open();
+  try {
+    await tab(page, 'accounts');
+    const txt = await page.textContent('#v-accounts');
+    assert.match(txt, /missing/, 'an absent folder must be flagged as absent');
+    assert.doesNotMatch(txt, /created, not signed in yet/,
+      'an absent folder must not be described as one redbot made');
+    assert.deepEqual(errors, [], 'the accounts screen must render clean');
   } finally { await context.close(); }
 });
 
@@ -1497,6 +1594,7 @@ test('storing an API key sends it in the body and never renders it back', async 
   const SECRET = 'sk-ant-fixture-not-a-real-key-9999';
   try {
     await tab(page, 'setup');
+    await openStep(page, 'Sign in to the model');
     await page.fill('input[aria-label="Anthropic API key"]', SECRET);
     await page.click('text=Store it');
     await untilHit(calls, '/api/vault/key');
@@ -1540,6 +1638,7 @@ test('choosing the Claude-login path hides the API key form entirely', async () 
   const { context, page, calls } = await open();
   try {
     await tab(page, 'setup');
+    await openStep(page, 'Sign in to the model');
     await page.selectOption('select[aria-label="How redbot reaches the model"]', 'cli');
     await untilHit(calls, '/api/llm/provider');
     assert.equal(hit(calls, '/api/llm/provider')[0].body.provider, 'cli');

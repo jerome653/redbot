@@ -17,7 +17,7 @@
 import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -339,5 +339,82 @@ describe('applying a pulled list', () => {
     assert.equal(a.timezone, 'Asia/Manila');
     assert.equal(Number(a.daily_ceiling), 3, 'the ceiling arrives, which create() alone does not set');
     assert.equal(Number(a.quiet_start), 1);
+  });
+
+  /**
+   * THE REPORTED DEFECT: a pulled account whose sign-in folder does not exist.
+   *
+   * Applying a pull calls `createConsoleAccount`, which allocated a folder NAME and wrote it to the
+   * database while nothing created the directory — Chrome made it on first launch. So the Accounts
+   * screen read the name back, asked the disk and rendered
+   * `Sign-in folder chrome-profile-c  missing` for an account that had just been created without
+   * error. Nothing failed; the record simply described a folder that was not there.
+   */
+  test('a pulled account gets its Chrome profile folder on disk, not just a name', async () => {
+    const incoming = [{
+      handle: 'Folder_Acct', role: 'support desk', speaks: 'errors', knows: '[]',
+      subreddits: '["WordPress"]', timezone: 'Asia/Manila',
+      quiet_start: 0, quiet_end: 8, daily_ceiling: 1, note: 'from sync'
+    }];
+    const r = await applyAccounts(incoming, [{ handle: 'Folder_Acct', action: 'create' }]);
+    assert.equal(r.errors.length, 0, r.errors.join('; '));
+
+    const row = await getPool().query<Record<string, unknown>>(
+      'SELECT profile_dir FROM accounts WHERE handle = $1', ['Folder_Acct']
+    );
+    const recorded = String(row.rows[0]!.profile_dir ?? '');
+    assert.ok(recorded, 'a folder name must be recorded');
+    assert.equal(existsSync(join(dir, recorded)), true,
+      `the account records ${recorded} but no such folder exists — this is the reported bug`);
+  });
+
+  /**
+   * The collision the old guard could not see.
+   *
+   * Allocation checked `existsSync`, but the directory only appeared once somebody started Chrome —
+   * so between allocation and first launch the name lived only in the database. Two accounts
+   * created before either browser was opened, which is every account in one pull, could be handed
+   * the SAME folder. Two Reddit accounts sharing one Chrome profile is one signed-in session
+   * pretending to be two.
+   */
+  test('two accounts pulled together never share a profile folder', async () => {
+    const incoming = ['Pair_One', 'Pair_Two'].map((handle) => ({
+      handle, role: 'support desk', speaks: 'errors', knows: '[]',
+      subreddits: '["WordPress"]', timezone: 'Asia/Manila',
+      quiet_start: 0, quiet_end: 8, daily_ceiling: 1, note: 'from sync'
+    }));
+    const r = await applyAccounts(incoming, [
+      { handle: 'Pair_One', action: 'create' }, { handle: 'Pair_Two', action: 'create' }
+    ]);
+    assert.equal(r.errors.length, 0, r.errors.join('; '));
+
+    const rows = await getPool().query<Record<string, unknown>>(
+      'SELECT handle, profile_dir FROM accounts WHERE handle IN ($1,$2)', ['Pair_One', 'Pair_Two']
+    );
+    const dirs = rows.rows.map((x) => String(x.profile_dir ?? ''));
+    assert.equal(dirs.length, 2);
+    assert.notEqual(dirs[0], dirs[1], 'two accounts must never be pointed at one Chrome profile');
+    for (const d of dirs) {
+      assert.ok(d, 'each account needs a folder name');
+      assert.equal(existsSync(join(dir, d)), true, `${d} should exist on disk`);
+    }
+  });
+
+  /** A folder already on disk belongs to somebody; a pull must not point a new account at it. */
+  test('a pulled account never adopts a folder that is already there', async () => {
+    const squatter = join(dir, 'chrome-profile-zz');
+    mkdirSync(squatter, { recursive: true });
+    /* Seed an account that has NOT claimed it, so only the on-disk check can protect it. */
+    const incoming = [{
+      handle: 'Squat_Acct', role: 'support desk', speaks: 'errors', knows: '[]',
+      subreddits: '["WordPress"]', timezone: 'Asia/Manila',
+      quiet_start: 0, quiet_end: 8, daily_ceiling: 1, note: 'from sync'
+    }];
+    await applyAccounts(incoming, [{ handle: 'Squat_Acct', action: 'create' }]);
+    const row = await getPool().query<Record<string, unknown>>(
+      'SELECT profile_dir FROM accounts WHERE handle = $1', ['Squat_Acct']
+    );
+    assert.notEqual(String(row.rows[0]!.profile_dir), 'chrome-profile-zz',
+      'an existing folder must never be adopted by a new account');
   });
 });

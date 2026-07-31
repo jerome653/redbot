@@ -260,21 +260,42 @@ button.mini{
   -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
 }
 button.mini:hover:not(:disabled){color:var(--ink);border-color:var(--edge-2)}
+/**
+ * The same control as a LINK.
+ *
+ * `button.mini` is tag-qualified, so an `<a class="mini">` matched nothing and rendered as bare
+ * underlined text — measured on the dependency step's "Get it", which is the one control on a
+ * failed row and looked like stray prose. Anything that navigates away (a download page, release
+ * notes) has to be an anchor, so the styling has to cover both.
+ */
+a.mini{
+  display:inline-block;text-decoration:none;white-space:nowrap;
+  font-family:var(--mono);font-size:.72rem;cursor:pointer;
+  background:var(--glass);color:var(--ink-2);border:1px solid var(--edge);
+  border-radius:9px;padding:.36rem .7rem;transition:color .16s,border-color .16s
+}
+a.mini:hover{color:var(--ink);border-color:var(--edge-2)}
 
 /* Setup's action buttons — Register operator, Save endpoint, Store it, Remove, Check now, Push now.
    Jade rather than the default glass, so the things that DO something on that screen read as
    actionable instead of as chrome. Same treatment as the update card's Apply button, which is the
    point: one look for "this performs an action", wherever it appears.
    Scoped to `.collect.acts` on purpose — see the marker class in setup(). */
-#v-setup .collect.acts button.mini{
+#v-setup .collect.acts button.mini,
+#v-setup .wiz-b button.mini,
+#v-setup .wiz-b a.mini{
   color:var(--ink);
   border-color:color-mix(in srgb,var(--jade) 45%,transparent);
   background:color-mix(in srgb,var(--jade) 14%,transparent)
 }
-#v-setup .collect.acts button.mini:hover:not(:disabled){
+#v-setup .collect.acts button.mini:hover:not(:disabled),
+#v-setup .wiz-b button.mini:hover:not(:disabled){
   border-color:color-mix(in srgb,var(--jade) 70%,transparent);
   background:color-mix(in srgb,var(--jade) 24%,transparent)
 }
+/* The step header is a button too, but it is navigation, not an action — it must stay neutral or
+   every collapsed step would shout as loudly as the thing you are meant to press. */
+#v-setup .wiz-h{background:none}
 /* A button that cannot be pressed has to LOOK like it cannot be pressed. Added after seeing the
    update card mid-download in a real render: both buttons were correctly `disabled` and both still
    looked live, which invites a click that does nothing and reads as the app having hung. */
@@ -322,6 +343,90 @@ select.sel option{background:var(--glass-2);color:var(--ink)}
   background:var(--amber-soft);border:1px solid color-mix(in srgb,var(--amber) 26%,transparent);
 }
 .banner b{color:var(--ink)}
+/* ---------- the setup wizard ----------
+ *
+ * Setup used to be one long card with five `srcgrp` headings, and everything in it looked equally
+ * urgent whether it was done, undone or optional. These steps carry ORDER and STATE: what is
+ * finished collapses out of the way, the first unfinished one is open, and a step that cannot be
+ * started yet says why instead of presenting a form that would fail.
+ *
+ * Built on the same `.collect` surface so it inherits the sheet's card treatment rather than
+ * inventing a second one. */
+.wiz{
+  border:1px solid var(--edge);border-radius:var(--r);background:var(--pane);
+  box-shadow:var(--shadow);margin:0 0 .7rem;
+  /**
+   * `overflow:hidden` clips the header's hover fill to the border radius. `flex:none` is what
+   * makes that safe, and it is NOT cosmetic — it is the defect `.collect` documents above, walked
+   * into a second time and measured: every step card rendered 2px tall while the 75px header
+   * inside it measured perfectly, because `body > section.sheet` is a bounded column flex
+   * container and an `overflow:hidden` child has an automatic minimum size of 0. So the cards
+   * alone were shrunk to their borders while the prose beside them held their height.
+   *
+   * Nothing in the DOM showed it: the text, the aria-expanded state and the click handlers were
+   * all correct and all invisible. Only the screenshot and a getBoundingClientRect did.
+   */
+  overflow:hidden;flex:none;
+}
+/* A flex item too, and squashable for the same reason. */
+.wiz-sum{flex:none}
+/* The current step is the only one that gets an accent — if several glow, none of them lead. */
+.wiz.now{border-color:color-mix(in srgb,var(--jade) 42%,transparent)}
+.wiz.blocked{border-color:color-mix(in srgb,var(--ember) 34%,transparent)}
+
+.wiz-h{
+  display:flex;align-items:center;gap:.85rem;width:100%;text-align:left;cursor:pointer;
+  padding:.85rem 1.05rem;background:none;border:0;font:inherit;color:var(--ink)
+}
+.wiz-h:hover{background:var(--sheen)}
+.wiz-h:focus-visible{outline:2px solid var(--jade);outline-offset:-2px}
+
+/* The number, which doubles as the status light — it turns into a tick when the step is done. */
+.wiz-n{
+  flex:none;display:grid;place-items:center;width:1.6rem;height:1.6rem;border-radius:50%;
+  font-family:var(--mono);font-size:.74rem;font-weight:700;
+  border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink-3)
+}
+.wiz.done .wiz-n{
+  border-color:color-mix(in srgb,var(--jade) 55%,transparent);
+  background:color-mix(in srgb,var(--jade) 18%,transparent);color:var(--jade)
+}
+.wiz.now .wiz-n{
+  border-color:color-mix(in srgb,var(--jade) 55%,transparent);color:var(--ink);
+  background:color-mix(in srgb,var(--jade) 10%,transparent)
+}
+.wiz.blocked .wiz-n{
+  border-color:color-mix(in srgb,var(--ember) 50%,transparent);color:var(--ember);
+  background:color-mix(in srgb,var(--ember) 12%,transparent)
+}
+
+.wiz-t{display:flex;flex-direction:column;gap:.12rem;min-width:0;flex:1}
+.wiz-title{font-size:.94rem;font-weight:600;color:var(--ink)}
+.wiz.done .wiz-title{color:var(--ink-2);font-weight:500}
+.wiz-sub{font-size:.76rem;color:var(--ink-3);overflow-wrap:anywhere}
+/* The caret, so a collapsed step reads as openable rather than as disabled. */
+.wiz-c{flex:none;color:var(--ink-3);font-size:.7rem;font-family:var(--mono);transition:transform .16s}
+.wiz-h[aria-expanded="true"] .wiz-c{transform:rotate(90deg)}
+.wiz-b{padding:.2rem 1.05rem 1rem;border-top:1px solid var(--edge)}
+
+/* A copyable command. The point of the whole row is the button, so it must never wrap away from
+   the text it copies. */
+.cpy{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap;padding:.45rem 0}
+.cpy code{
+  flex:1;min-width:min(100%,240px);white-space:pre-wrap;word-break:break-all;font-size:.78rem;
+  padding:.55rem .7rem;border-radius:9px;border:1px solid var(--edge-2);
+  background:var(--glass-2);color:var(--ink-2)
+}
+.cpy button{flex:none;align-self:flex-start}
+
+/* Progress, above the steps. */
+.wiz-sum{
+  display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;
+  padding:.15rem .2rem .75rem;font-size:.8rem;color:var(--ink-3)
+}
+.wiz-bar{flex:1;min-width:140px;height:5px;border-radius:99px;background:var(--glass-2);overflow:hidden}
+.wiz-bar i{display:block;height:100%;background:var(--jade);transition:width .25s}
+
 /* The update notice. Jade rather than ember: a newer version being available is good news, and
    ember in this console means "something is wrong" — spending it here would cheapen the one
    signal that has to keep working. Sits above the banner but reads quieter than it. */
@@ -2671,8 +2776,25 @@ function accounts(){
         `Posts in ${a.subreddits.length?esc(a.subreddits.map(s=>'r/'+s).join(', ')):'nowhere set'} · `+
         `${a.dailyCeiling!=null?esc(a.dailyCeiling+' reply a day at most'):'no daily limit set'} · `+
         `quiet ${a.quietHours?esc(a.quietHours[0]+':00–'+a.quietHours[1]+':00'):'not set'} ${esc(a.timezone||'')}`));
+      /**
+       * The sign-in folder, in THREE states rather than two.
+       *
+       * redbot creates the folder when it allocates the name, so "on disk" no longer distinguishes
+       * a signed-in Chrome from a directory made a second ago — and reporting a made-but-unused
+       * folder as ready is the "looks ready and cannot post" failure src/push/accounts.ts warns
+       * about. `used` means a browser has genuinely written a profile there.
+       *
+       * Falls back to the old two-state reading when the server did not send `profileState`, so a
+       * console served by an older build still says something true.
+       */
+      const pst=a.profileState||(a.profileExists?'used':'missing');
+      const ptag=pst==='used'?'<span class="tag ok">signed-in profile</span>'
+        :pst==='empty'?'<span class="tag no">created, not signed in yet</span>'
+        :'<span class="tag stop">missing</span>';
       c.append(el('div','tiny',
-        `Sign-in folder <code>${esc(a.profileDir||'—')}</code> ${a.profileExists?'<span class="tag ok">on disk</span>':'<span class="tag stop">missing</span>'}`));
+        `Sign-in folder <code>${esc(a.profileDir||'—')}</code> ${ptag}`));
+      if(pst==='empty')c.append(el('div','tiny',
+        'redbot made the folder; Chrome has never written to it. Start this account’s browser below and sign in to Reddit once.'));
       /* The port line and its buttons are repainted by paintPorts() on a timer, so they are
          held by reference rather than rebuilt: re-rendering the whole screen every few seconds
          would wipe whatever is half-typed in an open editor. */
@@ -3477,6 +3599,135 @@ if(UPDATES){
   UPDATES.onStatus(s=>{UPDSTATE=s;paintUpdates()});
 }
 
+/* ==================== the setup wizard ====================
+ *
+ * Setup was one long card with five headings, in which a finished step, an unfinished one and an
+ * optional one all looked identical. Somebody opening it on a fresh machine could not tell what to
+ * do first, and the thing they actually had to do first — install Chrome and the Claude CLI — was
+ * not mentioned anywhere, because `requirements.ts` only reports software that is CONFIGURED.
+ *
+ * So it is now ordered steps, and the order is the real dependency order:
+ *
+ *   1. what has to be installed          nothing else can be done without it
+ *   2. register an operator              creates the folder a login lives in
+ *   3. choose who pays                   a registration is not a selection
+ *   4. sign in to Claude                 the one step redbot cannot do for anybody
+ *   5. this install's id                 needed to mint tokens, so it comes before them
+ *   6. dashboard endpoint                where to send
+ *   7. ingest token                      permission to send
+ *   8. share token                       permission to read others' account list
+ *
+ * Steps 5–8 only exist when dashboard sync is available at all, and are OPTIONAL: redbot runs
+ * perfectly without a dashboard, and marking them required would leave every local-only install
+ * looking permanently unfinished.
+ */
+
+/** The dependency scan, held on the page so switching screens does not re-spawn processes. */
+let DEPS = null;
+
+async function loadDeps(force){
+  try{ DEPS=await fetch('/api/dependencies'+(force?'?force=1':'')).then(x=>x.json()); }
+  catch{ DEPS={ok:false,dependencies:[],reason:'the dependency check could not be reached'}; }
+  return DEPS;
+}
+
+/**
+ * A block of text with a copy button.
+ *
+ * Every command on this screen is something a person has to get into a terminal EXACTLY right —
+ * a path with a space in it, an id that is a UUID. Retyping either is how support tickets start,
+ * so nothing here is presented as read-only text.
+ */
+function copyBox(text,label){
+  const box=el('div','cpy');
+  const pre=el('code');
+  pre.textContent=text;                       /* textContent, never innerHTML: this is data */
+  const btn=el('button','mini');
+  btn.textContent='copy';
+  btn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+  btn.setAttribute('aria-label','Copy '+(label||'to clipboard'));
+  btn.onclick=async()=>{
+    try{
+      await navigator.clipboard.writeText(text);
+      toast('Copied');
+      /* Confirm on the button itself. A toast alone is missed when the pointer is already
+         travelling to the terminal. */
+      btn.textContent='copied';
+      setTimeout(()=>{btn.textContent='copy'},1400);
+    }catch{ toast('Could not copy — select the text instead'); }
+  };
+  box.append(pre,btn);
+  return box;
+}
+
+/**
+ * One step. Returns the card, with `.body` for callers to fill.
+ *
+ * The header is a real `<button>` with `aria-expanded`, not a div with a click handler, so it is
+ * reachable by keyboard and announced as a disclosure. A step that is done collapses; the current
+ * one opens.
+ */
+function wizStep(o){
+  const cls=o.state==='done'?'wiz done':o.state==='now'?'wiz now':o.state==='blocked'?'wiz blocked':'wiz';
+  const card=el('div',cls);
+  const h=el('button','wiz-h');
+  h.type='button';
+  h.setAttribute('aria-expanded',o.open?'true':'false');
+
+  const n=el('span','wiz-n');
+  n.textContent=o.state==='done'?'✓':String(o.n);
+  const t=el('span','wiz-t');
+  t.append(el('span','wiz-title',esc(o.title)));
+  if(o.sub)t.append(el('span','wiz-sub',o.sub));
+  const tag=el('span','tag'+(o.state==='done'?' ok':o.state==='blocked'?' no':''));
+  tag.textContent=o.tag||(o.state==='done'?'done':o.state==='blocked'?'needs you':'to do');
+  const c=el('span','wiz-c');
+  c.textContent='▸';
+  h.append(n,t,tag,c);
+
+  const b=el('div','wiz-b');
+  b.hidden=!o.open;
+  h.onclick=()=>{
+    const isOpen=h.getAttribute('aria-expanded')==='true';
+    h.setAttribute('aria-expanded',isOpen?'false':'true');
+    b.hidden=isOpen;
+  };
+  card.append(h,b);
+  card.body=b;
+  return card;
+}
+
+/** A labelled group inside a step body. */
+const wizGroup=(text)=>el('div','srcgrp',text);
+
+/** The standard text input this screen uses in half a dozen places. */
+function setupInput(placeholder,label,opts){
+  const i=el('input');
+  i.placeholder=placeholder;
+  i.setAttribute('aria-label',label);
+  if(opts&&opts.password){i.type='password';i.autocomplete='off'}
+  if(opts&&opts.value)i.value=opts.value;
+  i.style.cssText='flex:1;min-width:'+((opts&&opts.min)||240)+'px;font:inherit;font-size:.85rem;'+
+    'padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+  return i;
+}
+
+/** A row of controls. */
+const ctlRow=(pad)=>{
+  const d=el('div');
+  d.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:'+(pad||'.5rem 0');
+  return d;
+};
+
+/** The screen's standard action button. */
+const actBtn=(label,fn)=>{
+  const x=el('button','mini');
+  x.textContent=label;
+  x.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+  if(fn)x.onclick=fn;
+  return x;
+};
+
 function setup(){
   const root=$('#v-setup'); root.textContent='';
   if(!SETUP){root.append(el('div','note','Reading setup…'));loadSetup().then(()=>go('setup'));return}
@@ -3485,11 +3736,408 @@ function setup(){
 
   const again=async()=>{await loadSetup();go('setup')};
 
-  /* ---- the requirement checklist, from the server's shared list ----
+  /* ---------------------------------------------------------------- what is done ----
    *
-   * This is the same set `redbot doctor` reports, tiered. It goes FIRST and it names the fix,
-   * because this screen is where a person lands on first boot when something is blocking — a list
-   * of red dots with no action beside them is a diagnosis, not a setup screen. */
+   * Derived on every render from the server's answer, never remembered. A stored "step 4 complete"
+   * flag would survive the thing it described being undone — the same reasoning src/requirements.ts
+   * gives for refusing to cache. */
+  const depsMissing = DEPS && DEPS.ok ? (DEPS.missing||[]).length : null;
+  const machineOk   = !!(s.database&&s.database.ok) && !!(s.vault&&s.vault.ok);
+  const depsDone    = DEPS && DEPS.ok && depsMissing===0 && machineOk;
+  const hasOperator = (s.operators||[]).length>0;
+  const chosen      = !!s.selectedOperator;
+  const modelDone   = s.provider==='api'
+    ? !!(s.apiKeyStored||s.apiKeyFromEnv)
+    : !!s.operatorReady;
+  const sync        = (s.sync&&s.sync.available)?s.sync:null;
+  const endpointDone= !!(sync&&sync.url);
+  const ingestDone  = !!(sync&&sync.pushToken&&sync.pushToken.present);
+  const shareDone   = !!(sync&&sync.shareToken&&sync.shareToken.present);
+
+  const steps=[];
+
+  /* ============================ 1. what has to be installed ============================ */
+  steps.push({
+    title:'What redbot needs on this machine',
+    sub:'Chrome, the Claude CLI, and the parts redbot sets up itself',
+    required:true,
+    done:!!depsDone,
+    blocked:DEPS&&DEPS.ok&&depsMissing>0,
+    build(b){
+      /* ---- what redbot provides for itself ---- */
+      b.append(wizGroup('redbot sets these up on its own'));
+      b.append(setupRow(s.database.ok?'ok':'bad','Database',
+        s.database.ok?'redbot.* is reachable':(s.database.reason||'not reachable')));
+      b.append(setupRow(s.vault.ok?'ok':'bad','Credentials vault',
+        s.vault.ok?`sealing key ${s.vault.keyId}`:(s.vault.reason||'').split('\n')[0]));
+
+      /* ---- what has to be installed by a person ---- */
+      b.append(wizGroup('you install these'));
+      if(!DEPS){
+        b.append(el('div','tiny','Checking what is installed…'));
+        /* Kicked off once, then the screen redraws itself with the answer. */
+        loadDeps(false).then(()=>{ if(CUR==='setup')go('setup') });
+      }else if(!DEPS.ok){
+        b.append(setupRow('warn','Could not check',esc(DEPS.reason||'the check did not run')));
+      }else{
+        for(const d of (DEPS.dependencies||[])){
+          const state=d.ok?'ok':(d.required?'bad':'warn');
+          const row=setupRow(state,d.label,d.detail,d.ok?'':(d.fix&&d.fix.hint)||'');
+          if(d.found){
+            /* Where it was found, under the detail. setupRow builds [tag, textColumn]; the path
+               belongs in that column, not beside the tag. */
+            const f=el('div','tiny');
+            f.textContent=d.found;
+            f.style.cssText='opacity:.65;word-break:break-all';
+            (row.children[1]||row).append(f);
+          }
+          if(!d.ok&&d.fix&&d.fix.url){
+            const a=el('a','mini','Get it');
+            a.href=d.fix.url;a.target='_blank';a.rel='noreferrer';
+            a.style.cssText='text-decoration:none;padding:.4rem .8rem;font-size:.78rem;white-space:nowrap';
+            row.append(a);
+          }
+          b.append(row);
+        }
+        const r=ctlRow('.6rem 0 .2rem');
+        r.append(actBtn('Check again',async()=>{
+          toast('Checking…');
+          await loadDeps(true);
+          if(CUR==='setup')go('setup');
+        }));
+        b.append(r);
+      }
+      /* Said out loud, because it is the question people arrive with. */
+      b.append(el('div','tiny',
+        'redbot attaches to a Chrome <strong>you</strong> start and sign in to — it never launches '+
+        'its own, which is why Chrome has to be installed here. It does not use Python, and '+
+        'Playwright’s downloadable browsers are not needed either.'));
+    }
+  });
+
+  /* ============================ 2. register an operator ============================ */
+  steps.push({
+    title:'Register an operator',
+    sub:'creates the folder that operator’s Claude login lives in',
+    required:true,
+    done:hasOperator,
+    build(b){
+      b.append(el('div','tiny',
+        'Every model call is billed to a Claude login. redbot refuses to use this machine’s '+
+        'default login, so it keeps each operator’s login in its own folder.'));
+
+      if((s.operators||[]).length){
+        for(const o of s.operators){
+          b.append(setupRow(o.ready?'ok':'warn',o.name,
+            o.ready?'signed in':'registered, but not signed in'+(o.shared?' — shared login':'')));
+        }
+      }else{
+        b.append(el('div','tiny','<strong>None registered yet.</strong> Add one below.'));
+      }
+
+      const addOp=ctlRow();
+      const opName=setupInput('your-name','New operator name',{min:200});
+      const signIn=el('div','tiny');
+      const opBtn=actBtn('Register operator',async()=>{
+        if(!opName.value.trim()){toast('Type a name first');return}
+        const r=await fetch('/api/operator/create',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({name:opName.value.trim()})}).then(x=>x.json());
+        if(!r.ok){toast(r.error||'could not register');signIn.textContent=r.error||'';return}
+        /* The console cannot do the sign-in — it is an interactive Claude session. Step 4 shows
+           the command; say so rather than leaving somebody looking for a button. */
+        signIn.innerHTML='<strong>Registered.</strong> Signing in happens in step 4.';
+        opName.value='';await again();
+      });
+      addOp.append(opName,opBtn);
+      b.append(addOp);b.append(signIn);
+    }
+  });
+
+  /* ============================ 3. choose who pays ============================ */
+  steps.push({
+    title:'Choose who pays for the thinking',
+    sub:'registering an operator does not select one',
+    required:true,
+    done:chosen,
+    build(b){
+      if(!(s.operators||[]).length){
+        b.append(el('div','tiny','Register an operator in step 2 first.'));
+        return;
+      }
+      const pick=ctlRow('.35rem 0');
+      const lab=el('span','tiny');lab.textContent='run as';
+      const sel=el('select','sel');
+      sel.setAttribute('aria-label','Which operator pays');
+      const none=el('option',null,'— choose —');none.value='';sel.append(none);
+      s.operators.forEach(o=>{
+        const o2=el('option',null,`${o.name}${o.ready?'':' (not signed in)'}${o.shared?' (shared login)':''}`);
+        o2.value=o.name;
+        if(o.name===s.selectedOperator)o2.selected=true;
+        sel.append(o2);
+      });
+      sel.onchange=async()=>{
+        const r=await fetch('/api/operator/select',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({name:sel.value||null})}).then(x=>x.json());
+        if(!r.ok){toast(r.error||'could not select');return}
+        toast(sel.value?`Running as ${sel.value}`:'Cleared');await again();
+      };
+      pick.append(lab,sel);b.append(pick);
+
+      b.append(el('div','tiny',s.selectedOperator
+        ? (s.operatorReady?`<span class="tag ok">signed in</span> Runs are billed to ${esc(s.selectedOperator)}.`
+                          :`<span class="tag no">not signed in</span> ${esc(s.selectedOperator)} has a folder but has never logged in — step 4.`)
+        : '<span class="tag no">nobody selected</span> Runs that need the model will refuse until you choose one.'));
+
+      b.append(el('div','tiny',s.operatorFromEnv && s.operatorFromEnv!==s.selectedOperator
+        ? `<span class="tag no">overridden</span> <code>REDBOT_OPERATOR</code> is set to ${esc(s.operatorFromEnv)}, which wins over this choice. Clear it to use the picker.`
+        : (s.operatorFromEnv
+          ? 'This choice is remembered on this machine. <code>REDBOT_OPERATOR</code> is also set, to the same name.'
+          : 'This choice is remembered on this machine, and survives a restart.')));
+    }
+  });
+
+  /* ============================ 4. how redbot reaches the model ============================ */
+  steps.push({
+    title:'Sign in to the model',
+    sub:s.provider==='api'?'store an Anthropic API key':'sign in once, in a terminal',
+    required:true,
+    done:modelDone,
+    build(b){
+      const prov=ctlRow('.35rem 0');
+      const plab=el('span','tiny');plab.textContent='use';
+      const psel=el('select','sel');
+      psel.setAttribute('aria-label','How redbot reaches the model');
+      [['cli','the signed-in Claude login'],['api','an Anthropic API key']].forEach(([v,l])=>{
+        const o=el('option',null,l);o.value=v;if(v===s.provider)o.selected=true;psel.append(o);
+      });
+      psel.onchange=async()=>{
+        const r=await fetch('/api/llm/provider',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({provider:psel.value})}).then(x=>x.json());
+        if(!r.ok){toast(r.error||'could not change');return}
+        toast('Saved');await again();
+      };
+      prov.append(plab,psel);b.append(prov);
+
+      if(s.provider==='api'){
+        b.append(setupRow(s.apiKeyStored||s.apiKeyFromEnv?'ok':'bad','Anthropic API key',
+          s.apiKeyFromEnv?'set in this console’s environment — that wins over a stored key'
+            :(s.apiKeyStored?`stored, sealed, ending ${(s.secrets.find(x=>x.name===s.apiKeyName)||{}).hint||''}`
+                            :'no key stored — API calls will refuse')));
+        if(!s.vault.ok){
+          b.append(el('div','tiny','The vault must be openable before a key can be stored. '+esc((s.vault.reason||'').split('\n')[0])));
+        }else{
+          const keyRow=ctlRow();
+          const keyIn=setupInput('sk-ant-…','Anthropic API key',{password:true});
+          const keyBtn=actBtn('Store it',async()=>{
+            if(!keyIn.value.trim()){toast('Paste the key first');return}
+            const r=await fetch('/api/vault/key',{method:'POST',headers:{'content-type':'application/json'},
+              body:JSON.stringify({value:keyIn.value})}).then(x=>x.json());
+            /* Cleared whatever the answer: a key must not sit in a form field afterwards. */
+            keyIn.value='';
+            if(!r.ok){toast(r.error||'could not store');return}
+            toast(`Stored — ends ${r.hint}`);await again();
+          });
+          keyRow.append(keyIn,keyBtn);
+          if(s.apiKeyStored){
+            keyRow.append(actBtn('Remove stored key',async()=>{
+              const r=await fetch('/api/vault/key/remove',{method:'POST',headers:{'content-type':'application/json'},
+                body:JSON.stringify({})}).then(x=>x.json());
+              if(!r.ok){toast(r.error||'could not remove');return}
+              toast('Removed');await again();
+            }));
+          }
+          b.append(keyRow);
+          b.append(el('div','tiny','The key is sealed with AES-256-GCM before it reaches the database, and is never shown again — only the last four characters.'));
+        }
+        return;
+      }
+
+      /* ---- the Claude login path ----
+       *
+       * This is the ONE step redbot cannot perform. It is an interactive Claude session, and
+       * redbot never sees the password. So the whole job here is to hand over the exact command
+       * for the SELECTED operator, ready to paste — previously it was only ever shown once, in the
+       * flash message right after registering, and was unrecoverable after that. */
+      const chosenOp=(s.operators||[]).find(o=>o.name===s.selectedOperator)||null;
+      if(!chosenOp){
+        b.append(el('div','tiny','Choose an operator in step 3 — the sign-in command is specific to one.'));
+        return;
+      }
+      b.append(setupRow(chosenOp.ready?'ok':'bad','Claude login for '+chosenOp.name,
+        chosenOp.ready?'signed in — model calls will work'
+                      :'never signed in — every model call will refuse'));
+
+      if(chosenOp.signIn&&chosenOp.signIn.powershell){
+        b.append(el('div','tiny',
+          'Run this in <strong>PowerShell</strong>, then type <code>/login</code> inside the '+
+          'session it opens. redbot never sees your password — it only reads the folder the login '+
+          'is written to.'));
+        b.append(copyBox(chosenOp.signIn.powershell,'the sign-in command'));
+        if(chosenOp.signIn.bash){
+          b.append(el('div','tiny','On bash instead:'));
+          b.append(copyBox(chosenOp.signIn.bash,'the bash sign-in command'));
+        }
+        b.append(el('div','tiny',
+          'Come back and press <strong>refresh</strong> afterwards — this screen re-reads the '+
+          'folder, it is not told when you finish.'));
+      }else{
+        b.append(el('div','tiny','This build did not report a sign-in command for that operator.'));
+      }
+    }
+  });
+
+  /* ============================ 5–8. the dashboard ============================
+   *
+   * Only when sync is compiled in at all. Optional throughout: redbot runs perfectly with no
+   * dashboard, and a local-only install must not read as unfinished. */
+  if(sync){
+    steps.push({
+      title:'Copy this install’s id',
+      sub:'a token is minted against it, so it comes before the tokens',
+      required:false,
+      done:!!sync.installId,
+      build(b){
+        if(!sync.installId){
+          b.append(el('div','tiny','This install has no id yet.'));
+          return;
+        }
+        b.append(el('div','tiny',
+          'Whoever mints your tokens needs this. It identifies this machine on the dashboard — '+
+          'reusing another machine’s would make the two collide.'));
+        b.append(copyBox(sync.installId,'the install id'));
+
+        /* ---- where tokens come from ----
+         *
+         * There is deliberately no "mint" button. Minting needs the dashboard's ADMIN token, which
+         * mints and revokes for every install on the service — a field for it here would put a
+         * fleet-wide credential on every desktop, so one stolen laptop would compromise all of
+         * them rather than one. */
+        b.append(wizGroup('where the tokens come from'));
+        b.append(el('div','tiny',
+          'An operator with the dashboard’s admin token mints them. There is no button for it '+
+          'here on purpose: that token controls every install on the service, so it never lives '+
+          'on a desktop. Run this at a terminal in the redbot folder — it reads the admin token '+
+          'from a file, uses it once, and seals the results into this machine’s vault:'));
+        b.append(copyBox(
+          'node dist/cli.js tokens mint --admin-token-file <path-to-admin-token.txt> \\\n'+
+          '  --share-from <the id of the machine that owns the accounts>',
+          'the mint command'));
+        b.append(el('div','tiny',
+          'Drop <code>--share-from</code> if this machine only sends its own data and does not '+
+          'need to read anybody’s account list.'));
+      }
+    });
+
+    steps.push({
+      title:'Point it at your dashboard',
+      sub:sync.url?esc(sync.url):'nothing is sent until this is set',
+      required:false,
+      done:endpointDone,
+      build(b){
+        b.append(setupRow(sync.url?'ok':'warn','Endpoint',
+          sync.url?esc(sync.url)+(sync.urlFromEnv?' (from REDBOT_SYNC_URL)':''):'not set — nothing is sent'));
+        if(sync.urlFromEnv){
+          b.append(el('div','tiny','Set by <code>REDBOT_SYNC_URL</code>, which wins over anything typed here.'));
+          return;
+        }
+        const urlRow=ctlRow();
+        const urlIn=setupInput('https://your-dashboard.example.com','Dashboard endpoint',{value:sync.url||''});
+        urlRow.append(urlIn,actBtn('Save endpoint',async()=>{
+          const r=await fetch('/api/sync/url',{method:'POST',headers:{'content-type':'application/json'},
+            body:JSON.stringify({url:urlIn.value})}).then(x=>x.json());
+          if(!r.ok){toast(r.error||'could not save');return}
+          toast(r.url?'Saved':'Cleared');await again();
+        }));
+        b.append(urlRow);
+      }
+    });
+
+    /* One builder for both tokens — they differ only in which secret name they land under. */
+    const tokenStep=(kind,title,subWhenSet,st,placeholder,why)=>({
+      title,
+      sub:st.present?subWhenSet:'not set',
+      required:false,
+      done:!!st.present,
+      build(b){
+        b.append(el('div','tiny',why));
+        b.append(setupRow(st.present?'ok':'warn',title,
+          st.present?`stored, sealed, ending ${esc(st.hint)} — from ${esc(st.from)}`
+                    :esc(st.note||'not set')));
+        const row=ctlRow('.35rem 0 .6rem');
+        const inp=setupInput(placeholder,title,{password:true});
+        row.append(inp,actBtn('Store it',async()=>{
+          if(!inp.value.trim()){toast('Paste the token first');return}
+          const r=await fetch('/api/sync/token',{method:'POST',headers:{'content-type':'application/json'},
+            body:JSON.stringify({kind,value:inp.value})}).then(x=>x.json());
+          /* Cleared whatever the answer — a token must not sit in a form field afterwards. */
+          inp.value='';
+          if(!r.ok){toast(r.error||'could not store');return}
+          toast(`Stored — ends ${r.hint}`);await again();
+        }));
+        if(st.present){
+          row.append(actBtn('Remove',async()=>{
+            const r=await fetch('/api/sync/token/remove',{method:'POST',headers:{'content-type':'application/json'},
+              body:JSON.stringify({kind})}).then(x=>x.json());
+            if(!r.ok){toast(r.error||'could not remove');return}
+            toast('Removed');await again();
+          }));
+        }
+        b.append(row);
+        b.append(el('div','tiny',
+          'Sealed with AES-256-GCM before it touches the database and never shown again — only the '+
+          'last four characters. Paste only the token itself, not a <code>NAME=value</code> line.'));
+      }
+    });
+
+    steps.push(tokenStep('push','Ingest token','stored',sync.pushToken,'paste the ingest token',
+      'Permission for this machine to SEND its events to the dashboard.'));
+    steps.push(tokenStep('share','Share token','stored',sync.shareToken,'paste a share token (optional)',
+      'Optional. Permission to READ the shared account list from other machines. Skip it if this '+
+      'machine only sends its own data.'));
+  }
+
+  /* ---------------------------------------------------------------- render ----
+   *
+   * The current step is the first unfinished REQUIRED one. When every required step is done the
+   * first unfinished optional one takes over, so a finished install still has somewhere obvious to
+   * continue rather than eight identical collapsed rows. */
+  let nowIdx=steps.findIndex(x=>x.required&&!x.done);
+  if(nowIdx<0)nowIdx=steps.findIndex(x=>!x.done);
+
+  const doneCount=steps.filter(x=>x.done).length;
+  const reqLeft=steps.filter(x=>x.required&&!x.done).length;
+
+  const sum=el('div','wiz-sum');
+  sum.append(el('span',null,'<strong>'+doneCount+'</strong> of '+steps.length+' done'));
+  const bar=el('div','wiz-bar');
+  const fill=el('i');
+  fill.style.width=(steps.length?Math.round(doneCount/steps.length*100):0)+'%';
+  bar.append(fill);sum.append(bar);
+  sum.append(el('span',null,reqLeft
+    ? '<span class="tag no">'+reqLeft+' still needed</span>'
+    : '<span class="tag ok">redbot can run</span>'));
+  root.append(sum);
+
+  steps.forEach((st,i)=>{
+    const state=st.done?'done':(st.blocked?'blocked':(i===nowIdx?'now':'todo'));
+    const card=wizStep({
+      n:i+1,
+      title:st.title,
+      sub:st.sub,
+      state,
+      open:i===nowIdx,
+      tag:st.done?'done':(st.blocked?'needs you':(st.required?'required':'optional'))
+    });
+    try{ st.build(card.body); }
+    catch(e){ card.body.append(el('div','note warn','This step could not render: '+esc(String(e&&e.message||e)))); }
+    root.append(card);
+  });
+
+  /* ---------------------------------------------------------------- checked before every run ----
+   *
+   * The shared requirement list — the same set `redbot doctor` reports. It stays BELOW the wizard
+   * because it overlaps with it by design: these are re-derived before every run, so a step that
+   * was finished last week can be unmet today and this is where that shows up. */
   if(Array.isArray(s.requirements)&&s.requirements.length){
     const need=el('div','collect');
     const nb=(s.blocking||[]).length, na=(s.advisory||[]).length;
@@ -3497,19 +4145,14 @@ function setup(){
       '<h3>'+(nb?'redbot cannot run yet':(na?'redbot can run, with limits':'Everything redbot needs is here'))+'</h3>'+
       '<span class="hint">'+(nb?nb+' to settle':(na?na+' worth knowing':'re-checked every time this screen opens'))+'</span>'));
     const nbody=el('div','collect-b');
-    /* Blocking first, then advisory, then the met ones — worst first is the order to act in. */
     const order=[...s.requirements].sort((x,y)=>
       (x.ok?1:0)-(y.ok?1:0) || (x.tier==='blocking'?-1:1)-(y.tier==='blocking'?-1:1));
     for(const r of order){
       const state=r.ok?'ok':(r.tier==='blocking'?'bad':'warn');
-      /* Plain text on both — setupRow escapes them. Building markup here is what put a literal
-         `<span class="hint">` on screen the first time. */
       const row=setupRow(state,r.label,r.detail,(!r.ok&&r.fix)?r.fix.hint:'');
-      /* A control that resolves it, where the app can — inside the row, so it is unambiguous which
-         requirement it belongs to. `null` means it cannot be fixed in here (starting a browser, for
-         instance) and then the hint is the whole answer. */
       if(!r.ok&&r.fix&&r.fix.screen&&r.fix.screen!=='setup'){
-        const go2=el('button','btn tiny','Go to '+r.fix.screen);
+        const go2=el('button','mini','Go to '+r.fix.screen);
+        go2.style.cssText='padding:.4rem .8rem;font-size:.78rem;white-space:nowrap';
         go2.onclick=()=>go(r.fix.screen);
         row.append(go2);
       }
@@ -3519,170 +4162,19 @@ function setup(){
     need.append(nbody); root.append(need);
   }
 
-  /* ---- what is missing, first ---- */
-  /* `acts` marks this card's buttons as ACTIONS, which is what gives them the jade treatment.
-     A marker class rather than a bare `#v-setup button.mini` rule, because `.mini` is the console's
-     default button and is used thirty times across every screen — styling it by ancestor would
-     repaint the update card, the copy buttons and anything added to Setup later. */
-  const box=el('div','collect acts');
-  box.append(el('div','collect-h','<h3>Before redbot can run</h3><span class="hint">everything on this screen is stored on this machine</span>'));
-  const b=el('div','collect-b');
-
-  b.append(el('div','srcgrp','the machine'));
-  b.append(setupRow(s.database.ok?'ok':'bad','Database',
-    s.database.ok?'redbot.* is reachable':(s.database.reason||'not reachable')));
-  b.append(setupRow(s.vault.ok?'ok':'bad','Credentials vault',
-    s.vault.ok?`sealing key ${s.vault.keyId}`:(s.vault.reason||'').split('\n')[0]));
-
-  /* ---- operator ---- */
-  b.append(el('div','srcgrp','who pays for the thinking'));
-  b.append(el('div','tiny','Every model call is billed to a Claude login. redbot refuses to use this machine’s default login, so one operator must be registered and signed in.'));
-
-  const opBox=el('div');opBox.style.cssText='padding:.4rem 0';
-  if(!s.operators.length){
-    opBox.append(el('div','tiny','<strong>None registered yet.</strong> Add one below — it creates the folder its login will live in.'));
-  }else{
-    const pick=el('div');pick.style.cssText='display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;padding:.35rem 0';
-    const lab=el('span','tiny');lab.textContent='run as';
-    const sel=el('select','sel');
-    sel.setAttribute('aria-label','Which operator pays');
-    const none=el('option',null,'— choose —');none.value='';sel.append(none);
-    s.operators.forEach(o=>{
-      const o2=el('option',null,`${o.name}${o.ready?'':' (not signed in)'}${o.shared?' (shared login)':''}`);
-      o2.value=o.name;
-      if(o.name===s.selectedOperator)o2.selected=true;
-      sel.append(o2);
-    });
-    sel.onchange=async()=>{
-      const r=await fetch('/api/operator/select',{method:'POST',headers:{'content-type':'application/json'},
-        body:JSON.stringify({name:sel.value||null})}).then(x=>x.json());
-      if(!r.ok){toast(r.error||'could not select');return}
-      toast(sel.value?`Running as ${sel.value}`:'Cleared');await again();
-    };
-    pick.append(lab,sel);opBox.append(pick);
-    opBox.append(el('div','tiny',s.selectedOperator
-      ? (s.operatorReady?`<span class="tag ok">signed in</span> Runs are billed to ${esc(s.selectedOperator)}.`
-                        :`<span class="tag no">not signed in</span> ${esc(s.selectedOperator)} has a folder but has never logged in — sign in with the command below.`)
-      : '<span class="tag no">nobody selected</span> Runs that need the model will refuse until you choose one.'));
-    /* The choice is written to disk now, so it survives a restart. The one thing that can still
-       make this screen disagree with a run is REDBOT_OPERATOR, so that is called out by name
-       rather than left to be discovered. */
-    opBox.append(el('div','tiny',s.operatorFromEnv && s.operatorFromEnv!==s.selectedOperator
-      ? `<span class="tag no">overridden</span> <code>REDBOT_OPERATOR</code> is set to ${esc(s.operatorFromEnv)}, which wins over this choice. Clear it to use the picker.`
-      : (s.operatorFromEnv
-        ? 'This choice is remembered on this machine. <code>REDBOT_OPERATOR</code> is also set, to the same name.'
-        : 'This choice is remembered on this machine, and survives a restart.')));
-  }
-  b.append(opBox);
-
-  /* add an operator */
-  const addOp=el('div');addOp.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.5rem 0';
-  const opName=el('input');
-  opName.placeholder='your-name';
-  opName.setAttribute('aria-label','New operator name');
-  opName.style.cssText='flex:1;min-width:200px;font:inherit;font-size:.85rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
-  const opBtn=el('button','mini');opBtn.textContent='Register operator';
-  opBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
-  const signIn=el('div','tiny');
-  opBtn.onclick=async()=>{
-    if(!opName.value.trim()){toast('Type a name first');return}
-    const r=await fetch('/api/operator/create',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({name:opName.value.trim()})}).then(x=>x.json());
-    if(!r.ok){toast(r.error||'could not register');signIn.textContent=r.error||'';return}
-    /* The console cannot do the sign-in — it is an interactive Claude session. Show the exact
-       command instead of pretending the job is done. */
-    signIn.innerHTML='<strong>Registered.</strong> Now sign in once, in a terminal — redbot never sees your password:<br>'+
-      `<code>${esc(r.signIn.powershell)}</code><br>then type <code>/login</code> inside it.`;
-    opName.value='';await again();
-  };
-  addOp.append(opName,opBtn);b.append(addOp);b.append(signIn);
-
-  /* ---- dashboard sync ----
+  /* ---------------------------------------------------------------- dashboard operations ----
    *
-   * Only the three things redbot itself holds: where the dashboard is, this install's ingest
-   * token, and a read-only share token. The service's own REDBOT_ADMIN_TOKEN and
-   * REDBOT_SHARE_TOKEN_SECRET are deliberately NOT here — the first mints and revokes tokens for
-   * every install, the second signs them, and putting either on a desktop would hand a
-   * service-wide credential to every operator. Both tokens are sealed in the vault, never echoed
-   * back, and nothing here ships in the installer.
-   */
-  if(s.sync&&s.sync.available){
-    b.append(el('div','srcgrp','dashboard sync'));
-    const sy=s.sync;
+   * Not steps: these are things you DO once sync is configured, and they can be run any time. */
+  if(sync){
+    const ops=el('div','collect acts');
+    ops.append(el('div','collect-h','<h3>Dashboard sync</h3><span class="hint">check it works, and pull the shared account list</span>'));
+    const ob=el('div','collect-b');
 
-    b.append(setupRow(sy.url?'ok':'bad','Endpoint',
-      sy.url?esc(sy.url)+(sy.urlFromEnv?' (from REDBOT_SYNC_URL)':''):'not set — nothing is sent'));
-    if(sy.installId) b.append(setupRow('ok','This install',esc(sy.installId)+
-      ' — the id a token is minted against'));
-
-    if(!sy.urlFromEnv){
-      const urlRow=el('div');urlRow.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.5rem 0';
-      const urlIn=el('input');
-      urlIn.placeholder='https://your-dashboard.example.com';
-      urlIn.value=sy.url||'';
-      urlIn.setAttribute('aria-label','Dashboard endpoint');
-      urlIn.style.cssText='flex:1;min-width:240px;font:inherit;font-size:.85rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
-      const urlBtn=el('button','mini');urlBtn.textContent='Save endpoint';
-      urlBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
-      urlBtn.onclick=async()=>{
-        const r=await fetch('/api/sync/url',{method:'POST',headers:{'content-type':'application/json'},
-          body:JSON.stringify({url:urlIn.value})}).then(x=>x.json());
-        if(!r.ok){toast(r.error||'could not save');return}
-        toast(r.url?'Saved':'Cleared');await again();
-      };
-      urlRow.append(urlIn,urlBtn);b.append(urlRow);
-    }
-
-    /* One builder for both tokens — they differ only in which secret name they land under. */
-    const tokenRow=(kind,label,st,hint)=>{
-      b.append(setupRow(st.present?'ok':'bad',label,
-        st.present?`stored, sealed, ending ${esc(st.hint)} — from ${esc(st.from)}`
-                  :esc(st.note||'not set')));
-      const row=el('div');row.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.35rem 0 .6rem';
-      const inp=el('input');
-      inp.type='password';inp.autocomplete='off';inp.placeholder=hint;
-      inp.setAttribute('aria-label',label);
-      inp.style.cssText='flex:1;min-width:240px;font:inherit;font-size:.85rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
-      const btn=el('button','mini');btn.textContent='Store it';
-      btn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
-      btn.onclick=async()=>{
-        if(!inp.value.trim()){toast('Paste the token first');return}
-        const r=await fetch('/api/sync/token',{method:'POST',headers:{'content-type':'application/json'},
-          body:JSON.stringify({kind,value:inp.value})}).then(x=>x.json());
-        /* Cleared whatever the answer — a token must not sit in a form field afterwards. */
-        inp.value='';
-        if(!r.ok){toast(r.error||'could not store');return}
-        toast(`Stored — ends ${r.hint}`);await again();
-      };
-      row.append(inp,btn);
-      if(st.present){
-        const rm=el('button','mini');rm.textContent='Remove';
-        rm.style.cssText='padding:.5rem .95rem;font-size:.8rem';
-        rm.onclick=async()=>{
-          const r=await fetch('/api/sync/token/remove',{method:'POST',headers:{'content-type':'application/json'},
-            body:JSON.stringify({kind})}).then(x=>x.json());
-          if(!r.ok){toast(r.error||'could not remove');return}
-          toast('Removed');await again();
-        };
-        row.append(rm);
-      }
-      b.append(row);
-    };
-
-    tokenRow('push','Ingest token',sy.pushToken,'paste the ingest token');
-    tokenRow('share','Share token',sy.shareToken,'paste a share token (optional)');
-
-    /* Live reachability. Its own row, filled in asynchronously, because it makes a network call
-       and must not delay the screen rendering. */
     const hRow=el('div','syncHealth');
     hRow.id='syncHealth';
     hRow.style.cssText='padding:.35rem 0 .2rem';
     hRow.innerHTML='<span class="tag">checking…</span> <span class="tiny">contacting the dashboard</span>';
-    b.append(hRow);
-
-    const hBtns=el('div');hBtns.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;padding:.2rem 0 .6rem';
-    const mkBtn=(label,fn)=>{const x=el('button','mini');x.textContent=label;
-      x.style.cssText='padding:.5rem .95rem;font-size:.8rem';x.onclick=fn;return x};
+    ob.append(hRow);
 
     const paintHealth=(h)=>{
       const node=$('#syncHealth');
@@ -3705,8 +4197,8 @@ function setup(){
     };
 
     const checkHealth=async(force)=>{
-      paintHealth(null);
-      $('#syncHealth').innerHTML='<span class="tag">checking…</span>';
+      const node=$('#syncHealth');
+      if(node)node.innerHTML='<span class="tag">checking…</span>';
       try{ paintHealth(await fetch('/api/sync/health'+(force?'?force=1':'')).then(x=>x.json())); }
       catch{ paintHealth(null); }
     };
@@ -3714,11 +4206,7 @@ function setup(){
     /* ---- pulling the shared account list ----
      *
      * Plan first, apply second, and never in one click: this is the only path where another
-     * machine's data reaches accounts a person set up by hand. An account already here is shown
-     * as "unchanged" or "update" and is never re-created — matching is case-insensitive because
-     * `accounts.handle` is a case-SENSITIVE primary key, so `quirky_owl` arriving against
-     * `Quirky_Owl` would otherwise insert a second row for one Reddit account.
-     */
+     * machine's data reaches accounts a person set up by hand. */
     const pullOut=el('div','tiny');
     pullOut.style.cssText='padding:.2rem 0';
     let lastPlan=null;
@@ -3738,12 +4226,12 @@ function setup(){
         '<div style="padding-top:.4rem">'+(r.actionable?r.actionable+' account(s) would change.':'nothing to apply.')+'</div>';
     };
 
-    hBtns.append(mkBtn('Pull accounts',async()=>{
+    const obtns=ctlRow('.2rem 0 .6rem');
+    obtns.append(actBtn('Pull accounts',async()=>{
       pullOut.innerHTML='<span class="tag">reading…</span>';
       try{
-        /* POST, not GET: both handlers live in the server's POST branch, which is where the
-           body and origin guards are. A GET here fell through to the 404 route and rendered
-           "could not read not found", which looked like the dashboard was down. */
+        /* POST, not GET: both handlers live in the server's POST branch, which is where the body
+           and origin guards are. */
         const r=await fetch('/api/sync/accounts/plan',{method:'POST',
           headers:{'content-type':'application/json'},body:JSON.stringify({})}).then(x=>x.json());
         lastPlan=r; renderPlan(r);
@@ -3752,8 +4240,7 @@ function setup(){
         else toast(r.error||'could not read the list');
       }catch{ pullOut.innerHTML='<span class="tag no">could not read</span>'; }
     }));
-
-    hBtns.append(mkBtn('Apply',async()=>{
+    obtns.append(actBtn('Apply',async()=>{
       if(!lastPlan||!lastPlan.ok){toast('Press "Pull accounts" first');return}
       if(!lastPlan.actionable){toast('nothing to apply');return}
       toast('Applying…');
@@ -3769,9 +4256,8 @@ function setup(){
         await again();
       }catch{ toast('could not apply'); }
     }));
-
-    hBtns.append(mkBtn('Check now',()=>checkHealth(true)));
-    hBtns.append(mkBtn('Push now',async()=>{
+    obtns.append(actBtn('Check now',()=>checkHealth(true)));
+    obtns.append(actBtn('Push now',async()=>{
       toast('Pushing…');
       try{
         const r=await fetch('/api/sync/push',{method:'POST',headers:{'content-type':'application/json'},
@@ -3782,142 +4268,35 @@ function setup(){
       }catch(e){toast('push failed')}
       await checkHealth(true);
     }));
-    b.append(hBtns);
-    b.append(pullOut);
+    ob.append(obtns);
+    ob.append(pullOut);
+    ob.append(el('div','tiny',
+      'The dashboard’s own admin and signing secrets are NOT entered here and never leave the '+
+      'server that owns them.'));
+    ops.append(ob);root.append(ops);
     /* Kicked off after the screen is built, never awaited by it. */
     setTimeout(()=>checkHealth(false),0);
-
-    b.append(el('div','tiny',
-      'Both tokens are sealed with AES-256-GCM before they touch the database and are never shown '+
-      'again — only the last four characters. Paste only the token itself, not a '+
-      '<code>NAME=value</code> line. The dashboard’s own admin and signing secrets are NOT '+
-      'entered here and never leave the server that owns them.'));
-
-    /* ---- where tokens come from ----
-     *
-     * There is deliberately no "mint" button. Minting needs the dashboard's ADMIN token, which
-     * mints and revokes for every install on the service — a field for it here would put a
-     * fleet-wide credential on every desktop, so one stolen laptop would compromise all of them
-     * rather than one. The command below reads that token from a file, uses it once, and never
-     * stores it. Shown with this install's real id so it can be copied without editing.
-     */
-    b.append(el('div','srcgrp','where these tokens come from'));
-    b.append(el('div','tiny',
-      'An operator with the dashboard’s admin token mints them. There is no button for it here '+
-      'on purpose: that token controls every install on the service, so it never lives on a '+
-      'desktop. Run this at a terminal in the redbot folder — it reads the admin token from the '+
-      'file, uses it once, and seals the results into this machine’s vault without storing it:'));
-
-    const cmd='node dist/cli.js tokens mint --admin-token-file <path-to-admin-token.txt>';
-    const cmdShare=cmd+' \\\n  --share-from <the id of the machine that owns the accounts>';
-    const box=el('div');
-    box.style.cssText='display:flex;gap:.5rem;align-items:flex-start;flex-wrap:wrap;padding:.4rem 0';
-    const pre=el('code');
-    pre.style.cssText='flex:1;min-width:260px;white-space:pre-wrap;word-break:break-all;font-size:.78rem;'+
-      'padding:.55rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink-2)';
-    pre.textContent=cmdShare;
-    const copy=el('button','mini');copy.textContent='copy';
-    copy.style.cssText='padding:.5rem .95rem;font-size:.8rem';
-    copy.onclick=async()=>{
-      try{ await navigator.clipboard.writeText(cmdShare); toast('Copied'); }
-      catch{ toast('Could not copy — select the text instead'); }
-    };
-    box.append(pre,copy);b.append(box);
-    b.append(el('div','tiny',
-      'Drop <code>--share-from</code> if this machine only sends its own data and does not need '+
-      'to read anybody’s account list. The ingest token is always minted for '+
-      '<code>'+esc(sy.installId||'this install')+'</code> — reusing another machine’s would make '+
-      'the two collide on the dashboard.'));
   }
 
-  /* ---- how the model is reached ---- */
-  b.append(el('div','srcgrp','how redbot reaches the model'));
-  const prov=el('div');prov.style.cssText='display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;padding:.35rem 0';
-  const plab=el('span','tiny');plab.textContent='use';
-  const psel=el('select','sel');
-  psel.setAttribute('aria-label','How redbot reaches the model');
-  [['cli','the signed-in Claude login'],['api','an Anthropic API key']].forEach(([v,l])=>{
-    const o=el('option',null,l);o.value=v;if(v===s.provider)o.selected=true;psel.append(o);
-  });
-  psel.onchange=async()=>{
-    const r=await fetch('/api/llm/provider',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({provider:psel.value})}).then(x=>x.json());
-    if(!r.ok){toast(r.error||'could not change');return}
-    toast('Saved');await again();
-  };
-  prov.append(plab,psel);b.append(prov);
-
-  if(s.provider==='api'){
-    b.append(setupRow(s.apiKeyStored||s.apiKeyFromEnv?'ok':'bad','Anthropic API key',
-      s.apiKeyFromEnv?'set in this console’s environment — that wins over a stored key'
-        :(s.apiKeyStored?`stored, sealed, ending ${(s.secrets.find(x=>x.name===s.apiKeyName)||{}).hint||''}`
-                        :'no key stored — API calls will refuse')));
-    if(!s.vault.ok){
-      b.append(el('div','tiny','The vault must be openable before a key can be stored. '+esc((s.vault.reason||'').split('\n')[0])));
-    }else{
-      const keyRow=el('div');keyRow.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.5rem 0';
-      const keyIn=el('input');
-      keyIn.type='password';
-      keyIn.autocomplete='off';
-      keyIn.placeholder='sk-ant-…';
-      keyIn.setAttribute('aria-label','Anthropic API key');
-      keyIn.style.cssText='flex:1;min-width:240px;font:inherit;font-size:.85rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
-      const keyBtn=el('button','mini');keyBtn.textContent='Store it';
-      keyBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
-      keyBtn.onclick=async()=>{
-        if(!keyIn.value.trim()){toast('Paste the key first');return}
-        const r=await fetch('/api/vault/key',{method:'POST',headers:{'content-type':'application/json'},
-          body:JSON.stringify({value:keyIn.value})}).then(x=>x.json());
-        /* Cleared whatever the answer: a key must not sit in a form field afterwards. The
-           re-render below replaces this input anyway; both are cheap and neither is the only
-           thing standing between a pasted key and a screenshot. */
-        keyIn.value='';
-        if(!r.ok){toast(r.error||'could not store');return}
-        toast(`Stored — ends ${r.hint}`);await again();
-      };
-      keyRow.append(keyIn,keyBtn);
-      if(s.apiKeyStored){
-        const rm=el('button','mini');rm.textContent='Remove stored key';
-        rm.style.cssText='padding:.5rem .95rem;font-size:.8rem';
-        rm.onclick=async()=>{
-          const r=await fetch('/api/vault/key/remove',{method:'POST',headers:{'content-type':'application/json'},
-            body:JSON.stringify({})}).then(x=>x.json());
-          if(!r.ok){toast(r.error||'could not remove');return}
-          toast('Removed');await again();
-        };
-        keyRow.append(rm);
-      }
-      b.append(keyRow);
-      b.append(el('div','tiny','The key is sealed with AES-256-GCM before it reaches the database, and is never shown again — only the last four characters.'));
-    }
-  }else{
-    b.append(el('div','tiny','Model calls run through the selected operator’s own Claude login. No API key is needed.'));
-  }
-
-  /* ---- the rest lives on its own screen ---- */
-  b.append(el('div','srcgrp','set up elsewhere'));
-  b.append(el('div','tiny','Reddit accounts are on <strong>Accounts</strong>. Where redbot looks is on <strong>Threads</strong>. Both are part of running it, not part of installing it.'));
-
-  box.append(b);root.append(box);
+  /* ---------------------------------------------------------------- elsewhere ---- */
+  const rest=el('div','collect');
+  rest.append(el('div','collect-h','<h3>Set up elsewhere</h3><span class="hint">part of running redbot, not of installing it</span>'));
+  const rb=el('div','collect-b');
+  rb.append(el('div','tiny','Reddit accounts are on <strong>Accounts</strong>. Where redbot looks is on <strong>Threads</strong>.'));
+  rest.append(rb);root.append(rest);
 
   /* ---- this build, and replacing it ----
    *
    * Its own card at the bottom, deliberately: updating is not a setup requirement, and putting it
-   * in the checklist above would make a perfectly working install look incomplete whenever a
-   * release landed.
+   * in the wizard would make a perfectly working install look incomplete whenever a release landed.
    *
    * The card is built empty and filled by paintUpdates(), because the state it shows arrives
-   * asynchronously and then keeps changing — a download reports progress several times a second.
-   * Rebuilding the whole Setup screen on each of those would fight the operator's scroll position.
-   */
+   * asynchronously and then keeps changing — a download reports progress several times a second. */
   const upd=el('div','collect');
   upd.append(el('div','collect-h','<h3>This build</h3><span class="hint">updates are never installed unless you ask</span>'));
   updCardBody=el('div','collect-b');
   upd.append(updCardBody);root.append(upd);
   paintUpdates();
-  /* Ask for the current state on every visit to the screen. In the desktop app this is a snapshot
-     of what the main process already knows and costs nothing; in a browser it is the cached
-     /api/update answer. Neither downloads anything. */
   refreshUpdates(false).catch(()=>{});
 }
 

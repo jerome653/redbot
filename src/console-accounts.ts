@@ -27,6 +27,7 @@ import {
 import type { AccountDependents } from './db/accounts.js';
 import { portIsFree, statusForAccounts } from './ports.js';
 import { machineId } from './machine.js';
+import { allocateProfileDir } from './profiles.js';
 
 /* Re-exported: the allocator here and the status screen must ask "is this port free" in exactly
    one way. Two definitions is how a console hands out a port it has just called occupied. */
@@ -71,8 +72,12 @@ export interface CreateResult {
  * The UNION matters, not the precedence: this feeds port and folder allocation, and an account
  * that exists only in the stale seed file still owns the port its Chrome is listening on.
  * Allocating around only the database would hand out a port that is already in use.
+ *
+ * Exported for `src/provision.ts`, which repairs missing Chrome profile folders on launch and
+ * needs the same union for the same reason — a folder named only in the seed file is still a
+ * folder that has to exist.
  */
-async function knownAccounts(): Promise<AccountRecord[]> {
+export async function knownAccounts(): Promise<AccountRecord[]> {
   const fromFile = loadAccountsFile();
   let fromDb: AccountRecord[] = [];
   if (!dbUnavailableReason()) {
@@ -148,9 +153,21 @@ export async function createConsoleAccount(body: {
    */
   const port = await firstFreePort(ports);
 
-  let dir = '', i = dirs.size;
-  do { dir = `chrome-profile-${String.fromCharCode(97 + i)}`; i++; }
-  while (dirs.has(dir) || existsSync(`${DATA}/${dir}`));   // never adopt a stranger's folder
+  /**
+   * The folder is CREATED here, not merely named.
+   *
+   * It used to be named and left for Chrome to create on first launch, which produced the defect
+   * an account arriving from the dashboard exposed: `applyAccounts` calls this function, so a
+   * pulled account was written to the database with `chrome-profile-c` recorded and no such
+   * directory, and the Accounts screen reported "Sign-in folder chrome-profile-c missing" on an
+   * account that had just been created successfully.
+   *
+   * It also closes a collision the old `existsSync` guard could not see: between allocation and
+   * the first Chrome launch the name existed only in the database, so two accounts created before
+   * either browser was opened — every account in one dashboard pull — could be handed the same
+   * folder. See src/profiles.ts.
+   */
+  const dir = allocateProfileDir({ dataRoot: DATA, taken: dirs });
 
   const account: AccountRecord = {
     handle,
@@ -488,9 +505,10 @@ export async function setUpAccountHere(body: { handle?: unknown }): Promise<Port
   try { port = await firstFreePort(ports); }
   catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
 
-  let dir = '', i = dirs.size;
-  do { dir = `chrome-profile-${String.fromCharCode(97 + i)}`; i++; }
-  while (dirs.has(dir) || existsSync(`${DATA}/${dir}`));   // never adopt a stranger's folder
+  /* Created, not just named — the same reasoning as createConsoleAccount above. This is the path
+     the "Set it up" button takes, and src/push/accounts.ts already described it as the one that
+     "creates the Chrome profile folder"; now it does. */
+  const dir = allocateProfileDir({ dataRoot: DATA, taken: dirs });
 
   try {
     await bindAccountToMachine(getPool(), machineId(), current.handle, dir, port);
