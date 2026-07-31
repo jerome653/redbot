@@ -19,7 +19,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { existsSync } from 'node:fs';
+import { existsSync, openSync, closeSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DATA } from './config.js';
 import type { AccountRecord } from './config.js';
@@ -58,6 +58,28 @@ export interface PortStatus {
   profileOnDisk: boolean;
   /** True only for `running`: the one state in which redbot may drive, or stop, this browser. */
   ours: boolean;
+  /**
+   * HOW ownership was established, when it was.
+   *
+   * `process-table` is the strong proof: the owning process's own `--user-data-dir`.
+   * `profile-lock` is the fallback — see `profileInUse`. Recorded rather than hidden so the
+   * screen can say which one answered, and so `stopBrowser` can refuse to kill on the weaker one.
+   */
+  evidence?: 'process-table' | 'profile-lock';
+}
+
+/** What the OS lookup found, and — when it found nothing — why. */
+export interface PortLookup {
+  owners: Map<number, PortOwner>;
+  /**
+   * Null when the lookup ran and simply found no listener. A sentence when it could not run.
+   *
+   * These two were indistinguishable before, and that is the defect this field exists for: a
+   * machine where PowerShell is blocked, WMI is disabled or the query times out produced exactly
+   * the same silent empty map as an idle machine with no browsers open. Both surfaced as
+   * "redbot could not confirm it is this account's browser", with nothing to act on.
+   */
+  reason: string | null;
 }
 
 /**
@@ -85,6 +107,52 @@ export function userDataDirFrom(commandLine: string | null): string | null {
   if (!commandLine) return null;
   const m = /--user-data-dir=(?:"([^"]*)"|(\S+))/.exec(commandLine);
   return m ? (m[1] ?? m[2] ?? null) : null;
+}
+
+/**
+ * Is a running Chrome holding this profile folder open?
+ *
+ * ---------------------------------------------------------------------------
+ * THE SECOND OWNERSHIP PROOF, and why it is a real one rather than a guess.
+ *
+ * The header above is emphatic that ownership is the `--user-data-dir` and that speaking CDP on
+ * the right port proves nothing. That still holds. This asks the same question from the other
+ * end: instead of asking the process what folder it opened, it asks the folder whether a process
+ * has it open.
+ *
+ * Chrome takes an exclusive lock on `<user-data-dir>\lockfile` for as long as it is running.
+ * MEASURED on Chrome 150: opening that file `r+` gives **EBUSY** while the browser is up, and
+ * succeeds once it exits. So EBUSY on THIS account's own folder means a Chrome is running on
+ * THIS account's profile — which is user-data-dir evidence, obtained without WMI, without
+ * PowerShell and without any privilege.
+ *
+ * The Lenovo Vantage case that this module exists for still fails it correctly: that WebView
+ * holds its own folder under `Lenovo\Vantage`, not redbot's, so the lock on redbot's profile is
+ * absent and no ownership is claimed.
+ *
+ * WHAT IT DOES NOT PROVE. It does not prove the locked Chrome is the process answering on the
+ * port — only that the account's browser is running and something is answering where that
+ * browser was told to listen. A machine where the account's Chrome was started WITHOUT the
+ * debugging flag while a different CDP browser sat on the port would satisfy both halves and be
+ * wrong. That is narrow, but it is why this is recorded as `profile-lock` evidence rather than
+ * being presented as the same fact as a process-table match, and why it is only consulted when
+ * the process table could not be read at all.
+ *
+ * Anything other than EBUSY is treated as "cannot prove", including a missing file (Chrome
+ * deletes it on a clean exit) and a permission error. Fail closed: unproven is not owned.
+ * ---------------------------------------------------------------------------
+ */
+export function profileInUse(
+  profileDir: string,
+  io: { open?: (p: string) => void } = {}
+): boolean {
+  const open = io.open ?? ((p: string) => { closeSync(openSync(p, 'r+')); });
+  try {
+    open(join(profileDir, 'lockfile'));
+    return false;                       // opened it, so nothing is holding it
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === 'EBUSY';
+  }
 }
 
 /**
@@ -120,11 +188,17 @@ export function sameDir(a: string | null | undefined, b: string | null | undefin
  * gets, the more shells it starts, which is the wrong direction for a machine already
  * struggling. Callers that arrive mid-flight get the answer already being fetched.
  */
-const inFlight = new Map<string, Promise<Map<number, PortOwner>>>();
+const inFlight = new Map<string, Promise<PortLookup>>();
 
-export function inspectPorts(ports: number[]): Promise<Map<number, PortOwner>> {
+export function inspectPorts(ports: number[]): Promise<PortLookup> {
   const wanted = [...new Set(ports.filter((p) => Number.isInteger(p) && p > 0))].sort((a, b) => a - b);
-  if (!wanted.length || process.platform !== 'win32') return Promise.resolve(new Map());
+  if (!wanted.length) return Promise.resolve({ owners: new Map(), reason: null });
+  if (process.platform !== 'win32') {
+    return Promise.resolve({
+      owners: new Map(),
+      reason: `the process table is only read on Windows, and this is ${process.platform}`
+    });
+  }
 
   const key = wanted.join(',');
   const running = inFlight.get(key);
@@ -134,7 +208,7 @@ export function inspectPorts(ports: number[]): Promise<Map<number, PortOwner>> {
   return started;
 }
 
-function inspectPortsNow(wanted: number[], key: string): Promise<Map<number, PortOwner>> {
+function inspectPortsNow(wanted: number[], key: string): Promise<PortLookup> {
 
   /* `procId`, not `pid`: `$PID` is an automatic variable in PowerShell and a property named
      after it is a trap for the next person to edit this. `ConvertTo-Json` in Windows
@@ -174,12 +248,13 @@ $items = foreach ($c in $conns) {
 
   return new Promise((done) => {
     const out: string[] = [];
+    const err: string[] = [];
     let settled = false;
-    const finish = (m: Map<number, PortOwner>) => {
+    const finish = (owners: Map<number, PortOwner>, reason: string | null) => {
       if (settled) return;
       settled = true;
       inFlight.delete(key);          // the next caller starts a fresh look, not this stale one
-      done(m);
+      done({ owners, reason });
     };
 
     const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
@@ -192,15 +267,29 @@ $items = foreach ($c in $conns) {
      * answer, given for the wrong reason. Generous enough to be a real ceiling now, with
      * `inFlight` below making sure a slow one cannot pile up behind the 6s poll.
      */
-    const timer = setTimeout(() => { try { ps.kill(); } catch { /* gone */ } finish(new Map()); }, 20_000);
+    const timer = setTimeout(() => {
+      try { ps.kill(); } catch { /* gone */ }
+      finish(new Map(), 'the lookup took longer than 20s and was stopped');
+    }, 20_000);
 
     ps.stdout.on('data', (d: Buffer) => out.push(String(d)));
-    ps.on('error', () => { clearTimeout(timer); finish(new Map()); });
-    ps.on('close', () => {
+    ps.stderr.on('data', (d: Buffer) => err.push(String(d)));
+    /* powershell.exe could not be started at all — blocked by policy, or not on PATH. */
+    ps.on('error', (e) => {
+      clearTimeout(timer);
+      finish(new Map(), `PowerShell could not be started (${e.message})`);
+    });
+    ps.on('close', (code) => {
       clearTimeout(timer);
       const map = new Map<number, PortOwner>();
+      const text = out.join('').trim();
+      const stderr = err.join('').trim().split('\n')[0]?.trim() ?? '';
+
+      if (code !== 0) {
+        return finish(map, `PowerShell exited with code ${code}${stderr ? `: ${stderr}` : ''}`);
+      }
       try {
-        const parsed = JSON.parse(out.join('').trim() || '{"items":[]}') as {
+        const parsed = JSON.parse(text || '{"items":[]}') as {
           items?: { port: number; procId: number; name: string | null; cmd: string | null }[];
         };
         for (const it of parsed.items ?? []) {
@@ -212,8 +301,12 @@ $items = foreach ($c in $conns) {
             userDataDir: userDataDirFrom(it.cmd ?? null)
           });
         }
-      } catch { /* unparseable is unknown, not empty */ }
-      finish(map);
+      } catch {
+        /* Unparseable is unknown, not empty — and now it SAYS so. Constrained Language Mode and a
+           profile that prints a banner both land here, and both used to look like an idle machine. */
+        return finish(new Map(), `the lookup returned something that is not JSON${stderr ? `: ${stderr}` : ''}`);
+      }
+      finish(map, null);
     });
   });
 }
@@ -239,7 +332,7 @@ async function probeCdp(port: number): Promise<{ up: boolean; browser?: string }
  */
 export async function statusForAccounts(accounts: AccountRecord[]): Promise<PortStatus[]> {
   const ports = accounts.map((a) => a.debugPort).filter((p): p is number => typeof p === 'number');
-  const owners = await inspectPorts(ports);
+  const { owners, reason: lookupReason } = await inspectPorts(ports);
 
   return Promise.all(accounts.map(async (a): Promise<PortStatus> => {
     const profileOnDisk = !!a.profileDir && existsSync(join(DATA, a.profileDir));
@@ -275,7 +368,7 @@ export async function statusForAccounts(accounts: AccountRecord[]): Promise<Port
        is not evidence — that is exactly what the Lenovo Vantage WebView does. */
     if (owner && expected && sameDir(owner.userDataDir, expected)) {
       return {
-        ...base, state: 'running', ours: true,
+        ...base, state: 'running', ours: true, evidence: 'process-table',
         detail: `${cdp.browser || 'A browser'} is running on ${a.debugPort} with this account's own sign-in folder.`
       };
     }
@@ -296,12 +389,38 @@ export async function statusForAccounts(accounts: AccountRecord[]): Promise<Port
       };
     }
 
-    /* Something answers CDP but the process table gave nothing — not Windows, or the query was
-       refused. Fail closed: unproven is not owned. */
+    /**
+     * The process table gave nothing. Before failing closed, ask the FOLDER.
+     *
+     * This is the case reported from a second machine: both accounts showed "Something is
+     * answering on 9222, but redbot could not confirm it is this account's browser" while the
+     * browsers were genuinely theirs and working. The lookup was returning an empty map — every
+     * way it can fail did so silently — and CDP answering was correctly not accepted as proof.
+     *
+     * `profileInUse` supplies the missing evidence without WMI: Chrome holds this account's own
+     * sign-in folder locked while it runs. Only consulted when the process table could not be
+     * read, so a lookup that RAN and found a foreign owner is never overridden by it.
+     */
+    if (!owner && cdp.up && expected && profileInUse(expected)) {
+      return {
+        ...base, state: 'running', ours: true, evidence: 'profile-lock',
+        detail: `${cdp.browser || 'A browser'} is answering on ${a.debugPort}, and this account's own `
+              + 'sign-in folder is open in a running Chrome. '
+              + `(The process table could not be read${lookupReason ? `: ${lookupReason}` : ''}, `
+              + 'so this was confirmed from the folder instead.)'
+      };
+    }
+
+    /* Something answers CDP, the process table gave nothing, and the folder is not held either.
+       Fail closed: unproven is not owned — but say WHY it could not be proven. */
     return {
       ...base, state: 'unknown', ours: false,
       detail: `Something is answering on ${a.debugPort}${cdp.browser ? ` (${cdp.browser})` : ''}, `
-            + 'but redbot could not confirm it is this account\'s browser.'
+            + 'but redbot could not confirm it is this account\'s browser'
+            + (lookupReason ? ` — ${lookupReason}.` : '.')
+            + (profileOnDisk
+              ? ' This account\'s sign-in folder is also not open in a running Chrome.'
+              : ' This account has no sign-in folder on disk.')
     };
   }));
 }
@@ -323,6 +442,22 @@ export async function stopAccountBrowser(account: AccountRecord): Promise<StopRe
   const [status] = await statusForAccounts([account]);
   if (!status || status.port == null) return { ok: false, error: 'This account has no port on record.' };
   if (status.state === 'free') return { ok: false, error: `Nothing is running on ${status.port}.` };
+  /**
+   * Ours, but identified from the profile lock rather than the process table — so there is no pid,
+   * and there is nothing to kill BY. Refusing here is not conservatism for its own sake: the only
+   * thing available would be a kill-by-port, which is exactly the "close whatever is sitting on
+   * this number" behaviour this module exists to prevent. Says which half is missing, because
+   * "refusing to stop it: a browser is running with this account's folder" reads as a
+   * contradiction otherwise.
+   */
+  if (status.ours && !status.pid) {
+    return {
+      ok: false,
+      error: 'redbot can see this account\'s browser but not which process it is, so it will not '
+           + 'guess what to close. Close the Chrome window yourself. '
+           + `(${status.detail})`
+    };
+  }
   if (!status.ours || !status.pid) {
     return { ok: false, error: `Refusing to stop it: ${status.detail}` };
   }
