@@ -22,6 +22,7 @@ import { observe } from './commands/observe.js';
 import { opportunity } from './commands/opportunity.js';
 import { doctor } from './commands/doctor.js';
 import { push, pull } from './commands/push.js';
+import { tokens } from './commands/tokens.js';
 import { backupCmd } from './commands/backup.js';
 import { regret } from './commands/regret.js';
 import { certifyCmd } from './commands/certify.js';
@@ -248,6 +249,13 @@ async function main(): Promise<number> {
     /* The receiving half of account sync. Uses the SHARE token, and changes nothing without
        --apply, because it writes to accounts a person set up by hand. */
     case 'pull':    return pull(positional[0], { apply: flags.has('--apply') });
+    /* Mints this install's dashboard tokens. The admin token is read from a FILE and never
+       stored — it belongs to the service, not to any install. */
+    case 'tokens':  return tokens(positional[0], {
+      adminTokenFile: flagValue('admin-token-file'),
+      shareFrom: flagValue('share-from'),
+      label: flagValue('label')
+    });
     case 'read':    return read(positional[0]);
     case 'search':  return search(positional[0], undefined, flagValue('commit'));
     case 'draft':   return draft(positional[0]);

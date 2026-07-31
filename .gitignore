@@ -45,6 +45,33 @@ data/
 # committed template and carries no secret.
 db/.env
 
+# Every other place a secret actually lands.
+#
+# `db/.env` above covered the one file that existed when it was written. It did NOT cover a
+# `.env` at the repository root — which is the single most conventional place to put one — nor a
+# token pasted into a text file while setting up dashboard sync. This repository is PUBLIC, so
+# either would be published the moment somebody ran `git add -A`.
+#
+# The negations matter: three .env-shaped files are committed ON PURPOSE — `db/.env.example` and
+# the two `.env.test` files, which name a database and carry no credential. A blanket `.env*`
+# would silently drop them from a fresh clone and break `npm test`.
+.env
+.env.*
+!.env.example
+!*.env.example
+!.env.test
+!*.env.test
+
+# Tokens and keys saved beside the work. Named by SHAPE rather than by exact filename, because
+# the file you are about to create is never the one you thought to list.
+*TOKEN*.txt
+*SECRET*.txt
+*token*.txt
+*secret*.txt
+*.pem
+*.key
+!electron/build/*.key
+
 # Build output
 dist/
 node_modules/

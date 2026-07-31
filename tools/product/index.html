@@ -3598,6 +3598,42 @@ function setup(){
       'again — only the last four characters. Paste only the token itself, not a '+
       '<code>NAME=value</code> line. The dashboard’s own admin and signing secrets are NOT '+
       'entered here and never leave the server that owns them.'));
+
+    /* ---- where tokens come from ----
+     *
+     * There is deliberately no "mint" button. Minting needs the dashboard's ADMIN token, which
+     * mints and revokes for every install on the service — a field for it here would put a
+     * fleet-wide credential on every desktop, so one stolen laptop would compromise all of them
+     * rather than one. The command below reads that token from a file, uses it once, and never
+     * stores it. Shown with this install's real id so it can be copied without editing.
+     */
+    b.append(el('div','srcgrp','where these tokens come from'));
+    b.append(el('div','tiny',
+      'An operator with the dashboard’s admin token mints them. There is no button for it here '+
+      'on purpose: that token controls every install on the service, so it never lives on a '+
+      'desktop. Run this at a terminal in the redbot folder — it reads the admin token from the '+
+      'file, uses it once, and seals the results into this machine’s vault without storing it:'));
+
+    const cmd='node dist/cli.js tokens mint --admin-token-file <path-to-admin-token.txt>';
+    const cmdShare=cmd+' \\\n  --share-from <the id of the machine that owns the accounts>';
+    const box=el('div');
+    box.style.cssText='display:flex;gap:.5rem;align-items:flex-start;flex-wrap:wrap;padding:.4rem 0';
+    const pre=el('code');
+    pre.style.cssText='flex:1;min-width:260px;white-space:pre-wrap;word-break:break-all;font-size:.78rem;'+
+      'padding:.55rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink-2)';
+    pre.textContent=cmdShare;
+    const copy=el('button','mini');copy.textContent='copy';
+    copy.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+    copy.onclick=async()=>{
+      try{ await navigator.clipboard.writeText(cmdShare); toast('Copied'); }
+      catch{ toast('Could not copy — select the text instead'); }
+    };
+    box.append(pre,copy);b.append(box);
+    b.append(el('div','tiny',
+      'Drop <code>--share-from</code> if this machine only sends its own data and does not need '+
+      'to read anybody’s account list. The ingest token is always minted for '+
+      '<code>'+esc(sy.installId||'this install')+'</code> — reusing another machine’s would make '+
+      'the two collide on the dashboard.'));
   }
 
   /* ---- how the model is reached ---- */
