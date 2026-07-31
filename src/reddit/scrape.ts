@@ -18,6 +18,58 @@ export async function firstVisible(page: Page | Locator, candidates: readonly st
   return null;
 }
 
+/**
+ * First selector that resolves to an element you can actually ACT on.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY VISIBLE IS NOT ENOUGH FOR A CONTROL.
+ *
+ * `firstVisible` is right for reading text. It is wrong for the composer and the submit button,
+ * because a control can be perfectly visible and completely inert: a readonly editor while the
+ * page is still settling, a submit button Reddit has disabled until the body is non-empty. Handing
+ * one of those back produces a failure at the point of USE, far from the selector that chose it —
+ * and for the composer that surfaced as `[no-composer]`, which reads as "the element is missing"
+ * when the element was found and simply could not be typed into.
+ *
+ * REJECTS ONLY WHAT IS PROVABLY UNUSABLE. Measured on Chrome 150 through Playwright:
+ *
+ *   element                 isVisible   isEditable   isEnabled
+ *   contenteditable div     true        true         true
+ *   textarea                true        true         true
+ *   textarea[readonly]      true        FALSE        true
+ *   input[disabled]         true        FALSE        false
+ *   button                  true        THROWS       true
+ *   button[disabled]        true        THROWS       false
+ *   plain div               true        THROWS       true
+ *
+ * So `isEditable` THROWS on anything that is not a form control — including the submit button. A
+ * check that demanded `isEditable() === true` would therefore reject the very button it was added
+ * to protect. This treats a throw as "cannot tell" and keeps the element; only an explicit `false`
+ * from either probe disqualifies it.
+ *
+ * That makes the result a strict subset of `firstVisible`'s: everything it returns, this returns,
+ * minus the elements the browser itself reports as not editable or not enabled. It cannot start
+ * rejecting a composer that used to work.
+ * ---------------------------------------------------------------------------
+ */
+export async function firstUsable(page: Page | Locator, candidates: readonly string[]) {
+  for (const s of candidates) {
+    const loc = (page as Page).locator ? (page as Page).locator(s) : (page as Locator).locator(s);
+    const el = loc.first();
+    if (!(await el.isVisible({ timeout: 1200 }).catch(() => false))) continue;
+
+    /* `null` means the probe could not answer (it threw) — which is not evidence against the
+       element, so it is kept. Only an explicit false rules it out. */
+    const editable = await el.isEditable({ timeout: 600 }).catch(() => null);
+    if (editable === false) continue;
+    const enabled = await el.isEnabled({ timeout: 600 }).catch(() => null);
+    if (enabled === false) continue;
+
+    return el;
+  }
+  return null;
+}
+
 async function textOf(scope: Page | Locator, candidates: readonly string[]): Promise<string | null> {
   const el = await firstVisible(scope, candidates);
   if (!el) return null;

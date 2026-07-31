@@ -71,9 +71,66 @@ export async function isBrowserUp(endpoint = config.browser.cdpEndpoint): Promis
  * `noDefaults` keeps Playwright from applying its context overrides to a browser it did not
  * launch — the documented option for attaching to a daily-driver browser.
  */
+/**
+ * Does this user-agent belong to a headless browser?
+ *
+ * Chrome puts `HeadlessChrome` in the UA, and `/json/version` reports it verbatim — measured:
+ * a headless Chrome 150 answers `Mozilla/5.0 (…) HeadlessChrome/150.0.0.0 Safari/537.36`.
+ */
+export function isHeadlessUA(ua: string | null | undefined): boolean {
+  return typeof ua === 'string' && /headless/i.test(ua);
+}
+
+/**
+ * Attached to a browser that cannot do the job.
+ *
+ * Its own error type because this is not a transient failure to retry — it is a wrong browser,
+ * and every action taken through it would appear to succeed while reading a block page.
+ */
+export class HeadlessBrowserError extends Error {
+  constructor(public readonly endpoint: string, public readonly ua: string) {
+    super(
+      `The browser on ${endpoint} is HEADLESS (${ua}). Reddit answers headless browsers with a `
+      + 'block page served as HTTP 200, so reads return nothing and every action fails silently. '
+      + 'Attach a headed Chrome — redbot cannot run on a display-less host.'
+    );
+    this.name = 'HeadlessBrowserError';
+  }
+}
+
+/** The browser's own `User-Agent`, from CDP. Null when it cannot be read. */
+async function browserUA(endpoint: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(2500) });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { 'User-Agent'?: string };
+    return j['User-Agent'] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function attach(): Promise<Session> {
   const endpoint = config.browser.cdpEndpoint;
   if (!(await isBrowserUp(endpoint))) throw new NoBrowserError(endpoint);
+
+  /**
+   * REFUSE A HEADLESS BROWSER HERE, not only in `doctor`.
+   *
+   * The header above records the measurement this whole module is built on: Playwright launching
+   * a browser gets a Reddit block page, in all four modes including headless. `doctor` already
+   * FAILs on it (src/commands/doctor.ts) and `requirements.ts` reports it advisory — but neither
+   * is on the path a run takes. `attach()` was happy to hand back a headless session, so a run
+   * started without looking at doctor drove one and believed everything it read: the block page
+   * arrives as HTTP 200, so nothing throws and every scrape simply returns nothing.
+   *
+   * Failing here turns that silent-wrong into a refusal at the only place that matters.
+   *
+   * A UA that cannot be read is NOT treated as headless — that would refuse a working browser on
+   * a slow or unusual endpoint. doctor already WARNs about the unreadable case.
+   */
+  const ua = await browserUA(endpoint);
+  if (isHeadlessUA(ua)) throw new HeadlessBrowserError(endpoint, ua as string);
 
   const browser = await chromium.connectOverCDP(endpoint, { noDefaults: true } as never);
   const context = browser.contexts()[0];

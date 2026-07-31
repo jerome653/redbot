@@ -312,6 +312,27 @@ describe('updated_at triggers', () => {
   test('an UPDATE moves updated_at forward', () => {
     db.prepare('INSERT INTO accounts (handle, note) VALUES ($1,$2)').run(P('trig', 'before'));
     const was = db.prepare('SELECT updated_at FROM accounts WHERE handle = $1').get(P('trig')).updated_at;
+    /**
+     * Let the clock tick before the UPDATE.
+     *
+     * Both the column default and the trigger use `strftime('%Y-%m-%dT%H:%M:%fZ','now')` —
+     * MILLISECOND precision on the system clock (0002_accounts.up.sql). An INSERT and an UPDATE
+     * that land inside the same millisecond therefore write the SAME string, and the assertion
+     * below fails with actual == expected while the trigger has behaved perfectly. Reported from
+     * a run that hit it; 400 forced attempts did not reproduce it on this machine, because each
+     * pair happened to take longer than a millisecond here — which is exactly what makes it a
+     * latency-dependent flake rather than a bug anyone can see on demand.
+     *
+     * Waiting is the honest fix: the assertions are unchanged, and what is under test is that the
+     * trigger MOVES the value, which cannot be observed until the clock it reads has moved.
+     * SQLite's `now` and Date.now() are the same system clock, so this is sufficient.
+     *
+     * The product is NOT affected: push cursors are composite — `WHERE a > $1 OR (a = $2 AND
+     * b > $3)` in src/push/streams.ts `forwardFrom` — so rows sharing a millisecond are still
+     * ordered by the unique second column and neither is skipped nor resent.
+     */
+    const startedAt = Date.now();
+    while (Date.now() === startedAt) { /* spin under 1ms, so the trigger writes a later value */ }
     db.prepare('UPDATE accounts SET note = $2 WHERE handle = $1').run(P('trig', 'after'));
     const now = db.prepare('SELECT updated_at FROM accounts WHERE handle = $1').get(P('trig')).updated_at;
     assert.notEqual(now, was, 'the trigger did not fire — check the WHERE clause names the real key');

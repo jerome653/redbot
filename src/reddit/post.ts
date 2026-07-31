@@ -6,7 +6,7 @@
  */
 import type { Page } from 'playwright';
 import { sel } from './selectors.js';
-import { firstVisible } from './scrape.js';
+import { firstVisible, firstUsable } from './scrape.js';
 import { pause, sleep, typingDelay } from '../pacing.js';
 import { config } from '../config.js';
 
@@ -53,7 +53,7 @@ export async function publishComment(page: Page, permalink: string, body: string
     await pause();
 
     // The composer is sometimes collapsed behind a trigger button.
-    const editorBefore = await firstVisible(page, sel.commentEditor);
+    const editorBefore = await firstUsable(page, sel.commentEditor);
     if (!editorBefore) {
       const trigger = await firstVisible(page, sel.commentBoxTrigger);
       if (!trigger) {
@@ -63,16 +63,16 @@ export async function publishComment(page: Page, permalink: string, body: string
       await pause();
     }
 
-    const editor = await firstVisible(page, sel.commentEditor);
-    if (!editor) return { ok: false, error: 'comment editor did not open' };
+    const editor = await firstUsable(page, sel.commentEditor);
+    if (!editor) return { ok: false, error: 'comment editor did not open, or opened read-only' };
 
     await editor.click();
     await sleep(400);
     await typeHuman(page, body);
     await pause();
 
-    const submit = await firstVisible(page, sel.commentSubmit);
-    if (!submit) return { ok: false, error: 'submit button not found' };
+    const submit = await firstUsable(page, sel.commentSubmit);
+    if (!submit) return { ok: false, error: 'submit button not found, or still disabled' };
 
     await submit.click();
     await sleep(3500);
