@@ -260,6 +260,21 @@ button.mini{
   -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
 }
 button.mini:hover:not(:disabled){color:var(--ink);border-color:var(--edge-2)}
+
+/* Setup's action buttons — Register operator, Save endpoint, Store it, Remove, Check now, Push now.
+   Jade rather than the default glass, so the things that DO something on that screen read as
+   actionable instead of as chrome. Same treatment as the update card's Apply button, which is the
+   point: one look for "this performs an action", wherever it appears.
+   Scoped to `.collect.acts` on purpose — see the marker class in setup(). */
+#v-setup .collect.acts button.mini{
+  color:var(--ink);
+  border-color:color-mix(in srgb,var(--jade) 45%,transparent);
+  background:color-mix(in srgb,var(--jade) 14%,transparent)
+}
+#v-setup .collect.acts button.mini:hover:not(:disabled){
+  border-color:color-mix(in srgb,var(--jade) 70%,transparent);
+  background:color-mix(in srgb,var(--jade) 24%,transparent)
+}
 /* A button that cannot be pressed has to LOOK like it cannot be pressed. Added after seeing the
    update card mid-download in a real render: both buttons were correctly `disabled` and both still
    looked live, which invites a click that does nothing and reads as the app having hung. */
@@ -3505,7 +3520,11 @@ function setup(){
   }
 
   /* ---- what is missing, first ---- */
-  const box=el('div','collect');
+  /* `acts` marks this card's buttons as ACTIONS, which is what gives them the jade treatment.
+     A marker class rather than a bare `#v-setup button.mini` rule, because `.mini` is the console's
+     default button and is used thirty times across every screen — styling it by ancestor would
+     repaint the update card, the copy buttons and anything added to Setup later. */
+  const box=el('div','collect acts');
   box.append(el('div','collect-h','<h3>Before redbot can run</h3><span class="hint">everything on this screen is stored on this machine</span>'));
   const b=el('div','collect-b');
 
