@@ -6,7 +6,7 @@
  */
 import type { Page } from 'playwright';
 import { sel } from './selectors.js';
-import { firstVisible } from './scrape.js';
+import { firstUsable, type Usable } from './scrape.js';
 import { pause, sleep, typingDelay } from '../pacing.js';
 import { config } from '../config.js';
 
@@ -47,34 +47,56 @@ async function typeHuman(page: Page, text: string): Promise<void> {
   }
 }
 
+/**
+ * Put a control into use, by the route its own shape allows.
+ *
+ * A visible control is clicked exactly as before — the normal path is unchanged. A zero-box one
+ * cannot be: Playwright's mouse click needs a hit target, and `scrollIntoViewIfNeeded` on the
+ * composer times out (measured 2026-07-27), because the element has no layout box to scroll to.
+ * It is focused and clicked at the DOM level instead, which is the only route to an element the
+ * page renders but does not lay out. `typeHuman` types into whatever holds focus, so focusing
+ * the contenteditable is what makes the keystrokes land in it.
+ */
+async function activate({ el, via }: Usable): Promise<void> {
+  if (via === 'visible') {
+    await el.click();
+    return;
+  }
+  await el.evaluate((node: HTMLElement) => {
+    node.focus();
+    node.click();
+  });
+}
+
 export async function publishComment(page: Page, permalink: string, body: string): Promise<PublishResult> {
   try {
     await page.goto(permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await pause();
 
-    // The composer is sometimes collapsed behind a trigger button.
-    const editorBefore = await firstVisible(page, sel.commentEditor);
-    if (!editorBefore) {
-      const trigger = await firstVisible(page, sel.commentBoxTrigger);
+    // The composer is sometimes collapsed behind a trigger button — and on a current thread page
+    // it is present, enabled and zero-size, which a visibility test reads as absent. `firstUsable`
+    // separates "no box" from "hidden"; `activate` drives each accordingly.
+    let editor = await firstUsable(page, sel.commentEditor);
+    if (!editor) {
+      const trigger = await firstUsable(page, sel.commentBoxTrigger);
       if (!trigger) {
         return { ok: false, error: 'comment composer not found — logged out, or thread locked?' };
       }
-      await trigger.click();
+      await activate(trigger);
       await pause();
+      editor = await firstUsable(page, sel.commentEditor);
     }
-
-    const editor = await firstVisible(page, sel.commentEditor);
     if (!editor) return { ok: false, error: 'comment editor did not open' };
 
-    await editor.click();
+    await activate(editor);
     await sleep(400);
     await typeHuman(page, body);
     await pause();
 
-    const submit = await firstVisible(page, sel.commentSubmit);
+    const submit = await firstUsable(page, sel.commentSubmit);
     if (!submit) return { ok: false, error: 'submit button not found' };
 
-    await submit.click();
+    await activate(submit);
     await sleep(3500);
 
     /**

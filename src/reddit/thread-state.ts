@@ -13,7 +13,7 @@
  */
 import type { Page } from 'playwright';
 import { sel } from './selectors.js';
-import { firstVisible } from './scrape.js';
+import { firstVisible, firstUsable } from './scrape.js';
 
 export interface ThreadState {
   locked: boolean;
@@ -22,6 +22,12 @@ export interface ThreadState {
   ownCommentPresent: boolean;
   /** The composer is reachable — the practical test of "can this account reply here". */
   composerPresent: boolean;
+  /**
+   * How the composer was found. `zero-box` means it is present, enabled and interactive but has
+   * no layout box, which is Reddit's current shape for it — recorded rather than silently
+   * absorbed, so a run that relied on the fallback says so in its own state.
+   */
+  composerVia?: 'visible' | 'zero-box';
   /** Facts the probe could not establish. Non-empty means the gate must refuse. */
   unknown: string[];
   /** Anything that does not look like a normal thread page. */
@@ -113,12 +119,22 @@ export async function probeThreadState(page: Page, username: string | null): Pro
   }
 
   /* ---- composer ---- */
-  const editor = await firstVisible(page, sel.commentEditor);
-  const trigger = editor ? null : await firstVisible(page, sel.commentBoxTrigger);
-  const composerPresent = Boolean(editor || trigger);
+  // `firstUsable`, not `firstVisible`: the composer on a current thread page is present, enabled
+  // and holding its own contenteditable while measuring 0 × 0, because two custom-element
+  // ancestors are laid out `display: inline`. A visibility test read that as "no composer" and
+  // refused to publish on a thread anyone can comment on. See firstUsable for the measurement.
+  // Genuinely hidden and disabled composers are still refused, so this stays fail-closed.
+  const editor = await firstUsable(page, sel.commentEditor);
+  const trigger = editor ? null : await firstUsable(page, sel.commentBoxTrigger);
+  const found = editor ?? trigger;
+  const composerPresent = Boolean(found);
   if (!composerPresent && !locked && !archived) {
     anomalies.push('no comment composer and no lock notice — unexpected state, refusing rather than guessing');
   }
 
-  return { locked, archived, ownCommentPresent, composerPresent, unknown, anomalies, postScore, commentCount };
+  return {
+    locked, archived, ownCommentPresent, composerPresent,
+    ...(found ? { composerVia: found.via } : {}),
+    unknown, anomalies, postScore, commentCount
+  };
 }

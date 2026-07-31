@@ -18,6 +18,69 @@ export async function firstVisible(page: Page | Locator, candidates: readonly st
   return null;
 }
 
+/** How an element was found. `zero-box` means present and live, but with no layout box. */
+export interface Usable {
+  el: Locator;
+  via: 'visible' | 'zero-box';
+}
+
+/**
+ * First candidate that is USABLE — checked candidate by candidate, so the list's specificity
+ * ordering is preserved.
+ *
+ * MEASURED 2026-07-27 on r/Wordpress `1v7uai9`, signed in, thread open and unlocked:
+ * `shreddit-composer` is present, `aria-disabled="false"`, placeholder "Join the conversation",
+ * and holds its own `div[contenteditable="true"][role="textbox"]` — yet its
+ * `getBoundingClientRect()` is **0 × 0**. Its ancestors `faceplate-form` and
+ * `comment-composer-host` are laid out `display: inline`, so their block children collapse to
+ * nothing. Unchanged after `networkidle`, after a 6 s settle, and after scrolling —
+ * `scrollIntoViewIfNeeded` times out on it, and a manual scroll moves the page while the
+ * composer's `top` stays 0.
+ *
+ * Playwright's `isVisible()` is bounding-box based, so every visibility test read a live composer
+ * as absent: `probeThreadState` reported `composerPresent: false`, the publish gate refused with
+ * `[no-composer]`, and `publishComment` would have failed at "comment editor did not open".
+ *
+ * **Zero-size is not the same fact as hidden**, and this is where the two are separated. Anything
+ * genuinely hidden — `display: none`, `visibility: hidden`, `[hidden]`, `aria-disabled="true"` —
+ * is still refused, so the gates stay fail-closed on the cases they were written for. The `via`
+ * field is returned rather than hidden, because a caller that must drive a zero-box element does
+ * it differently, and a fallback nobody can see in the logs is a fallback nobody can audit.
+ *
+ * Ordering matters and is the reason this checks each candidate fully before moving on. A single
+ * visible-pass followed by a presence-pass would have taken the LAST candidate in
+ * `sel.commentSubmit` — `button:has-text("Comment")`, which matches visible buttons outside the
+ * composer — over the first and precise one, `button[slot="submit-button"]`, which is the real
+ * submit and is zero-box. That is a wrong-element click on the only write path.
+ */
+export async function firstUsable(
+  page: Page | Locator,
+  candidates: readonly string[]
+): Promise<Usable | null> {
+  for (const s of candidates) {
+    const loc = (page as Page).locator ? (page as Page).locator(s) : (page as Locator).locator(s);
+    const el = loc.first();
+
+    if (await el.isVisible({ timeout: 1200 }).catch(() => false)) return { el, via: 'visible' };
+    if ((await el.count().catch(() => 0)) === 0) continue;
+
+    const live = await el
+      .evaluate((node: Element) => {
+        const cs = getComputedStyle(node);
+        return (
+          cs.display !== 'none' &&
+          cs.visibility !== 'hidden' &&
+          !node.hasAttribute('hidden') &&
+          node.getAttribute('aria-disabled') !== 'true'
+        );
+      })
+      .catch(() => false);
+
+    if (live) return { el, via: 'zero-box' };
+  }
+  return null;
+}
+
 async function textOf(scope: Page | Locator, candidates: readonly string[]): Promise<string | null> {
   const el = await firstVisible(scope, candidates);
   if (!el) return null;
