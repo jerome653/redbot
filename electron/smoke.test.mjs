@@ -54,7 +54,11 @@ before(async () => {
       REDBOT_VAULT_KEY: Buffer.alloc(32, 7).toString('base64'),
       /* No modal dialogs in an automated run: dialog.showErrorBox is synchronous and blocks
          forever with nobody to click OK, which turned a 30s failure into a 3-minute hang. */
-      REDBOT_NO_DIALOGS: '1'
+      REDBOT_NO_DIALOGS: '1',
+      /* A throwaway userData has no accounts, so boot would find nothing to open anyway — this is
+         belt and braces. An automated run must never spawn a real Chrome on the tester's desktop
+         if that ever stops being true. */
+      REDBOT_NO_AUTO_BROWSER: '1'
     }
   });
 

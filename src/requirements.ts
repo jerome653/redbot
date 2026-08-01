@@ -27,11 +27,29 @@
  * BLOCKING means redbot cannot function and the app should open on Setup. Every blocking item is
  * LOCAL, DURABLE, and FIXABLE FROM INSIDE THE CONSOLE — that is the definition, not a coincidence.
  *
- * ADVISORY means part of it cannot run: warn, never block. Every browser/session/network condition
- * is advisory BY CONSTRUCTION, because they are transient. "No debuggable Chrome" is unmet on a
- * perfectly configured install where the operator simply has not opened their browser yet, and
- * blocking on it would make the app unusable every morning — locking a person out of the only
- * screen that could fix it.
+ * ADVISORY means part of it cannot run: warn, never block.
+ *
+ * THE BROWSER MOVED FROM ADVISORY TO BLOCKING (2026-08-01), and the reason it was advisory is
+ * worth keeping rather than deleting, because it was correct at the time:
+ *
+ *   "Every browser/session/network condition is advisory BY CONSTRUCTION, because they are
+ *    transient. 'No debuggable Chrome' is unmet on a perfectly configured install where the
+ *    operator simply has not opened their browser yet, and blocking on it would make the app
+ *    unusable every morning — locking a person out of the only screen that could fix it."
+ *
+ * That argument rested on one thing: nothing opened the browser but a person. `electron/main.mjs`
+ * now opens every account bound to this machine as part of boot, so the condition is normally met
+ * before the window is even painted. What is left when it is NOT met is no longer "you have not
+ * got round to it" — it is a real fault (Chrome missing, the port taken by another program, a
+ * profile folder gone), and reads and publishes will refuse for as long as it lasts. Reporting
+ * that as a warning understated it: the product's entire surface is a browser.
+ *
+ * The definition above still holds — it is LOCAL, it is DURABLE for as long as it is true, and it
+ * is FIXABLE FROM INSIDE THE CONSOLE (Accounts → Open Chrome, which is where `fix.screen` points).
+ *
+ * `headed` stays ADVISORY on purpose. It is a property of a browser that is already attached and
+ * can be restarted, not of the install — and a headless attach is reported as a FAIL by `doctor`,
+ * which is the check that governs a run.
  * ---------------------------------------------------------------------------
  */
 import { ping } from './db.js';
@@ -214,9 +232,11 @@ export async function checkRequirements(): Promise<Requirement[]> {
         { screen: 'accounts', hint: 'Choose which account this machine acts as.' }));
   }
 
-  /* ---------- advisory: the browser ----------
+  /* ---------- blocking: the browser ----------
    *
-   * Transient by nature, so never blocking — see the header. */
+   * The product IS a browser (src/browser.ts), so an install without one cannot do the thing it
+   * exists to do. Blocking rather than advisory since 2026-08-01 — see the header for the
+   * argument this replaced and why the app opening the browsers on boot is what makes it fair. */
   let endpoint: string | null = null;
   let endpointError: string | null = null;
   try { endpoint = config.browser.cdpEndpoint; } catch (e) {
@@ -226,16 +246,16 @@ export async function checkRequirements(): Promise<Requirement[]> {
   }
 
   if (!endpoint) {
-    out.push(unmet('browser', 'A signed-in Chrome', 'advisory', endpointError ?? 'unknown',
+    out.push(unmet('browser', 'A signed-in Chrome', 'blocking', endpointError ?? 'unknown',
       { screen: 'accounts', hint: 'Set the account up on this machine first.' }));
   } else {
     const up = await isBrowserUp(endpoint);
     if (!up) {
-      out.push(unmet('browser', 'A signed-in Chrome', 'advisory',
+      out.push(unmet('browser', 'A signed-in Chrome', 'blocking',
         `nothing is listening at ${endpoint} — reading and publishing will refuse until a Chrome is started`,
         { screen: 'accounts', hint: 'Start the account\'s Chrome from the Accounts screen, then sign in to Reddit once.' }));
     } else {
-      out.push(met('browser', 'A signed-in Chrome', 'advisory', `reachable at ${endpoint}`));
+      out.push(met('browser', 'A signed-in Chrome', 'blocking', `reachable at ${endpoint}`));
 
       /* Headed, not headless. `doctor` calls this a FAIL and explains why at length: a headless
          browser answers CDP perfectly and Reddit serves it a block page as HTTP 200, so redbot
