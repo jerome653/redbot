@@ -829,6 +829,21 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
 .todo{display:flex;gap:.65rem;padding:.42rem 0;font-size:.87rem;color:var(--ink-2);line-height:1.6;align-items:baseline}
 .todo .box{font-family:var(--mono);color:var(--ink-3);flex:none}
 .todo b{color:var(--ink)}
+/* A step you can DO is a button, and looks like the line it replaces until you point at it — the
+   checklist should not turn into a wall of controls. `text-align:left` and `width:100%` because a
+   <button> centres and shrink-wraps by default, which would break the row's alignment with the
+   items that have no action. Only the actionable ones get this class. */
+button.todo{
+  width:100%;text-align:left;background:none;border:0;border-radius:6px;
+  font:inherit;font-size:.87rem;color:var(--ink-2);cursor:pointer;
+  padding:.42rem .45rem;margin-left:-.45rem;
+  transition:background .12s ease,color .12s ease;
+}
+button.todo:hover,button.todo:focus-visible{background:var(--glass-2);color:var(--ink)}
+button.todo:hover .box,button.todo:focus-visible .box{color:var(--ember)}
+button.todo .go{margin-left:auto;padding-left:.6rem;color:var(--ink-3);font-family:var(--mono);font-size:.76rem;flex:none}
+button.todo:hover .go,button.todo:focus-visible .go{color:var(--ember)}
+button.todo[disabled]{opacity:.6;cursor:default}
 
 .steps-n{counter-reset:s}
 /**
@@ -3051,24 +3066,77 @@ function today(){
     b.append(el('div','jmeta',
       `<span class="tag ${st?(st.n===3?'ok':'no'):'stop'}">${esc(st?st.label:'never measured')}</span>`+
       `<span class="sr">${esc(a.handle)}${st?' · '+esc(st.weeks):''}</span>`));
-    if(!st){
-      b.append(el('p','jw','Karma has never been checked for this account, so there is nothing to plan against yet. Check it first.'));
-    } else {
-      const todo=(txt,note)=>b.append(el('div','todo',
-        `<span class="box">[ ]</span><span>${txt}${note?` <em>— ${esc(note)}</em>`:''}</span>`));
-      todo(`Write <b>${st.daily} comments</b>`, st.n===1?'threads under 2 hours old':'questions with few answers');
-      if(st.n===1)todo('Comment somewhere <b>outside WordPress</b>','an account that only does support reads as a marketing asset');
-      todo('Check your first comments <b>in a signed-out window</b>','the only way to see if they were quietly removed');
-      if(days==null||days>=7)todo('<b>Re-check karma</b>',days==null?'never done':`last checked ${days} days ago`);
-    }
-    /* the button that replaces "go and type probe-karma somewhere" */
-    const kb=el('div');kb.style.marginTop='.7rem';
-    kb.append(actionButton('Check karma now',doAction(async say=>{
+    /* Built before the checklist so the "Re-check karma" step can delegate to it, and appended
+       after — the order on screen is unchanged. */
+    const karmaBtn=actionButton('Check karma now',doAction(async say=>{
       say('Reading their profile…');
       const rr=await runNow({key:'check-karma',account:a.handle});
       if(!rr.ok)throw new Error(rr.error||'Could not read the profile — is their browser open?');
       return 'Karma updated';
-    })));
+    }));
+
+    if(!st){
+      b.append(el('p','jw','Karma has never been checked for this account, so there is nothing to plan against yet. Check it first.'));
+    } else {
+      /**
+       * The day's checklist — and the steps that CAN be started are started from here.
+       *
+       * These were four `<div>`s with a `[ ]` in front of them: instructions to go and find the
+       * screen that does the thing. "Write 3 comments" is the whole job of the product and it was
+       * a sentence. The karma button directly below it was the only proof that a step on this
+       * panel could be a control rather than a caption.
+       *
+       * `cta` is optional AND ABSENT ON PURPOSE for anything redbot cannot honestly start.
+       * Checking a comment in a signed-out window is the clearest case: it needs a browser that is
+       * not the one redbot drives, so there is nothing to click, and dressing it as a button would
+       * make a promise the app cannot keep — the same reason the update card hides Apply outside
+       * the desktop app rather than disabling it.
+       *
+       * Each cta names where it lands (`go` text). A control that changes screen without saying so
+       * reads as the page having jumped.
+       */
+      const todo=(txt,note,cta)=>{
+        const inner=`<span class="box">[ ]</span><span>${txt}${note?` <em>— ${esc(note)}</em>`:''}</span>`;
+        if(!cta){ b.append(el('div','todo',inner)); return; }
+        const n=el('button','todo',inner+`<span class="go">${esc(cta.go)} →</span>`);
+        n.type='button';
+        n.onclick=cta.run;
+        b.append(n);
+      };
+
+      todo(`Write <b>${st.daily} comments</b>`,
+        st.n===1?'threads under 2 hours old':'questions with few answers',
+        /* Selects THIS account before switching, so Threads collects as the account whose row was
+           clicked. Without it the screen opens as whichever account was last used there, which is
+           the wrong one exactly when there is more than one to choose between. */
+        { go:'Threads', run:()=>{ collectAcctSet(a.handle); go('discovery');
+                                  toast(`Threads, as ${a.handle}. Collect, then score, then write.`); } });
+
+      if(st.n===1)todo('Comment somewhere <b>outside WordPress</b>',
+        'an account that only does support reads as a marketing asset',
+        /* Lands on the screen that owns sources, because the step is not "go and comment" — it is
+           "give redbot somewhere else to look", and that is a source. */
+        { go:'Threads', run:()=>{ go('discovery');
+                                  toast('Add a subreddit or a saved search that is not r/WordPress.'); } });
+
+      /* No cta: this needs a browser redbot does not drive. See above. */
+      todo('Check your first comments <b>in a signed-out window</b>','the only way to see if they were quietly removed');
+
+      /**
+       * DELEGATES to the karma button below rather than wrapping the job a second time.
+       *
+       * `doAction` narrates by writing `bt.textContent`, which would flatten this row's spans into
+       * a status string and leave it that way; it also hangs its run-log off `bt.parentElement`,
+       * so the log would open inside the checklist. Clicking the button built for it keeps one
+       * code path, one run-log, and one control that goes inert while the run is going.
+       */
+      if(days==null||days>=7)todo('<b>Re-check karma</b>',
+        days==null?'never done':`last checked ${days} days ago`,
+        { go:'run it', run:()=>karmaBtn.click() });
+    }
+    /* the button that replaces "go and type probe-karma somewhere" */
+    const kb=el('div');kb.style.marginTop='.7rem';
+    kb.append(karmaBtn);
     b.append(kb);
     job.append(b);
     job.append(el('div','jr',`<span class="score"${st?'':' style="color:var(--ink-3)"'}>${st?esc(String(a.karma)):'—'}</span>`));

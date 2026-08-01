@@ -1765,6 +1765,49 @@ test('Today plans per account against measured karma, and never invents a number
   } finally { await context.close(); }
 });
 
+/**
+ * The day's checklist has to be startable, not just readable.
+ *
+ * Every line on it was a `<div>` with a `[ ]` in front — "Write 3 comments" is the entire job of
+ * the product and it was a caption. This pins the two halves of the fix: the steps redbot CAN
+ * start are buttons that land on the screen that does the work, and the one it cannot start
+ * honestly (checking a comment from a signed-out browser redbot does not drive) is still text.
+ * A button that cannot work is worse than a sentence.
+ */
+test('the day\'s checklist starts the work, and lands on the screen that does it', async () => {
+  const { context, page } = await open();
+  try {
+    await tab(page, 'today');
+    await page.waitForSelector('#v-today button.todo', { timeout: 5000 });
+
+    const write = page.locator('#v-today button.todo').filter({ hasText: /comments/i }).first();
+    assert.ok(await write.isVisible(), '"Write N comments" must be a control');
+
+    await write.click();
+    await page.waitForFunction(() => !document.querySelector('#v-discovery')?.hidden,
+                               null, { timeout: 5000 });
+    assert.ok(await page.isHidden('#v-today'), 'it must land on Threads, not just toast');
+
+    /* The account is chosen for the person, so Threads collects as the account whose row they
+       clicked rather than as whoever was last used there. */
+    const chosen = await page.evaluate(() => localStorage.getItem('redbot.collectAccount'));
+    assert.equal(chosen, 'docs-architect', 'the clicked account must be the one Threads collects as');
+  } finally { await context.close(); }
+});
+
+test('a step redbot cannot honestly start stays text, not a dead button', async () => {
+  const { context, page } = await open();
+  try {
+    await tab(page, 'today');
+    await page.waitForSelector('#v-today button.todo', { timeout: 5000 });
+
+    const signedOut = page.locator('#v-today .todo').filter({ hasText: /signed-out window/i }).first();
+    assert.ok(await signedOut.isVisible(), 'the signed-out check must still be on the list');
+    const tag = await signedOut.evaluate((n) => n.tagName);
+    assert.equal(tag, 'DIV', 'it needs a browser redbot does not drive — it must not look clickable');
+  } finally { await context.close(); }
+});
+
 test('Check karma now probes the account whose card it sits on', async () => {
   const { context, page, calls } = await open();
   try {
