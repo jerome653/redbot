@@ -2310,7 +2310,10 @@ function renderBilling(container){
     const r=await fetch('/api/operator/select',{method:'POST',headers:{'content-type':'application/json'},
       body:JSON.stringify({name:pick.value})}).then(x=>x.json()).catch(e=>({ok:false,error:String(e)}));
     if(!r.ok){toast(r.error||'Could not select');}
-    else{toast(pick.value?('Billing → '+pick.value):'Billing cleared');await loadOperators();accounts();}
+    /* `load()`, not `accounts()`. Choosing who pays changes a BLOCKING requirement (`llm`), so it
+       moves the gear badge and can move the banner — repainting only this screen leaves both
+       stating the previous answer. See the refresh contract on load(). */
+    else{toast(pick.value?('Billing → '+pick.value):'Billing cleared');await loadOperators();await load();}
   };
   box.append(pick);
 
@@ -3302,7 +3305,9 @@ function today(){
       const held=busy('Stopping the loop…');
       try{
         const r=await fetch('/api/auto/stop',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(x=>x.json());
-        await pulseCheck();today();
+        /* `load()`, not `today()`: starting or stopping the loop changes what the pulse chip,
+           the badges and the banner all report. See the refresh contract on load(). */
+        await pulseCheck();await load();
         if(r.ok)held.done('Stopped'); else held.fail(r.error||'Could not stop');
       }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
     };
@@ -3317,7 +3322,9 @@ function today(){
       try{
         const r=await fetch('/api/auto/start',{method:'POST',headers:{'content-type':'application/json'},
           body:JSON.stringify({account:who.value,everyMinutes:Number(mins.value)})}).then(x=>x.json());
-        await pulseCheck();today();
+        /* `load()`, not `today()`: starting or stopping the loop changes what the pulse chip,
+           the badges and the banner all report. See the refresh contract on load(). */
+        await pulseCheck();await load();
         if(r.ok)held.done('Started'); else held.fail(r.error||'Could not start');
       }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
     };
@@ -4829,6 +4836,24 @@ function argusRecord(){
     `<b class="${warn?'bad':''}">${n}</b><span>${text}</span>`).join('');
 }
 
+/**
+ * THE REFRESH CONTRACT: every mutation ends here, and nowhere else.
+ *
+ * One fetch of /api/state fills `S`, and every screen renders from `S` — so the screens were never
+ * really separate. What made them look stale was callers that repainted only themselves after
+ * changing something: `accounts()` after choosing who pays, `today()` after starting the loop. The
+ * screen you were on updated and the other five, the badges and the banner went on stating the
+ * previous answer until you reloaded.
+ *
+ * So: anything that CHANGES state calls `load()`. It re-reads state and requirements, repaints the
+ * badges, the banner and the current screen together, and there is one place to look when a figure
+ * is wrong. `doAction` already ends this way, which is why a finished run has always refreshed
+ * everything.
+ *
+ * The exceptions are deliberate and are not mutations: the pagers on Threads and Results fetch one
+ * page of rows and repaint their own list. Nothing else in the app can be affected by which page
+ * of a table you are looking at.
+ */
 async function load(){
   const res=await fetch(`/api/state?reviewOffset=${REVIEW_OFFSET}`);
   S=await res.json();
