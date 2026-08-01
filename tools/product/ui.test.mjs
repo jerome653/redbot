@@ -1817,16 +1817,30 @@ test('Accounts separates what is configured from what has been measured', async 
 test('the operator picker chooses who pays, and can only choose a registered one', async () => {
   const { context, page, calls } = await open();
   try {
-    await tab(page, 'accounts');
-    const txt = await page.textContent('#v-accounts');
-    assert.match(txt, /Model calls billed to/);
-    assert.match(txt, /own login/, 'the selected operator\'s standing must be stated');
+    /* The picker moved. "Model calls billed to" on Accounts was a second copy of Settings step 3
+       over the same /api/operator/select endpoint — two pickers for one setting is two places to
+       look when the wrong operator is billed, and two things to keep in step. Asserted where the
+       surviving one lives. */
+    await tab(page, 'setup');
+    const step = page.locator('#v-setup .wiz').filter({ hasText: 'Choose who pays' }).first();
+    const head = step.locator('.wiz-h');
+    if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click();
+    const txt = await page.textContent('#v-setup');
+    assert.match(txt, /who pays/i);
 
-    await page.selectOption('select.opsel', 'shared-box');
+    /**
+     * `not-signed-in`, not `shared-box`, and the reason is the point of the change above.
+     *
+     * The two pickers were fed by DIFFERENT sources — this one from /api/setup, the removed one
+     * from /api/operators — and the fixture's two lists do not even hold the same people:
+     * `shared-box` exists only in the second. Two controls over one setting, offering different
+     * options, is exactly the drift that made the duplicate worth deleting rather than moving.
+     */
+    await page.selectOption('select[aria-label="Which operator pays"]', 'not-signed-in');
     await untilHit(calls, '/api/operator/select');
     const sel = hit(calls, '/api/operator/select');
     assert.equal(sel.length, 1);
-    assert.equal(sel[0].body.name, 'shared-box');
+    assert.equal(sel[0].body.name, 'not-signed-in');
   } finally { await context.close(); }
 });
 

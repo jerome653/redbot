@@ -2373,53 +2373,6 @@ function discovery(){
   r.append(el('div','note',`<b>Leaving threads alone is most of the value.</b> ${d.skip} of the ${d.assessed} threads looked at were dropped before anyone spent time on them — a guide rather than a question, one already solved, or a subject these accounts cannot honestly speak to.`));
 }
 
-/* ---------------- who pays (operator / billing) ----------------
-   The account is who redbot POSTS as; the operator is whose Claude login the model calls are
-   BILLED to. They are different questions and used to be invisible — the console billed
-   whoever launched the server. This picker makes it explicit, and can only choose among
-   operators already registered at a terminal (`redbot operators add`), never invent one. */
-function renderBilling(container){
-  const box=el('div','wcard');
-  const o=OPS||{operators:[],selected:null};
-  const sel=(o.operators||[]).find(x=>x.name===o.selected)||null;
-
-  const head=el('div','bar-t','<b>Model calls billed to</b>');
-  box.append(head);
-
-  if(!o.operators.length){
-    box.append(el('div','tiny','<strong>No operator registered.</strong> Every run needs one, or it refuses (fails closed). Add one at a terminal: <code>redbot operators add &lt;name&gt;</code>'));
-    container.append(box);
-    return;
-  }
-
-  const pick=el('select','opsel');
-  pick.append(new Option('— none (runs will refuse) —',''));
-  for(const op of o.operators){
-    const label=op.name+(op.shared?'  · shares this machine\'s login':op.ready?'  · own login':'  · not signed in yet');
-    const opt=new Option(label,op.name); if(op.name===o.selected)opt.selected=true; pick.append(opt);
-  }
-  pick.onchange=async()=>{
-    const r=await fetch('/api/operator/select',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({name:pick.value})}).then(x=>x.json()).catch(e=>({ok:false,error:String(e)}));
-    if(!r.ok){toast(r.error||'Could not select');}
-    /* `load()`, not `accounts()`. Choosing who pays changes a BLOCKING requirement (`llm`), so it
-       moves the gear badge and can move the banner — repainting only this screen leaves both
-       stating the previous answer. See the refresh contract on load(). */
-    else{toast(pick.value?('Billing → '+pick.value):'Billing cleared');await loadOperators();await load();}
-  };
-  box.append(pick);
-
-  if(sel&&sel.shared){
-    box.append(el('div','tiny','<span class="tag no">shared login</span> Runs as this operator bill whoever owns this machine\'s Claude login. For a dedicated wallet: <code>redbot operators add &lt;name&gt;</code>, sign in, then pick it here.'));
-  } else if(sel&&!sel.ready){
-    box.append(el('div','tiny','<span class="tag stop">not signed in</span> The folder exists but no Claude login is set up in it yet — a run will fail until you sign in.'));
-  } else if(sel){
-    box.append(el('div','tiny','<span class="tag ok">own login</span> Runs the console starts are billed to this operator.'));
-  } else {
-    box.append(el('div','tiny','Nothing selected — a run started from here will refuse rather than guess whose login to spend.'));
-  }
-  container.append(box);
-}
 
 /* ---------------- accounts ----------------
  * Which card is open for editing, by handle. Module-level rather than local so a re-render —
@@ -2997,7 +2950,21 @@ function accounts(){
     '<b>A ceiling is not a target.</b> Reaching it is not progress, and neither number goes up '+
     'because a day was quiet.'));
   rail.append(limits);
-  renderBilling(rail);
+  /**
+   * "Model calls billed to" is NOT rendered here any more — and it was not moved, it was a
+   * DUPLICATE.
+   *
+   * Settings step 3, "Choose who pays for the thinking", is the same control over the same
+   * `/api/operator/select` endpoint. Two pickers for one setting is two places to look when the
+   * wrong operator is billed, and two things to keep in step the day either grows an option.
+   *
+   * It belongs in Settings on the merits too: who pays is decided once at install and revisited
+   * when somebody joins or leaves — not while reading account cards.
+   *
+   * `renderBilling` and its `loadOperators` refresh go with it: the Settings step builds its own
+   * picker, so nothing else calls them. Leaving a dead renderer behind is how a screen grows a
+   * second copy of a setting again six months later.
+   */
   grid.append(cardCol,rail);
   r.append(grid);
 
@@ -4046,6 +4013,30 @@ function setupAgain(){ if(!$('#settings').hidden)setup(); }
  * `open` is for the section somebody opened Settings TO SEE. Everything else starts closed —
  * a fold that starts open is a card with an extra click in it.
  */
+/**
+ * The console's zoom, remembered.
+ *
+ * Applied to `document.body` rather than `:root`, because `zoom` on the root element also scales
+ * position:fixed overlays against a viewport that has itself been scaled, which moves the panels
+ * off-centre. On the body they scale with everything else.
+ */
+const ZOOM_KEY='redbot.zoom';
+function uiZoom(){
+  try{ const v=parseFloat(localStorage.getItem(ZOOM_KEY)); return Number.isFinite(v)&&v>0?v:1; }
+  catch{ return 1; }
+}
+function setUiZoom(z){
+  try{ localStorage.setItem(ZOOM_KEY,String(z)); }catch{}
+  applyUiZoom();
+}
+function applyUiZoom(){
+  const z=uiZoom();
+  /* Cleared rather than set to 1: leaving `zoom:1` on creates a containing block for fixed
+     positioning in Chromium, which would pin the panels to the body instead of the viewport. */
+  document.body.style.zoom = z===1 ? '' : String(z);
+}
+applyUiZoom();
+
 function foldCard(title,hint,opts){
   const card=el('details','collect fold');
   if(opts&&opts.open)card.open=true;
@@ -4527,6 +4518,36 @@ function setup(){
   upd.append(updCardBody);root.append(upd);
   paintUpdates();
   refreshUpdates(false).catch(()=>{});
+
+  /**
+   * APPEARANCE — text size, second from the top.
+   *
+   * The console is dense on purpose and its type scale is tuned for that, which is fine until
+   * somebody reads it on a 27" monitor at arm's length or simply wants it bigger. There was no
+   * answer to that at all: the window has no menu (deliberately), so Ctrl+= is not offered either.
+   *
+   * `zoom` rather than a root font-size, because this stylesheet is mostly px — panels, gaps,
+   * borders, the bar. Scaling the root font would grow the text and leave every box the size it
+   * was, which is worse than not scaling at all. `zoom` scales the layout with it.
+   *
+   * Kept in localStorage and applied at load, before anything renders, so it does not flash back
+   * to normal on every start.
+   */
+  const appear=foldCard('Appearance','how big the text is',{open:false});
+  const ab=appear.body;
+  ab.append(el('div','tiny','Scales the whole console, boxes and all — not just the words.'));
+  const zrow=ctlRow('.6rem 0 .2rem');
+  const CURRENT=uiZoom();
+  [['Normal',1],['Larger',1.15],['Largest',1.3]].forEach(([label,z])=>{
+    const b2=el('button','mini'+(Math.abs(CURRENT-z)<0.01?' on':''));
+    b2.textContent=label;
+    b2.style.cssText='padding:.45rem .85rem;font-size:.78rem';
+    b2.onclick=()=>{ setUiZoom(z); setupAgain(); };
+    zrow.append(b2);
+  });
+  ab.append(zrow);
+  root.append(appear);
+
 
 
   steps.forEach((st,i)=>{
