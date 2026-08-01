@@ -843,6 +843,14 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
 .track i.mid{background:var(--amber)} .track i.done{background:var(--jade)}
 .wtoday{margin-top:1.1rem;padding-top:1rem;border-top:1px solid var(--edge)}
 .wtoday h4{font-family:var(--mono);font-size:.665rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);margin:0 0 .6rem;font-weight:600}
+/* A Settings section that folds. The chevron turns; the header is otherwise the `.collect-h` the
+   unfolded cards already use, so a folded section and a plain one read as the same object. */
+.fold>summary{cursor:pointer;list-style:none;align-items:center}
+.fold>summary::-webkit-details-marker{display:none}
+.fold>summary:hover{background:var(--sheen)}
+.fold-c{margin-left:auto;color:var(--ink-3);font-size:.8rem;transition:transform .15s ease}
+.fold[open]>summary .fold-c{transform:rotate(90deg)}
+
 /* The met-requirements fold in Settings. A summary that reads as a line of text, not a control —
    there is nothing to decide, only something to look at if you doubt the count. */
 .req-fold{margin:.15rem 0 .35rem}
@@ -859,6 +867,15 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
 .g-steps{margin:.8rem 0 0;padding-left:1.35rem;display:grid;gap:.75rem}
 .g-steps li{color:var(--ink-2);line-height:1.65;font-size:.9rem}
 .g-steps li b{color:var(--ink)}
+/* The hard lines, in the walkthrough. Marked with the refusal glyph rather than a bullet — these
+   are the only rules in the product that say "never", and they should not read as a list of tips. */
+.g-never{margin:.8rem 0 0;padding:0;list-style:none;display:grid;gap:.6rem}
+.g-never li{
+  color:var(--ink-2);line-height:1.65;font-size:.9rem;
+  padding-left:1.35rem;position:relative;
+}
+.g-never li::before{content:'✕';position:absolute;left:0;top:0;color:var(--ember);font-weight:700}
+.g-never li b{color:var(--ink)}
 
 .todo{display:flex;gap:.65rem;padding:.42rem 0;font-size:.87rem;color:var(--ink-2);line-height:1.6;align-items:baseline}
 .todo .box{font-family:var(--mono);color:var(--ink-3);flex:none}
@@ -977,7 +994,10 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
   background:var(--glass-2);color:var(--ink);border:1px solid var(--edge-2);
   -webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);
   padding:.65rem 1.25rem;border-radius:100px;font-size:.83rem;transition:transform .28s cubic-bezier(.2,.8,.2,1);
-  z-index:60;box-shadow:var(--shadow);
+  /* ABOVE THE SCRIM (70) AND THE PANELS (71). The toast reports whether something is running and
+     carries the only Stop button for it, so a modal must never bury it — a run you can start and
+     cannot stop is worse than a dialog with something floating over it. */
+  z-index:80;box-shadow:var(--shadow);
 }
 .toast.show{transform:translateX(-50%) translateY(0)}
 /**
@@ -1367,7 +1387,20 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
       <h3>Accounts — who would be posting</h3>
       <p>Only accounts that have actually been measured appear here. A browser sign-in sitting on this machine is not proof of an account, so the two numbers are shown separately rather than smoothed into one.</p>
       <p>Karma under 10 is the state Reddit's filters are built to catch. Comments can be removed or held back quietly — still visible to you while signed in, invisible to everybody else.</p>
-    </div>
+    
+      <!-- MOVED HERE FROM THE ACCOUNTS SCREEN (2026-08-01): the standing rules, and how to read
+           that screen. Neither is something you act on while looking at an account card. -->
+      <h3 style="margin-top:1.4rem">How to read that screen</h3>
+      <p>A sign-in folder on this machine is <b>not proof of an account</b>, and a name in a config file is an intention rather than a fact. Both are shown separately on purpose — so is karma that has been measured versus karma that never has.</p>
+
+      <h3 style="margin-top:1.2rem">The standing rules</h3>
+      <ul class="g-never">
+        <li>Two accounts never post in the same thread.</li>
+        <li>Two accounts never reply to each other, and never vote on each other. There is no voting code path at all.</li>
+        <li>An account below 10 karma is warming: 2–4 comments a day maximum, no links, no product names.</li>
+        <li>If an account is suspended, stop. A replacement from the same machine is ban evasion.</li>
+      </ul>
+</div>
 
     <div class="g-sec" data-g="today">
       <h3>Growing — why nothing is happening yet</h3>
@@ -1392,6 +1425,20 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
         <li><b>Stop at your daily number</b> — two to four while the account is new, spread across the day. Ten comments in an hour from a new account is the pattern that gets accounts caught.</li>
         <li><b>Re-check karma once a week</b> from the Today screen. The targets move as the number does.</li>
       </ol>
+
+      <!-- MOVED HERE FROM THE BOTTOM OF TODAY (2026-08-01). Five rules and a closing paragraph,
+           on the screen the app opens on, read once and scrolled past every day after — the worst
+           place for the only statement anywhere in the product of what it refuses to do. These are
+           the rules data/accounts.json carries and the engine enforces. -->
+      <h3 style="margin-top:1.4rem">Never, at any point</h3>
+      <ul class="g-never">
+        <li><b>Both accounts in the same thread</b> — it reads as one person pretending to be two, which is exactly what it would be.</li>
+        <li><b>The accounts replying to each other, or voting on each other</b> — this is vote manipulation, and it is what gets accounts permanently banned.</li>
+        <li><b>Any link, or the company name, while warming up</b> — a new account posting links is the clearest possible spam signal.</li>
+        <li><b>Making a new account after one gets suspended</b> — from the same machine that is ban evasion, and turns one suspension into a permanent one.</li>
+        <li><b>Voting at all through this tool</b> — there is no code for it, and there will not be.</li>
+      </ul>
+      <p><b>redbot cannot do this part.</b> These comments are written by you, in your own browser, and never pass through this tool — which is why it cannot count them for you. It can find threads, draft, fact-check, keep the pace slow, and record what gets taken down. Karma comes from other people finding your comments useful, and nothing here changes that.</p>
     </div>
 
     <div class="g-sec" data-g="outcomes">
@@ -1437,6 +1484,19 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
   <div class="guide-b">
     <section id="v-setup" class="sheet"></section>
   </div>
+</aside>
+
+
+<!-- A GENERAL DIALOG, built on the same shell as the walkthrough and Settings.
+     Two surfaces already share `#scrim`, the Escape handling and the focus return; a third
+     hand-rolled modal would be a third set of those behaviours to keep in step. Its body is
+     filled by openDialog() and emptied on close, so nothing stale is ever behind it. -->
+<aside class="guide" id="dialog" hidden aria-label="Dialog">
+  <div class="guide-h">
+    <h2 id="dialogTitle"></h2>
+    <button class="mini x" id="dialogX">close</button>
+  </div>
+  <div class="guide-b" id="dialogBody"></div>
 </aside>
 
 <div class="toast" id="toast"></div>
@@ -2152,6 +2212,21 @@ function collecting(root){
     if(!acct){note.textContent='No account set up yet. Add one on the Accounts screen — collecting reads Reddit through that account’s own Chrome.';return}
 
     const go=doAction(async(say)=>{
+      /**
+       * THE DIALOG STAYS OPEN, and the toast is what moved instead.
+       *
+       * Collecting starts from inside "Where redbot looks", which is modal — so the scrim covered
+       * the busy toast and its STOP button, and a run could be started and not stopped. The UI
+       * suite found it, spending 50 retries on "scrim intercepts pointer events".
+       *
+       * Closing the dialog here was the first fix and was worse: `doAction` hangs its run-log off
+       * the pressed button's parent, which IS the dialog body, and closing empties that body — so
+       * the run's own log was destroyed the moment it started. The suite found that too.
+       *
+       * The toast now sits above the scrim (see `.toast`), which is what it should always have
+       * done: it is the app's global status surface, and a modal is not a reason to hide whether
+       * something is running.
+       */
       for(const x of subs){
         say(`Looking through r/${x.name}…`);
         const r=await runNow({key:'find-threads',subreddit:x.name,account:acct});
@@ -2276,7 +2351,24 @@ function discovery(){
   }
   grid.append(drop);
   r.append(grid);
-  collecting(r);
+  /**
+   * "WHERE REDBOT LOOKS" IS A DIALOG.
+   *
+   * Sources, the add-a-source form and the collect control — a full panel, permanently, on the
+   * screen you come to in order to READ what was collected. Choosing where it looks is done once
+   * and revisited rarely; reading threads is done every day. The button is the way in, and the
+   * dialog closes itself when a run starts so the log is not behind it.
+   */
+  const srcRow=el('div');
+  srcRow.style.cssText='margin:1rem 0 .2rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap';
+  const srcBtn=el('button','mini','Where redbot looks');
+  srcBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+  const nOn=((S.collect&&S.collect.subreddits)||[]).filter(x=>x.enabled!==false).length
+           +((S.collect&&S.collect.searches)||[]).filter(x=>x.enabled!==false).length;
+  srcBtn.onclick=()=>openDialog('Where redbot looks',nOn+' source'+(nOn===1?'':'s')+' switched on',collecting);
+  srcRow.append(srcBtn);
+  srcRow.append(el('span','tiny',nOn?(nOn+' source'+(nOn===1?'':'s')+' switched on'):'no sources switched on — nothing would be collected'));
+  r.append(srcRow);
 
   r.append(el('div','note',`<b>Leaving threads alone is most of the value.</b> ${d.skip} of the ${d.assessed} threads looked at were dropped before anyone spent time on them — a guide rather than a question, one already solved, or a subject these accounts cannot honestly speak to.`));
 }
@@ -2997,14 +3089,26 @@ function accounts(){
   paintPorts();
   loadPorts();
 
-  addAccount(cardCol);
-
-  r.append(el('div','note warn',`<b>${S.profiles.length} sign-in folder${S.profiles.length===1?'':'s'} on disk, ${S.accounts.filter(a=>a.karma!=null).length} account${S.accounts.filter(a=>a.karma!=null).length===1?'':'s'} actually measured.</b> A folder on this machine is not proof of an account, and a name in a config file is an intention rather than a fact. Both are shown separately on purpose.`));
-  if(S.accountRules&&S.accountRules.length){
-    const n=el('div','note stop');
-    n.innerHTML='<b>The standing rules</b>'+S.accountRules.map(x=>`<div style="margin-top:.4rem">— ${esc(x)}</div>`).join('');
-    r.append(n);
-  }
+  /**
+   * ADDING AN ACCOUNT IS A POPUP, and the two standing notices moved to the walkthrough.
+   *
+   * The add panel is four steps of commands and a config block — about a third of this screen's
+   * height, permanently, for something done twice in the life of an install. It is a dialog now,
+   * opened from the button below.
+   *
+   * The folders-vs-measured warning and the standing rules were the rest of it. Both are true and
+   * neither is a thing you act on while looking at an account card: one is a statement about how
+   * to read the screen, the other is the same list of rules Today used to carry. They are in the
+   * walkthrough, where every other "what am I looking at" already lives.
+   */
+  const addRow=el('div');
+  addRow.style.cssText='margin-top:1rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap';
+  const addBtn=el('button','mini','Add an account');
+  addBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+  addBtn.onclick=()=>openDialog('Add an account','four steps, about ten minutes',addAccount);
+  addRow.append(addBtn);
+  addRow.append(el('span','tiny','A folder on this machine is not proof of an account — see the walkthrough for how to read this screen.'));
+  cardCol.append(addRow);
 }
 
 /**
@@ -3018,10 +3122,10 @@ function accounts(){
  */
 function addAccount(root){
   const n=S.newAccount;
-  if(!n)return;
-  const box=el('div','collect');
-  box.append(el('div','collect-h','<h3>Add an account</h3><span class="hint">four steps, about ten minutes</span>'));
-  const b=el('div','collect-b');
+  if(!n){root.append(el('div','tiny','This build could not work out a free port and folder, so it cannot give you the commands.'));return}
+  /* No `.collect` header any more — the dialog's own title bar carries it. */
+  const box=el('div');
+  const b=el('div');
 
   const field=(label,ph,val)=>{
     const w=el('div');w.style.marginBottom='.85rem';
@@ -3280,80 +3384,22 @@ function today(){
   grid.append(why);
   r.append(grid);
 
-  /* ---- the unattended loop ---- */
-  const loop=el('div','collect');
-  loop.append(el('div','collect-h','<h3>Run it on its own</h3><span class="hint">never publishes</span>'));
-  /* `loop-b` marks the one .collect-b that is prose + a control row, so the wide-screen
-     two-column rule below can find it. The other two hold full-width source rows and a form,
-     which both want the whole measure. */
-  const lb=el('div','collect-b loop-b');
-  const st=(PULSE_LAST&&PULSE_LAST.auto)||{running:false};
-  lb.append(el('div','tiny','Collects threads, works out which are worth answering, writes a reply and fact-checks it — on a loop, without you. It stops there. Approving and sending stays yours, and it will not act during an account’s quiet hours or past its daily limit.'));
 
-  const ctl=el('div');ctl.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.8rem';
-  const who=el('select','sel');
-  S.accounts.forEach(a=>{const o=el('option',null,a.handle);o.value=a.handle;who.append(o)});
-  const mins=el('select','sel');
-  [['30','every 30 minutes'],['60','every hour'],['180','every 3 hours'],['360','every 6 hours']].forEach(([v,l])=>{
-    const o=el('option',null,l);o.value=v;if(v==='60')o.selected=true;mins.append(o)});
-
-  if(st.running){
-    const stopBtn=el('button','mini');
-    stopBtn.textContent='Stop the loop';
-    stopBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;border-color:var(--ember);color:var(--ember)';
-    stopBtn.onclick=async()=>{
-      const held=busy('Stopping the loop…');
-      try{
-        const r=await fetch('/api/auto/stop',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(x=>x.json());
-        /* `load()`, not `today()`: starting or stopping the loop changes what the pulse chip,
-           the badges and the banner all report. See the refresh contract on load(). */
-        await pulseCheck();await load();
-        if(r.ok)held.done('Stopped'); else held.fail(r.error||'Could not stop');
-      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
-    };
-    ctl.append(el('span','tag ok',`running as ${esc(st.account||'')} · every ${esc(String(st.everyMinutes||''))} min`),stopBtn);
-  } else {
-    const startBtn=el('button','mini');
-    startBtn.textContent='Start the loop';
-    startBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;border-color:var(--jade);color:var(--jade)';
-    startBtn.onclick=async()=>{
-      /* Spawns the long-lived child that drives a browser for days. */
-      const held=busy('Starting the loop…');
-      try{
-        const r=await fetch('/api/auto/start',{method:'POST',headers:{'content-type':'application/json'},
-          body:JSON.stringify({account:who.value,everyMinutes:Number(mins.value)})}).then(x=>x.json());
-        /* `load()`, not `today()`: starting or stopping the loop changes what the pulse chip,
-           the badges and the banner all report. See the refresh contract on load(). */
-        await pulseCheck();await load();
-        if(r.ok)held.done('Started'); else held.fail(r.error||'Could not start');
-      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
-    };
-    ctl.append(who,mins,startBtn);
-  }
-  lb.append(ctl);
-
-  if(st.running&&st.log&&st.log.length){
-    const lg=el('div','runlog');lg.style.marginTop='.8rem';
-    st.log.slice(-12).forEach(l=>lg.append(el('div','runline',`<span class="t"></span><span>${esc(l)}</span>`)));
-    lb.append(lg);
-  }
-  loop.append(lb);
-
-  /* ---- the command, since redbot cannot do this for you ---- */
-  const cmdBox=el('div','card');
-  const l=el('div','lbl');l.textContent='to re-check karma';cmdBox.append(l);
-  const cmd=el('div','cmdline');
-  const cmdText='node dist/cli.js probe-karma';
-  cmd.append(el('span',null,esc(cmdText)));
-  const cp=el('button','mini','copy');
-  cp.onclick=()=>navigator.clipboard.writeText(cmdText).then(()=>toast('Copied'),()=>toast('Could not copy'));
-  cmd.append(cp);cmdBox.append(cmd);
-  cmdBox.append(el('div','tiny','Reads the number off the profile page in your own signed-in browser and writes it down. Do it weekly — a measurement that never gets recorded is not evidence.'));
-  /* Paired rather than stacked: two short panels, each of which alone left most of a
-     full-width band empty. See `.pair`. */
-  const pair=el('div','pair');
-  pair.append(loop,cmdBox);
-  r.append(pair);
+  /**
+   * THE `probe-karma` COMMAND BOX IS GONE, and the loop moved to Settings.
+   *
+   * The command box printed `node dist/cli.js probe-karma` with a copy button and told somebody to
+   * paste it into a terminal — under a card whose own "Check karma now" button does exactly that,
+   * in the app, on the account whose row it sits on. Two ways to do one thing, one of which
+   * requires leaving the product, is not a choice; it is a leftover from before the button
+   * existed.
+   *
+   * "Run it on its own" is configuration — you set it once and it runs for days. It is in Settings
+   * with the rest of the things you decide rather than do, and Today keeps only what is done
+   * today.
+   */
+  /* Both now live in Settings — see autoLoopCard(). Today ends with the checklist and the
+     account cards, which is what "today" means. */
 
   /**
    * The routine MOVED TO THE WALKTHROUGH (2026-08-01), and what is left is the way in.
@@ -3376,19 +3422,19 @@ function today(){
   howRow.append(howBtn);
   r.append(howRow);
 
-  /* ---- the hard lines ---- */
-  const nh=el('h2','sec');nh.textContent='Never, at any point';nh.style.marginTop='2rem';r.append(nh);
-  const nv=el('div','card');
-  const list=el('div','never');
-  [['Both accounts in the same thread','it reads as one person pretending to be two, which is exactly what it would be'],
-   ['The accounts replying to each other or voting on each other','this is vote manipulation and it is what gets accounts permanently banned'],
-   ['Any link, or the company name, while warming up','a new account posting links is the clearest possible spam signal'],
-   ['Making a new account after one gets suspended','from the same machine that is ban evasion, and turns one suspension into a permanent one'],
-   ['Voting at all through this tool','there is no code for it, and there will not be']]
-  .forEach(([a,b])=>list.append(el('div',null,`<i>✕</i><span><b>${esc(a)}</b> — ${esc(b)}</span>`)));
-  nv.append(list);r.append(nv);
-
-  r.append(el('div','note','<b>redbot cannot do this part.</b> These comments are written by you, in your own browser, and never pass through this tool — which is why it cannot count them for you. It can find threads, draft, fact-check, keep the pace slow and record what gets taken down. Karma comes from other people finding your comments useful, and nothing here changes that.'));
+  /**
+   * THE HARD LINES MOVED TO THE WALKTHROUGH (2026-08-01), and were not deleted.
+   *
+   * Five red rules and a paragraph, at the bottom of the screen the app opens on. They are read
+   * once and scrolled past every day after that — which is the worst place for the only statement
+   * anywhere in the product of what it will not do. Two accounts in one thread, replying to each
+   * other, a link while warming, a replacement after a suspension: these are what keep the
+   * accounts alive, and `data/accounts.json` carries them as rules the engine enforces.
+   *
+   * They are in the walkthrough now, under the same section this screen's routine went to, and
+   * `guide(true,'today')` from the row above lands on both. Off the working screen, still one
+   * keystroke away, and the app has not stopped saying what it refuses to do.
+   */
 }
 
 /* ---------------- results ---------------- */
@@ -3973,6 +4019,105 @@ const actBtn=(label,fn)=>{
  */
 function setupAgain(){ if(!$('#settings').hidden)setup(); }
 
+/**
+ * "Run it on its own" — the unattended loop, as a card Settings owns.
+ *
+ * It lived on Today, which is the screen for what you do TODAY. This is the opposite of that: you
+ * set it once and it runs for days without you. Configuration belongs with the other things you
+ * decide rather than do.
+ *
+ * A FUNCTION, not a node built once and moved, because it renders live state — whether the loop is
+ * running, as which account, on what interval, and the last dozen lines it printed. Settings calls
+ * it on every open, so the card is never showing what was true the last time the panel was looked
+ * at. The controls inside still end in load(), so starting or stopping it updates the whole
+ * console rather than just this card.
+ */
+/**
+ * A Settings section that folds.
+ *
+ * Settings is a stack of full-height cards — requirements, dashboard sync, the loop, the run log,
+ * the build. Measured at 2716px, most of it belonging to things you configure once. Folded, the
+ * panel opens as a list of headings you can read in one screen, and you expand the one you came
+ * for.
+ *
+ * `<details>` rather than a click handler on a div: it is a disclosure, so it comes with the
+ * keyboard behaviour, the announced state and the open/closed semantics already correct.
+ *
+ * `open` is for the section somebody opened Settings TO SEE. Everything else starts closed —
+ * a fold that starts open is a card with an extra click in it.
+ */
+function foldCard(title,hint,opts){
+  const card=el('details','collect fold');
+  if(opts&&opts.open)card.open=true;
+  const sum=el('summary','collect-h');
+  sum.innerHTML=`<h3>${esc(title)}</h3>`+(hint?`<span class="hint">${esc(hint)}</span>`:'')+'<span class="fold-c">▸</span>';
+  const body=el('div','collect-b');
+  card.append(sum,body);
+  card.body=body;
+  return card;
+}
+
+function autoLoopCard(){
+  const loop=el('div','collect');
+  loop.append(el('div','collect-h','<h3>Run it on its own</h3><span class="hint">never publishes</span>'));
+  /* `loop-b` marks the one .collect-b that is prose + a control row, so the wide-screen
+     two-column rule below can find it. The other two hold full-width source rows and a form,
+     which both want the whole measure. */
+  const lb=el('div','collect-b loop-b');
+  const st=(PULSE_LAST&&PULSE_LAST.auto)||{running:false};
+  lb.append(el('div','tiny','Collects threads, works out which are worth answering, writes a reply and fact-checks it — on a loop, without you. It stops there. Approving and sending stays yours, and it will not act during an account’s quiet hours or past its daily limit.'));
+
+  const ctl=el('div');ctl.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.8rem';
+  const who=el('select','sel');
+  S.accounts.forEach(a=>{const o=el('option',null,a.handle);o.value=a.handle;who.append(o)});
+  const mins=el('select','sel');
+  [['30','every 30 minutes'],['60','every hour'],['180','every 3 hours'],['360','every 6 hours']].forEach(([v,l])=>{
+    const o=el('option',null,l);o.value=v;if(v==='60')o.selected=true;mins.append(o)});
+
+  if(st.running){
+    const stopBtn=el('button','mini');
+    stopBtn.textContent='Stop the loop';
+    stopBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;border-color:var(--ember);color:var(--ember)';
+    stopBtn.onclick=async()=>{
+      const held=busy('Stopping the loop…');
+      try{
+        const r=await fetch('/api/auto/stop',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(x=>x.json());
+        /* `load()`, not `today()`: starting or stopping the loop changes what the pulse chip,
+           the badges and the banner all report. See the refresh contract on load(). */
+        await pulseCheck();await load();
+        if(r.ok)held.done('Stopped'); else held.fail(r.error||'Could not stop');
+      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+    };
+    ctl.append(el('span','tag ok',`running as ${esc(st.account||'')} · every ${esc(String(st.everyMinutes||''))} min`),stopBtn);
+  } else {
+    const startBtn=el('button','mini');
+    startBtn.textContent='Start the loop';
+    startBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;border-color:var(--jade);color:var(--jade)';
+    startBtn.onclick=async()=>{
+      /* Spawns the long-lived child that drives a browser for days. */
+      const held=busy('Starting the loop…');
+      try{
+        const r=await fetch('/api/auto/start',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({account:who.value,everyMinutes:Number(mins.value)})}).then(x=>x.json());
+        /* `load()`, not `today()`: starting or stopping the loop changes what the pulse chip,
+           the badges and the banner all report. See the refresh contract on load(). */
+        await pulseCheck();await load();
+        if(r.ok)held.done('Started'); else held.fail(r.error||'Could not start');
+      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+    };
+    ctl.append(who,mins,startBtn);
+  }
+  lb.append(ctl);
+
+  if(st.running&&st.log&&st.log.length){
+    const lg=el('div','runlog');lg.style.marginTop='.8rem';
+    st.log.slice(-12).forEach(l=>lg.append(el('div','runline',`<span class="t"></span><span>${esc(l)}</span>`)));
+    lb.append(lg);
+  }
+  loop.append(lb);
+  return loop;
+}
+
 function setup(){
   const root=$('#v-setup'); root.textContent='';
   if(!SETUP){root.append(el('div','note','Reading setup…'));loadSetup().then(setupAgain);return}
@@ -4363,6 +4508,27 @@ function setup(){
     : '<span class="tag ok">redbot can run</span>'));
   root.append(sum);
 
+  /**
+   * THE BUILD CARD IS FIRST, and it is the one section that does not fold.
+   *
+   * It answers "which redbot am I running, and is there a newer one" — the question somebody has
+   * before they touch anything else here, and the reason most visits to Settings that are not
+   * about a blocker happen at all. It used to be last, under everything you configure once.
+   *
+   * Deliberately NOT a wizard step: updating is not a setup requirement, and putting it in the
+   * wizard would make a perfectly working install look incomplete every time a release landed.
+   *
+   * Built empty and filled by paintUpdates(), because the state it shows arrives asynchronously
+   * and then keeps changing — a download reports progress several times a second.
+   */
+  const upd=el('div','collect');
+  upd.append(el('div','collect-h','<h3>This build</h3><span class="hint">updates are never installed unless you ask</span>'));
+  updCardBody=el('div','collect-b');
+  upd.append(updCardBody);root.append(upd);
+  paintUpdates();
+  refreshUpdates(false).catch(()=>{});
+
+
   steps.forEach((st,i)=>{
     const state=st.done?'done':(st.blocked?'blocked':(i===nowIdx?'now':'todo'));
     const card=wizStep({
@@ -4384,12 +4550,14 @@ function setup(){
    * because it overlaps with it by design: these are re-derived before every run, so a step that
    * was finished last week can be unmet today and this is where that shows up. */
   if(Array.isArray(s.requirements)&&s.requirements.length){
-    const need=el('div','collect');
     const nb=(s.blocking||[]).length, na=(s.advisory||[]).length;
-    need.append(el('div','collect-h',
-      '<h3>'+(nb?'redbot cannot run yet':(na?'redbot can run, with limits':'Everything redbot needs is here'))+'</h3>'+
-      '<span class="hint">'+(nb?nb+' to settle':(na?na+' worth knowing':'re-checked every time this screen opens'))+'</span>'));
-    const nbody=el('div','collect-b');
+    /* Open when something is unmet — that is what somebody came here to see. Closed when all is
+       well, because a list of green rows is not worth a screen. */
+    const need=foldCard(
+      nb?'redbot cannot run yet':(na?'redbot can run, with limits':'Everything redbot needs is here'),
+      nb?nb+' to settle':(na?na+' worth knowing':'re-checked every time this screen opens'),
+      {open:!!(nb||na)});
+    const nbody=need.body;
     const order=[...s.requirements].sort((x,y)=>
       (x.ok?1:0)-(y.ok?1:0) || (x.tier==='blocking'?-1:1)-(y.tier==='blocking'?-1:1));
 
@@ -4434,16 +4602,16 @@ function setup(){
       nbody.append(row);
     }
     if(s.requirementsError)nbody.append(el('div','note warn','<b>Some checks could not run.</b> '+esc(s.requirementsError)));
-    need.append(nbody); root.append(need);
+    root.append(need);
   }
 
   /* ---------------------------------------------------------------- dashboard operations ----
    *
    * Not steps: these are things you DO once sync is configured, and they can be run any time. */
   if(sync){
-    const ops=el('div','collect acts');
-    ops.append(el('div','collect-h','<h3>Dashboard sync</h3><span class="hint">check it works, and pull the shared account list</span>'));
-    const ob=el('div','collect-b');
+    const ops=foldCard('Dashboard sync','check it works, and pull the shared account list');
+    ops.classList.add('acts');
+    const ob=ops.body;
 
     const hRow=el('div','syncHealth');
     hRow.id='syncHealth';
@@ -4548,31 +4716,17 @@ function setup(){
     ob.append(el('div','tiny',
       'The dashboard’s own admin and signing secrets are NOT entered here and never leave the '+
       'server that owns them.'));
-    ops.append(ob);root.append(ops);
+    root.append(ops);
     /* Kicked off after the screen is built, never awaited by it. */
     setTimeout(()=>checkHealth(false),0);
   }
 
   /* ---------------------------------------------------------------- elsewhere ---- */
-  const rest=el('div','collect');
-  rest.append(el('div','collect-h','<h3>Set up elsewhere</h3><span class="hint">part of running redbot, not of installing it</span>'));
-  const rb=el('div','collect-b');
+  const rest=foldCard('Set up elsewhere','part of running redbot, not of installing it');
+  const rb=rest.body;
   rb.append(el('div','tiny','Reddit accounts are on <strong>Accounts</strong>. Where redbot looks is on <strong>Threads</strong>.'));
-  rest.append(rb);root.append(rest);
+  root.append(rest);
 
-  /* ---- this build, and replacing it ----
-   *
-   * Its own card at the bottom, deliberately: updating is not a setup requirement, and putting it
-   * in the wizard would make a perfectly working install look incomplete whenever a release landed.
-   *
-   * The card is built empty and filled by paintUpdates(), because the state it shows arrives
-   * asynchronously and then keeps changing — a download reports progress several times a second. */
-  const upd=el('div','collect');
-  upd.append(el('div','collect-h','<h3>This build</h3><span class="hint">updates are never installed unless you ask</span>'));
-  updCardBody=el('div','collect-b');
-  upd.append(updCardBody);root.append(upd);
-  paintUpdates();
-  refreshUpdates(false).catch(()=>{});
 
   /**
    * The run log, which used to be a tab.
@@ -4582,9 +4736,20 @@ function setup(){
    * is now shared equally, so that cost was real. It keeps its screen and its poller; only the
    * way in moved.
    */
-  const lg=el('div','collect');
-  lg.append(el('div','collect-h','<h3>Run log</h3><span class="hint">what the last run printed, line by line</span>'));
-  const lgb=el('div','collect-b');
+  /**
+   * The unattended loop. Configuration, so it lives here — see autoLoopCard().
+   *
+   * Open when it is RUNNING: a loop driving a browser for days is a thing you should be able to
+   * see the state of without hunting for it. Closed when it is not, because then it is a control
+   * you reach for once.
+   */
+  const autoRunning=!!(PULSE_LAST&&PULSE_LAST.auto&&PULSE_LAST.auto.running);
+  const loopFold=foldCard('Run it on its own','collects, scores, writes and fact-checks — never publishes',{open:autoRunning});
+  loopFold.body.append(autoLoopCard());
+  root.append(loopFold);
+
+  const lg=foldCard('Run log','what the last run printed, line by line');
+  const lgb=lg.body;
   lgb.append(el('div','tiny','Every action redbot runs writes here as it goes, including one started before this window was opened.'));
   const lgRow=el('div');lgRow.style.marginTop='.7rem';
   const lgBtn=el('button','mini','Open the run log');
@@ -4593,7 +4758,7 @@ function setup(){
      would change the screen behind the scrim and leave somebody looking at Settings. */
   lgBtn.onclick=()=>{settings(false);go('logs')};
   lgRow.append(lgBtn);lgb.append(lgRow);
-  lg.append(lgb);root.append(lg);
+  root.append(lg);
 }
 
 /**
@@ -4648,6 +4813,38 @@ function guide(open,section){
  * One modal at a time — both this and the walkthrough own `#scrim`, and two open at once would
  * leave the scrim behind when the first closed.
  */
+/**
+ * Open a dialog, and let a caller fill it.
+ *
+ * `build(body)` renders into the panel rather than the page, so a surface that is used twice in
+ * the life of an install stops taking a third of a screen it shares with the work.
+ *
+ * The body is EMPTIED on open, not left to accumulate: the same dialog is reused, and a builder
+ * that appends would render its content twice the second time it was called.
+ *
+ * One modal at a time — this, Settings and the walkthrough all own `#scrim`, and two open at once
+ * would leave it behind when the first closed.
+ */
+function openDialog(title,hint,build){
+  const p=$('#dialog'), s=$('#scrim');
+  if(!$('#settings').hidden)settings(false);
+  if(!$('#guide').hidden)guide(false);
+  $('#dialogTitle').innerHTML=esc(title)+(hint?` <span class="hint">${esc(hint)}</span>`:'');
+  const body=$('#dialogBody');
+  body.textContent='';
+  try{ build(body); }
+  catch(e){ body.append(el('div','note warn','This could not be built: '+esc(String(e&&e.message||e)))); }
+  p.hidden=false; s.hidden=false;
+  body.scrollTop=0;
+  $('#dialogX').focus();
+}
+
+function closeDialog(){
+  $('#dialog').hidden=true;
+  if($('#settings').hidden&&$('#guide').hidden)$('#scrim').hidden=true;
+  $('#dialogBody').textContent='';
+}
+
 function settings(open){
   const p=$('#settings'), s=$('#scrim'), btn=$('#settingsBtn');
   if(open&&!$('#guide').hidden)guide(false);
@@ -4697,13 +4894,15 @@ $('#updateBtn').onclick=async()=>{
 
 $('#help').onclick=()=>guide($('#guide').hidden,CUR);
 $('#guideX').onclick=()=>guide(false);
+$('#dialogX').onclick=closeDialog;
 $('#settingsBtn').onclick=()=>settings($('#settings').hidden);
 $('#settingsX').onclick=()=>settings(false);
 /* The scrim closes whichever is open. It cannot close both blindly: calling guide(false) while
    the settings panel is up would hide the scrim and leave the panel floating over a live page. */
-$('#scrim').onclick=()=>{ if(!$('#settings').hidden)settings(false); else guide(false); };
+$('#scrim').onclick=()=>{ if(!$('#dialog').hidden)closeDialog(); else if(!$('#settings').hidden)settings(false); else guide(false); };
 addEventListener('keydown',e=>{
-  if(e.key==='Escape'&&!$('#settings').hidden)settings(false);
+  if(e.key==='Escape'&&!$('#dialog').hidden)closeDialog();
+  else if(e.key==='Escape'&&!$('#settings').hidden)settings(false);
   else if(e.key==='Escape'&&!$('#guide').hidden)guide(false);
   else if(e.key==='?'&&$('#guide').hidden&&$('#settings').hidden&&!/^(INPUT|TEXTAREA)$/.test(e.target.tagName))guide(true,CUR);
 });

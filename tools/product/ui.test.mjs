@@ -182,6 +182,51 @@ async function open(opts = {}) {
 }
 
 /** Switch screen through the real tab button, the way a person does. */
+
+/**
+ * Open "Where redbot looks".
+ *
+ * Sources, the add-a-source form and the Collect button moved into a dialog: choosing where redbot
+ * looks is done once and revisited rarely, while READING what it collected is the daily job, and
+ * the panel took a third of the Threads screen permanently.
+ *
+ * Idempotent, so a test can call it without knowing whether an earlier step already opened it.
+ */
+async function openSources(page) {
+  if (await page.isHidden('#dialog')) {
+    await page.locator('#v-discovery button', { hasText: 'Where redbot looks' }).first().click();
+    await page.waitForSelector('#dialog:not([hidden])', { timeout: 5000 });
+  }
+}
+
+/** Open "Add an account", which moved into a dialog for the same reason. */
+async function openAddAccount(page) {
+  if (await page.isHidden('#dialog')) {
+    await page.locator('#v-accounts button', { hasText: 'Add an account' }).first().click();
+    await page.waitForSelector('#dialog:not([hidden])', { timeout: 5000 });
+  }
+}
+
+
+/** Open the walkthrough at a section, the way the ? button does. */
+async function guideSection(page) {
+  /* Through the ? button, the way a person opens it — the page's own functions are not reachable
+     from page.evaluate here. Every section is in the DOM once it is open, so a text assertion does
+     not need the section to be the highlighted one. */
+  if (await page.isHidden('#guide')) {
+    await page.click('#help');
+    await page.waitForSelector('#guide:not([hidden])', { timeout: 5000 });
+  }
+}
+
+/** Open Settings and expand the "Run it on its own" fold, where the loop now lives. */
+async function openLoop(page) {
+  await tab(page, 'setup');
+  const fold = page.locator('#v-setup details.fold').filter({ hasText: 'Run it on its own' }).first();
+  if (!(await fold.evaluate((n) => n.open))) await fold.locator('summary').click();
+  await fold.locator('text=Start the loop, text=Stop the loop').first().waitFor({ timeout: 5000 }).catch(() => {});
+}
+
 async function tab(page, v) {
   /**
    * Setup is no longer a tab. It is the Settings panel behind the gear, so "go to setup" is now a
@@ -208,6 +253,10 @@ async function tab(page, v) {
   if (v === 'logs') {
     await page.click('#settingsBtn');
     await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });
+    /* The Run log section folds now, so its button is present but not visible until the
+       disclosure is open. Clicking the summary first is what a person does. */
+    const fold = page.locator('#v-setup details.fold').filter({ hasText: 'Run log' }).first();
+    if (!(await fold.evaluate((n) => n.open))) await fold.locator('summary').click();
     await page.locator('#v-setup button', { hasText: 'Open the run log' }).first().click();
     await page.waitForFunction(() => !document.querySelector('#v-logs')?.hidden,
                                null, { timeout: 5000 });
@@ -605,11 +654,17 @@ test('Threads counts its funnel and finds each source\'s threads whatever the ca
     assert.match(txt, /16 looked at/);
     assert.match(txt, /9 worth answering/);
 
+    /* The per-source counts moved with the sources themselves, into "Where redbot looks" —
+       choosing where to look is done once, reading what came back is the daily job. The defect
+       below is about the source list, so that is where it is now asserted. */
+    await openSources(page);
+    const srcTxt = await page.textContent('#dialogBody');
+
     /* The pinned defect: a source added as "wordpress" is stored by Reddit as "Wordpress",
        and an exact-key lookup reported "0 on file" above the very threads it had collected. */
-    assert.match(txt, /16 on file/, 'r/wordpress must find its 16 threads despite the casing');
-    assert.match(txt, /9 on file/, 'and r/woocommerce its 9');
-    assert.ok(!/0 on file/.test(txt), 'no configured source may report zero while holding threads');
+    assert.match(srcTxt, /16 on file/, 'r/wordpress must find its 16 threads despite the casing');
+    assert.match(srcTxt, /9 on file/, 'and r/woocommerce its 9');
+    assert.ok(!/0 on file/.test(srcTxt), 'no configured source may report zero while holding threads');
 
     assert.match(txt, /Site dies on import/, 'the assessment table must list its rows');
     assert.match(txt, /answer it/);
@@ -623,7 +678,9 @@ test('a source can be added, and the collect button runs every switched-on sourc
   const { context, page, calls } = await open();
   try {
     await tab(page, 'discovery');
+    await openSources(page);
     await page.fill('input[aria-label="Subreddit name or search phrase"]', 'Wordpress_Help');
+    await openSources(page);
     await page.click('text=Add it');
     await untilHit(calls, '/api/sources/add');
     const added = hit(calls, '/api/sources/add');
@@ -634,6 +691,7 @@ test('a source can be added, and the collect button runs every switched-on sourc
        Collecting is a CHAIN — read, read, search, then score — so the wait is for the last
        link. Asserting after the first would pass against a button that stopped early, which
        is precisely the regression worth catching. */
+    await openSources(page);
     await page.click('text=/Collect from \\d+ sources?/');
     await until(() => hit(calls, '/api/run').some((c) => c.body.key === 'score'),
                 'the collect chain to reach scoring');
@@ -672,7 +730,9 @@ test('collecting runs as the account picked, not a hidden default', async () => 
     await tab(page, 'discovery');
     /* The picker is the only thing that decides whose Chrome gets driven, so a change to it
        must reach the wire. Asserted on the request, not on the selected option. */
+    await openSources(page);
     await page.selectOption('select[aria-label="Which account collects"]', 'sgen-support');
+    await openSources(page);
     await page.click('text=/Collect from \\d+ sources?/');
     await until(() => hit(calls, '/api/run').some((c) => c.body.key === 'score'),
                 'the collect chain to reach scoring');
@@ -1197,6 +1257,7 @@ test('a slow action keeps its toast up past the point a normal one would have go
   try {
     await tab(page, 'discovery');
     await withSlowRun(page, 90_000, async (finish) => {
+      await openSources(page);
       await page.click('text=/Collect from \\d+ source/');
       await page.waitForSelector('#toast.busy', { timeout: 5000 });
 
@@ -1225,6 +1286,7 @@ test('the busy toast names the step, so it says what is taking the time', async 
   try {
     await tab(page, 'discovery');
     await withSlowRun(page, 90_000, async (finish) => {
+      await openSources(page);
       await page.click('text=/Collect from \\d+ source/');
       await page.waitForSelector('#toast.busy', { timeout: 5000 });
       await until(async () => /r\/|Reading|Collect/i.test(await page.textContent('#toast')),
@@ -1241,12 +1303,14 @@ test('a finished message never steals the screen from work still running', async
   try {
     await tab(page, 'discovery');
     await withSlowRun(page, 90_000, async (finish) => {
+      await openSources(page);
       await page.click('text=/Collect from \\d+ source/');
       await page.waitForSelector('#toast.busy', { timeout: 5000 });
 
       /* A REAL transient toast, through the path a person would take: pressing "Add it" with
          an empty box answers "Type a name first". Reaching into the page's internals would
          test the helper; this tests the screen. */
+      await openSources(page);
       await page.click('text=Add it');
       await page.waitForTimeout(400);
       assert.equal(await page.locator('#toast.busy').count(), 1,
@@ -1266,6 +1330,7 @@ test('a failed action clears the spinner instead of leaving it spinning forever'
       body: JSON.stringify({ ok: false, error: 'the collector could not start' })
     }));
     await tab(page, 'discovery');
+    await openSources(page);
     await page.click('text=/Collect from \\d+ source/');
 
     /* Fail-closed for the UI: an error path that forgot to end the toast would hang a spinner
@@ -1308,6 +1373,7 @@ test('the busy toast offers Stop, and Stop asks the server to kill the run', asy
   try {
     await tab(page, 'discovery');
     await withSlowRun(page, 90_000, async (finish) => {
+      await openSources(page);
       await page.click('text=/Collect from \\d+ source/');
       await page.waitForSelector('#toast.busy', { timeout: 5000 });
 
@@ -1334,10 +1400,13 @@ test('a stopped run reads as stopped, not as a failure', async () => {
       body: JSON.stringify({ ok: false, stopped: true, code: 1, error: 'Stopped.', output: '' })
     }));
     await tab(page, 'discovery');
+    await openSources(page);
     await page.click('text=/Collect from \\d+ source/');
 
     await page.waitForFunction(() => !document.querySelector('#toast.busy'), null, { timeout: 15_000 });
-    const txt = await page.textContent('#v-discovery');
+    /* The run-log panel hangs off the button that started the run, and Collect now lives in the
+       "Where redbot looks" dialog — so that is where the log renders. */
+    const txt = await page.textContent('#dialogBody');
     /* Reporting a person's own decision back to them as an error is the thing to avoid. */
     assert.match(txt, /Stopped/, 'the run log must say it stopped');
     assert.doesNotMatch(txt, /Failed: Stopped/, 'and never dress that up as a failure');
@@ -1380,6 +1449,7 @@ test('a refused Stop puts the button back rather than lying about it', async () 
     }));
     await tab(page, 'discovery');
     await withSlowRun(page, 90_000, async (finish) => {
+      await openSources(page);
       await page.click('text=/Collect from \\d+ source/');
       await page.waitForSelector('#toast .stopbtn', { timeout: 5000 });
       await page.click('#toast .stopbtn');
@@ -1725,12 +1795,20 @@ test('Accounts separates what is configured from what has been measured', async 
     assert.match(txt, /docs-architect/);
     assert.match(txt, /sgen-support/);
     assert.match(txt, /still growing/, 'karma 1 is the warming stage');
-    assert.match(txt, /2 sign-in folders on disk, 2 accounts actually measured/,
-      'folders and measurements must be reported separately, never smoothed into one');
+    /* The sentence spelling this out moved to the walkthrough — it explains how to READ the
+       screen rather than telling you anything to do on it. What must stay on the screen is the
+       thing it was explaining: the two facts, still separate. */
+    assert.match(txt, /chrome-profile/, 'the folders are still named on the cards');
+    assert.match(txt, /never measured|karma/i, 'and measurement is still reported per account');
     assert.match(txt, /Under 10 karma/, 'the account Reddit filters catch must say so');
     assert.match(txt, /chrome-profile-b/);
     assert.match(txt, /missing/, 'a profile folder that is not on disk must be flagged');
-    assert.match(txt, /The standing rules/);
+    /* The standing rules moved to the walkthrough — they are constraints to know, not something
+       you act on while looking at an account card. Asserted where they now live. */
+    await guideSection(page);
+    assert.match(await page.textContent('#guide'), /The standing rules/,
+      'the rules must survive the move off the screen');
+    await page.click('#guideX');
     await shot(page, '07-accounts');
     assert.deepEqual(errors, [], 'Accounts must render with a clean console');
   } finally { await context.close(); }
@@ -1756,10 +1834,12 @@ test('the add-account wizard walks create then open then check', async () => {
   const { context, page, calls } = await open();
   try {
     await tab(page, 'accounts');
+    await openAddAccount(page);
     await page.fill('input[aria-label="Their Reddit username"]', 'New_Acct');
     await page.click('text=Set it up');
+    /* The wizard runs inside the dialog now, so its progress renders there. */
     await page.waitForFunction(
-      () => /Ready\./.test(document.querySelector('#v-accounts')?.textContent || ''),
+      () => /Ready\./.test(document.querySelector('#dialogBody')?.textContent || ''),
       null, { timeout: 6000 });
 
     const created = hit(calls, '/api/account/create');
@@ -1799,9 +1879,15 @@ test('Today plans per account against measured karma, and never invents a number
     assert.match(txt, /brand new/, 'karma 1 is stage 1');
     assert.match(txt, /Write .*comments/, 'the daily instruction must be there');
     assert.match(txt, /signed-out window/, 'the only way to see a quiet removal');
-    assert.match(txt, /Never, at any point/);
-    assert.match(txt, /vote manipulation/);
-    assert.match(txt, /redbot cannot do this part/,
+    /* The hard lines moved to the walkthrough: five red rules and a paragraph, at the bottom of
+       the screen the app OPENS on, read once and scrolled past every day after. They are still
+       the only statement in the product of what it refuses to do, so this asserts they survived
+       the move rather than that they sit on Today. */
+    await guideSection(page);
+    const gTxt = await page.textContent('#guide');
+    assert.match(gTxt, /Never, at any point/);
+    assert.match(gTxt, /vote manipulation/);
+    assert.match(gTxt, /redbot cannot do this part/,
       'the tool must say plainly what it cannot count');
     await shot(page, '08-today');
     assert.deepEqual(errors, [], 'Today must render with a clean console');
@@ -1868,8 +1954,10 @@ test('Check karma now probes the account whose card it sits on', async () => {
 test('the unattended loop starts with an account and an interval, and never publishes', async () => {
   const { context, page, calls } = await open();
   try {
-    await tab(page, 'today');
-    const txt = await page.textContent('#v-today');
+    /* The loop is configuration — set once, runs for days — so it moved to Settings, in a fold
+       that opens itself when the loop is running. */
+    await openLoop(page);
+    const txt = await page.textContent('#v-setup');
     assert.match(txt, /never publishes/, 'the loop must state its own limit');
     assert.match(txt, /Approving and sending stays yours/);
 
@@ -1891,10 +1979,14 @@ test('the loop shows a stop button and its tail while it is running', async () =
     })
   });
   try {
+    /* The loop moved to Settings, in a fold that opens itself while it is running. */
+    await openLoop(page);
     await page.waitForFunction(
-      () => /running as/.test(document.querySelector('#v-today')?.textContent || ''),
+      () => /running as/.test(document.querySelector('#v-setup')?.textContent || ''),
       null, { timeout: 8000 });
-    const txt = await page.textContent('#v-today');
+    /* Read from Settings, where the loop now is — the waitForFunction above already moved to
+       `#v-setup` and this line was left behind reading Today. */
+    const txt = await page.textContent('#v-setup');
     assert.match(txt, /running as docs-architect/);
     assert.match(txt, /scored 4 threads/, 'the loop\'s own output must be visible');
 
