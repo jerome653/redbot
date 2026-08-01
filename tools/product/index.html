@@ -826,6 +826,17 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
 .track i.mid{background:var(--amber)} .track i.done{background:var(--jade)}
 .wtoday{margin-top:1.1rem;padding-top:1rem;border-top:1px solid var(--edge)}
 .wtoday h4{font-family:var(--mono);font-size:.665rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);margin:0 0 .6rem;font-weight:600}
+/* The met-requirements fold in Settings. A summary that reads as a line of text, not a control —
+   there is nothing to decide, only something to look at if you doubt the count. */
+.req-fold{margin:.15rem 0 .35rem}
+.req-fold>summary{
+  cursor:pointer;list-style:none;padding:.4rem .1rem;border-radius:6px;
+  display:flex;gap:.5rem;align-items:baseline;
+}
+.req-fold>summary::-webkit-details-marker{display:none}
+.req-fold>summary:hover{background:var(--sheen)}
+.req-fold>summary .tiny{color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
 /* The routine, now that it lives in the walkthrough rather than on the landing screen. Numbers
    are the list's own — a manual is one of the few places an ordered list earns its markers. */
 .g-steps{margin:.8rem 0 0;padding-left:1.35rem;display:grid;gap:.75rem}
@@ -4368,10 +4379,38 @@ function setup(){
     const nbody=el('div','collect-b');
     const order=[...s.requirements].sort((x,y)=>
       (x.ok?1:0)-(y.ok?1:0) || (x.tier==='blocking'?-1:1)-(y.tier==='blocking'?-1:1));
-    for(const r of order){
-      const state=r.ok?'ok':(r.tier==='blocking'?'bad':'warn');
-      const row=setupRow(state,r.label,r.detail,(!r.ok&&r.fix)?r.fix.hint:'');
-      if(!r.ok&&r.fix&&r.fix.screen&&r.fix.screen!=='setup'){
+
+    /**
+     * MET REQUIREMENTS ARE FOLDED AWAY. Unmet ones are the reason this list exists.
+     *
+     * Measured 2026-08-01: this block was 642px of a 2979px panel — the largest thing in Settings
+     * after the open step, and a second rendering of what the wizard directly above already
+     * reports. The comment on this block says the overlap is by design, and it is: these are
+     * re-derived before every run, so a step finished last week can be unmet today and this is
+     * where that shows. That argument is entirely about the UNMET ones. A green row here says
+     * exactly what the ✓ on the step above it says, twice, in the space where the actionable rows
+     * should be.
+     *
+     * So the met ones collapse behind one line that still names them — a count with no names
+     * would be a claim you cannot check.
+     */
+    const met=order.filter(r=>r.ok), unmet=order.filter(r=>!r.ok);
+    if(met.length){
+      const fold=el('details','req-fold');
+      const sm=el('summary');
+      sm.innerHTML=`<span class="tag ok">${met.length} met</span> <span class="tiny">`
+        +met.map(r=>esc(r.label)).join(' · ')+'</span>';
+      fold.append(sm);
+      const inner=el('div');
+      for(const r of met)inner.append(setupRow('ok',r.label,r.detail,''));
+      fold.append(inner);
+      nbody.append(fold);
+    }
+
+    for(const r of unmet){
+      const state=r.tier==='blocking'?'bad':'warn';
+      const row=setupRow(state,r.label,r.detail,r.fix?r.fix.hint:'');
+      if(r.fix&&r.fix.screen&&r.fix.screen!=='setup'){
         const go2=el('button','mini','Go to '+r.fix.screen);
         go2.style.cssText='padding:.4rem .8rem;font-size:.78rem;white-space:nowrap';
         /* Closing first is load-bearing now that this lives in a panel: routing underneath it
