@@ -4640,7 +4640,23 @@ async function load(){
    * redirects once per load and never traps.
    */
   const blockers=(SETUP&&!SETUP.error)?(SETUP.blocking||[]):[];
-  if(blockers.length){
+  /**
+   * "Setup is not finished" is a claim about the INSTALL, and a closed Chrome is not that.
+   *
+   * When the browser became a blocking requirement this banner started telling people their setup
+   * was unfinished because they had closed a window — on a machine where every step of setup had
+   * been completed. Reported like that it reads as a fault to go and fix in Settings, and Settings
+   * has nothing in it that opens a browser.
+   *
+   * So the browser gets its own sentence, saying the true thing: the install is fine, redbot
+   * simply cannot see Reddit until a Chrome is running, and here is what opens one.
+   */
+  const browserOnly=blockers.length&&blockers.every(b=>b.id==='browser');
+  if(browserOnly){
+    $('#banner').innerHTML='<b>No browser is open.</b> redbot reads and publishes through a '
+      +'signed-in Chrome, so both refuse until one is running. Opening the app starts them; '
+      +'Accounts → Open Chrome starts one now.';
+  }else if(blockers.length){
     $('#banner').innerHTML='<b>Setup is not finished.</b> '+blockers.length+
       ' thing'+(blockers.length===1?'':'s')+' must be settled before redbot can run: '+
       blockers.map(b=>esc(b.label)).join(', ')+'.';
@@ -4655,11 +4671,26 @@ async function load(){
 
   argusRecord();
   pulse();
-  /* Navigation always lands on a WORK screen now. Setup is no longer one, so a blocking
-     requirement opens the Settings panel over the top instead of routing to it — the person still
-     sees the screen they were on behind it, and closing the panel does not strand them. */
   go(CUR);
-  if(blockers.length)settings(true);
+
+  /**
+   * WHEN SETTINGS OPENS ITSELF — and why "a blocking requirement" was the wrong trigger.
+   *
+   * It opened on any unmet blocker, and since 2026-08-01 the browser is one. A closed Chrome is
+   * the most ordinary state a machine can be in: it happens every time somebody closes a window,
+   * and every launch until they sign in. So the panel opened over the console on a routine boot,
+   * which is the interruption the walkthrough was just stopped from committing.
+   *
+   * The distinction that matters is not blocking-vs-advisory, it is DURABLE vs TRANSIENT. A
+   * missing account, an unreadable database, no model access — those are true until a person
+   * changes something, and Settings is where they change it. A browser that is not running is
+   * true until the next launch, and boot already opens it.
+   *
+   * The banner above still names every blocker including the browser, and the gear still carries
+   * the count. Nothing is hidden; it just does not take the screen.
+   */
+  const durable=blockers.filter(b=>b.id!=='browser');
+  if(durable.length)settings(true);
 
   /* THE WALKTHROUGH NO LONGER OPENS ITSELF (2026-08-01).
    *
