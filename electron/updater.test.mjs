@@ -63,6 +63,8 @@ function make(opts = {}) {
     isPackaged: opts.isPackaged ?? true,
     currentVersion: opts.currentVersion ?? '1.0.2',
     allowDev: opts.allowDev ?? false,
+    /* Absent by default, so every existing test keeps exercising the unguarded path. */
+    ...(opts.isBusy ? { isBusy: opts.isBusy } : {}),
     broadcast: (s) => seen.push(s.phase)
   });
   return { updater, fake, seen };
@@ -179,6 +181,52 @@ test('apply installs nothing when there is nothing newer', async () => {
   assert.equal(r.installed, false);
   assert.equal(fake.calls.download, 0, 'nothing newer must not be downloaded');
   assert.equal(fake.calls.install.length, 0, 'nothing newer must not be installed');
+});
+
+/**
+ * The guard that matters most on this whole surface.
+ *
+ * Installing calls quitAndInstall, which kills this process and every child of it — the console
+ * server, and whatever CLI the console spawned. `ACTIONS.__reply` in tools/product/server.mjs is
+ * marked `stoppable: false` because dying between "submit the comment" and "confirm it landed"
+ * leaves a live comment on Reddit that redbot does not know it made. An update must never be the
+ * thing that causes that.
+ */
+test('apply refuses to install while redbot is publishing, and keeps the download', async () => {
+  const { updater, fake } = make({ isBusy: async () => '"send the reply" is running' });
+  const r = await updater.apply();
+
+  assert.equal(r.ok, false);
+  assert.equal(r.installed, false);
+  assert.equal(fake.calls.install.length, 0, 'the app must not restart mid-publish');
+  assert.match(r.reason, /send the reply/, 'the refusal must name what it is waiting for');
+  assert.equal(fake.calls.download, 1, 'the installer is fetched — only the restart is refused');
+  assert.equal(r.phase, 'ready', 'a fetched installer leaves it ready, not back at available');
+});
+
+test('a second apply installs once the run has finished', async () => {
+  let busy = 'a run is going';
+  const { updater, fake } = make({ isBusy: async () => busy });
+
+  const refused = await updater.apply();
+  assert.equal(refused.ok, false);
+
+  busy = null;
+  const r = await updater.apply();
+  assert.equal(r.installed, true);
+  assert.equal(fake.calls.download, 1, 'the already-downloaded installer must not be fetched twice');
+  assert.equal(fake.calls.install.length, 1);
+});
+
+test('a busy check that throws is treated as idle, not as a refusal', async () => {
+  /* Fails open deliberately: everything that could be mid-flight is a child of the console
+     server, so a console that cannot answer is a console running nothing — and a health probe
+     must not be able to block the one button that fixes a broken install. */
+  const { updater, fake } = make({ isBusy: async () => { throw new Error('console unreachable'); } });
+  const r = await updater.apply();
+
+  assert.equal(r.installed, true);
+  assert.equal(fake.calls.install.length, 1);
 });
 
 test('progress is reported as a percentage while downloading', async () => {

@@ -123,7 +123,22 @@ export function createUpdater({
   currentVersion,
   log = () => {},
   broadcast = () => {},
-  allowDev = false
+  allowDev = false,
+  /**
+   * "Is redbot in the middle of something?" — a string naming it, or null when idle.
+   *
+   * Installing means `quitAndInstall`, which kills this process and every child it started: the
+   * console server, and whatever CLI the console spawned. For most actions that is a wasted run.
+   * For ONE it is worse than that. Publishing is two deliberately separate steps — submit the
+   * comment, then re-read its permalink to confirm — and `ACTIONS.__reply` is marked
+   * `stoppable: false` precisely because dying between them leaves a live comment on Reddit that
+   * redbot does not know it made: not measured, not checked for removal, and liable to be
+   * written a second time.
+   *
+   * An update is never urgent enough to risk that. Default is "always idle" so a caller that does
+   * not pass this keeps the old behaviour rather than silently refusing to update.
+   */
+  isBusy = async () => null
 } = {}) {
   /**
    * One state object, pushed whole on every change.
@@ -332,6 +347,26 @@ export function createUpdater({
         await au.downloadUpdate();
         downloaded = true;
         set({ phase: 'ready', percent: 100 });
+      }
+
+      /**
+       * The last gate, and it is checked HERE rather than at the top of apply().
+       *
+       * Downloading while a run is in progress is harmless — it touches nothing but the disk, and
+       * having the installer already fetched makes the next attempt instant. Installing is the
+       * step that kills the process tree, so the question is asked at the moment it matters, with
+       * the freshest possible answer. A check at the top would be a check about a state that had
+       * several seconds and a 100 MB download to change in.
+       *
+       * `downloaded` is deliberately left TRUE: the file on disk is good, and the next press
+       * should install it rather than fetch it again.
+       */
+      const busy = await Promise.resolve(isBusy()).catch(() => null);
+      if (busy) {
+        const reason = `${busy} — redbot will not restart in the middle of it. Wait for it to finish, then press this again.`;
+        log(`updater    install refused: ${busy}`);
+        set({ phase: downloaded ? 'ready' : 'available', reason });
+        return { ok: false, installed: false, ...state, reason };
       }
 
       set({ phase: 'installing' });

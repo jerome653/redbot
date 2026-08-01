@@ -122,8 +122,34 @@ let updater = null;
  * electron/updater.test.mjs pins that. The only way an update installs is a click that reaches
  * `redbot:update-apply`.
  */
-function wireUpdater() {
+function wireUpdater(consolePort) {
   updater = createUpdater({
+    /**
+     * What the updater asks before it restarts the app. See `isBusy` in electron/updater.mjs for
+     * why publishing makes this more than a courtesy.
+     *
+     * FAILS OPEN, and the reason is not laziness. Everything that could be mid-flight is a child
+     * of the console server — a console that cannot answer is a console that is not running
+     * actions. Refusing to update because a health probe timed out would block the one button
+     * that fixes a broken install. The probe is logged either way, so a silent always-idle answer
+     * is visible in boot.log rather than invisible.
+     */
+    isBusy: async () => {
+      if (!consolePort) return null;
+      try {
+        const res = await fetch(`http://127.0.0.1:${consolePort}/api/pulse`, {
+          signal: AbortSignal.timeout(5_000)
+        });
+        if (!res.ok) return null;
+        const p = await res.json();
+        if (p && p.running) return `"${p.running}" is running`;
+        if (p && p.auto && p.auto.running) return 'the unattended loop is running';
+        return null;
+      } catch (e) {
+        boot_log(`updater    busy check failed, treating as idle — ${e && e.message ? e.message : e}`);
+        return null;
+      }
+    },
     loadAutoUpdater: () => require('electron-updater').autoUpdater,
     isPackaged: app.isPackaged,
     currentVersion: app.getVersion(),
@@ -353,7 +379,7 @@ async function boot() {
 
   /* Registered BEFORE the page loads: the Setup screen asks for a snapshot as soon as it renders,
      and a handler attached after loadURL would miss that first call and leave the card blank. */
-  wireUpdater();
+  wireUpdater(port);
 
   await win.loadURL(`http://127.0.0.1:${port}/`);
 
