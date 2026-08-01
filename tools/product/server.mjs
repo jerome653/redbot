@@ -50,6 +50,18 @@ import { spawn } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
+
+/**
+ * The running version, read once, from the one file that is authoritative about it.
+ *
+ * Never fatal: a console that will not start because it could not read its own version number is
+ * worse than a header that says nothing. `null` renders as no version rather than as "unknown",
+ * which would be a claim.
+ */
+const APP_VERSION = (() => {
+  try { return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version ?? null; }
+  catch { return null; }
+})();
 /**
  * Same `REDBOT_DATA` override src/config.ts:23 documents, for the same reason: this console
  * WRITES (accounts.json, sources.json, decisions.jsonl, approvals/), so a test that exercises
@@ -599,6 +611,15 @@ async function buildState(opts = {}) {
 
   return {
     generatedAt: new Date().toISOString(),
+    /**
+     * The running version, so the header can say which redbot this is.
+     *
+     * Read from package.json rather than carried in a constant, for the reason `currentVersion()`
+     * in src/update.ts already gives: a hand-maintained version string is a version string that
+     * lies after the first release nobody remembered to edit it for. Read once at module load,
+     * not per request — it cannot change while the process lives.
+     */
+    version: APP_VERSION,
     collect,
 
     pulse: {

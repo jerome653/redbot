@@ -24,6 +24,10 @@ export function makeState(now = Date.now(), over = {}) {
   const state = {
     generatedAt: new Date(now).toISOString(),
 
+    /* Deliberately not a real release number. The header renders whatever the SERVER reports, and
+       a fixture carrying 1.0.8 would pass just as well against a page that had hard-coded it. */
+    version: '9.9.9',
+
     collect: {
       from: 'database',
       unavailable: null,

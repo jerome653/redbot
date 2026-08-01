@@ -288,32 +288,43 @@ const chromeText = (page) => page.evaluate(() =>
     .replace(/\s+/g, ' ')
     .toLowerCase());
 
-test('the headline figures live in the chrome, and the waiting count clicks through', async () => {
+test('the headline figures live on the tabs, and the waiting count clicks through', async () => {
   /**
-   * These five are the console's whole answer to "what is going on". They were a row of big
-   * numbers under the banner; wherever they end up rendered, they must still be readable
-   * without choosing a screen, and the one that means WORK must still take you to that work.
+   * THE TICKER IS GONE, AND THIS TEST NOW PINS WHAT REPLACED IT.
    *
-   * Each label is an alternation because the wording is presentation, not contract: "taken
-   * down" and "removed" are the same fact. The FIGURE beside it is what this pins.
+   * Five figures used to sit in the ledge between the logo and the controls. Every one that
+   * mattered daily is also a badge on the tab that owns it, so the strip was a second reading of
+   * the same numbers — and being flexible-width it decided where the navigation wrapped, so the
+   * tabs moved depending on how many figures rendered.
+   *
+   * What survives is the contract underneath it: the state of the work must be readable WITHOUT
+   * choosing a screen, and the figure that means WORK must still take you to that work. The tabs
+   * carry both. `decided` and `removals` are no longer in the chrome — they were never daily, and
+   * they live on Results beside the record they describe.
    */
   const { context, page } = await open();
   try {
     const txt = await chromeText(page);
+    /* Lower case: `chromeText` lowercases what it collects, so these are the tab labels as that
+       helper sees them, not as they are written in the markup. */
     for (const [what, label, n] of [
-      ['pending replies', '(waiting)', '3'],
-      ['accounts', '(accounts)', '2'],
-      ['published', '(replies sent|sent)', '0'],
-      ['operator decisions', '(you decided on|decided)', '7'],
-      ['removals', '(taken down|removed)', '0']
+      ['pending replies', 'review', '3'],
+      ['accounts', 'accounts', '2'],
+      ['published', 'results', '0']
     ]) {
-      assert.match(txt, new RegExp(`${label}[^0-9]{0,26}${n}|${n}[^0-9a-z]{0,4}${label}`),
-        `the chrome must report ${what} = ${n}; got: ${txt}`);
+      assert.match(txt, new RegExp(`${label}[^0-9]{0,4}${n}`),
+        `the chrome must report ${what} = ${n} on its tab; got: ${txt}`);
     }
 
-    /* The only figure that should make you click. */
+    /* The version sits beside the name, and it comes from the SERVER (APP_VERSION in server.mjs)
+       rather than from a constant in the page — a hand-maintained version string is one that lies
+       after the first release nobody edited it for. */
+    assert.match(txt, /v9\.9\.9/, `the running version must be shown in the chrome; got: ${txt}`);
+
+    /* The tab badge is the click now — and it was always the more obvious target than a figure
+       in a strip. */
     await tab(page, 'today');
-    await page.locator('text=/waiting/i').first().click();
+    await page.locator('.step[data-v="review"]').click();
     await page.waitForFunction(() => !document.querySelector('#v-review')?.hidden,
                                null, { timeout: 5000 });
     assert.ok(await page.isHidden('#v-today'), 'the waiting figure must lead to Review');

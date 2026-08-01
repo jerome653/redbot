@@ -214,6 +214,11 @@ td a:hover{color:var(--ember);text-decoration:underline}
 }
 
 /* ---------- top bar: a glass ledge ---------- */
+/* TWO ROWS, and the wrap is structural rather than incidental.
+   Row one is identity and controls; `.right` takes `margin-left:auto` so it ends flush right.
+   Row two is the tabs, forced onto their own line by `flex-basis:100%` on `.steps`. Before this
+   everything shared one wrapping row with a flexible ticker in the middle, so the navigation
+   moved depending on how many figures were rendered. */
 .bar{
   position:relative;z-index:40;display:flex;align-items:center;gap:1.1rem;
   margin:.85rem var(--gut) 0;padding:.7rem 1rem;flex-wrap:wrap;row-gap:.65rem;
@@ -226,11 +231,19 @@ td a:hover{color:var(--ember);text-decoration:underline}
 .logo{display:flex;align-items:center;gap:.55rem;font-family:var(--mono);font-weight:700;font-size:.9rem;letter-spacing:.02em;flex:none}
 .logo svg{width:24px;height:24px;flex:none;margin-top:-1px}
 .lg-a{color:var(--ink-3)} .lg-b{color:var(--ember)}
+/* The running version, beside the name. Quiet on purpose — it answers "which redbot is this",
+   which matters exactly once per session and never while you are working. Empty until
+   /api/state arrives, and stays empty if the server could not read its own package.json:
+   no version is honest, "unknown" would be a claim. */
+.ver{color:var(--ink-3);font-weight:400;font-size:.72rem;letter-spacing:.04em;opacity:.75}
 /* One row that scrolls, not a block that wraps: at 390px the wrapping strip cost three
    rows of chrome before any content. The bar itself is hidden-scrollbar like every other
    pane, so the strip slides under a finger with nothing to look at. */
 .steps{
-  display:flex;align-items:center;gap:.2rem;margin-left:.4rem;
+  display:flex;align-items:center;gap:.2rem;margin-left:0;
+  /* Its own row. Without this the tabs share row one and their position depends on how wide the
+     things beside them happen to render. */
+  flex-basis:100%;order:2;
   overflow-x:auto;min-width:0;max-width:100%;
   scrollbar-width:none;-ms-overflow-style:none;
 }
@@ -1237,28 +1250,15 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
       <circle cx="20.6" cy="13.3" r="2.05" fill="var(--ember)"/>
       <path d="M10.4 23.4v3.4M16 23.4v4.2M21.6 23.4v3.4" stroke="var(--ember)" stroke-width="2.2" stroke-linecap="round"/>
       <path d="M6.4 29.4h19.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".45"/>
-    </svg><span class="lg-a">red</span><span class="lg-b">bot</span></span>
-  <!-- Ordered by what the work actually is right now: both accounts are new, so nurturing
-       them is the job and everything else is downstream of it. -->
-  <nav class="steps" id="steps">
-    <button class="step" data-v="today" aria-current="page">Today <b id="nTod">0</b></button>
-    <button class="step" data-v="accounts">Accounts <span class="g" id="nAcc">0</span></button>
-    <button class="step" data-v="review">Review <span class="g" id="nRev">0</span></button>
-    <button class="step" data-v="discovery">Threads <span class="g" id="nDisc">0</span></button>
-    <button class="step" data-v="outcomes">Results <span class="g" id="nOut">0</span></button>
-    <!-- Setup used to sit here, between Results and Log. It is configuration, not work: an
-         operator passes it once and then walks past it every day for the rest of the install's
-         life. It now lives behind the gear on the right, and opens ITSELF on an install that
-         still has a blocking requirement — which is the only time it is the job. -->
-    <!-- The log had nowhere to live: it appeared under whichever button you pressed and
-         vanished from view the moment you changed screen. A run you did not personally start
-         (or started before a reload) was unreachable. -->
-    <button class="step" data-v="logs">Log <span class="g" id="nLog">–</span></button>
-  </nav>
-  <!-- The five headline figures. They were a row of big-number cards under the banner; as a
-       strip in the ledge they read the same and give back the ~110px of height the panel
-       layout needs. Filled by pulse(). -->
-  <div class="ticker" id="pulse"></div>
+    </svg><span class="lg-a">red</span><span class="lg-b">bot</span><span class="ver" id="appVer"></span></span>
+
+  <!-- ROW ONE: identity left, state and controls right.
+       ROW TWO: the tabs, on their own line.
+
+       The five-figure ticker that used to sit between them is gone. It was a second reading of
+       numbers the tabs already carry as badges — and being flexible width, it decided where the
+       navigation wrapped: the tabs moved depending on how many figures happened to be shown.
+       Navigation that shifts under you is worse than a figure you have to click a tab to see. -->
   <div class="right">
     <button class="mini" id="pulseChip" title="Connection health">checking…</button>
     <button class="mini q" id="help" aria-expanded="false" aria-controls="guide" title="What is this?">?</button>
@@ -1275,6 +1275,25 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
     <button class="mini" id="reload">refresh</button>
     <button class="mini" id="theme">theme</button>
   </div>
+
+  <!-- Ordered by what the work actually is right now: both accounts are new, so nurturing
+       them is the job and everything else is downstream of it.
+
+       Setup used to sit between Results and Log. It is configuration, not work — passed once and
+       then walked past every day for the life of the install — so it lives behind the gear above
+       and opens itself only when something durable is unmet.
+
+       The log had nowhere to live before this: it appeared under whichever button you pressed and
+       vanished the moment you changed screen, so a run you did not personally start (or started
+       before a reload) was unreachable. -->
+  <nav class="steps" id="steps">
+    <button class="step" data-v="today" aria-current="page">Today <b id="nTod">0</b></button>
+    <button class="step" data-v="accounts">Accounts <span class="g" id="nAcc">0</span></button>
+    <button class="step" data-v="review">Review <span class="g" id="nRev">0</span></button>
+    <button class="step" data-v="discovery">Threads <span class="g" id="nDisc">0</span></button>
+    <button class="step" data-v="outcomes">Results <span class="g" id="nOut">0</span></button>
+    <button class="step" data-v="logs">Log <span class="g" id="nLog">–</span></button>
+  </nav>
 </div>
 
 <div class="scrim" id="scrim" hidden></div>
@@ -1575,38 +1594,17 @@ const ago=iso=>{if(!iso)return '';const d=(Date.now()-new Date(iso).getTime())/1
 /* A measured zero and an absent measurement are different facts, and look different. */
 const num=(v,none)=>v==null?`<b class="none">${esc(none||'never measured')}</b>`:`<b>${v}</b>`;
 
-/* ---------------- the ticker ----------------
- * The same five facts the big-number row carried, in the ledge. The wording stays long
- * enough to say what each number MEANS — "sent" alone is not a fact, "replies sent" is —
- * and the detail that used to sit under each number is kept as the title.
+/* THE TICKER IS GONE (2026-08-01).
+ *
+ * Five figures in the ledge, between the logo and the controls. Every one of them is also a badge
+ * on a tab — waiting is Review's, sent is Results' — so it was a second reading of the same
+ * numbers. Worse, being flexible-width it decided where the navigation wrapped: the tabs sat in a
+ * different place depending on how many figures happened to render. Navigation that moves under
+ * you costs more than a figure you reach by clicking the tab that owns it.
+ *
+ * `pulse()` went with it. The one thing it did that a badge does not was make `waiting` clickable;
+ * the Review tab is that click now, and it was always the more obvious target.
  */
-function pulse(){
-  const p=S.pulse, w=$('#pulse'); w.textContent='';
-  const tick=(val,label,sub,cls)=>{
-    const n=el('span','tick'+(cls?' '+cls:''));
-    n.append(el('span',null,esc(label)),el('b',null,String(val)));
-    if(sub)n.title=sub;
-    return n;
-  };
-  /* Waiting is the only one that is a control, and only while something is actually waiting. */
-  let waiting;
-  if(p.waitingOnYou){
-    waiting=el('button','tick');
-    waiting.type='button';
-    waiting.append(el('span',null,'waiting'),el('b',null,String(p.waitingOnYou)));
-    waiting.title='written, not sent — open Review';
-    waiting.onclick=()=>go('review');
-  } else {
-    waiting=tick(0,'waiting','nothing is waiting on you');
-  }
-  w.append(
-    waiting,
-    tick(p.accountsInLogs,'accounts',p.profilesProvisioned+' sign-ins set up'),
-    tick(p.published,'replies sent','all time',p.published?'good':''),
-    tick(p.operatorDecisions,'decided','approved or turned down',p.operatorDecisions?'':'warn'),
-    tick(p.removals,'taken down','by a moderator')
-  );
-}
 
 /* ---------------- review ---------------- */
 /* Ignored replies leave the queue. They are not deleted — the toggle at the top brings them
@@ -4859,7 +4857,9 @@ async function load(){
   paintBanner();
 
   argusRecord();
-  pulse();
+  /* The version, from the server rather than from a constant here — see APP_VERSION in
+     server.mjs. Absent renders as nothing at all: no version is honest, "unknown" is a claim. */
+  $('#appVer').textContent=S.version?('v'+S.version):'';
   go(CUR);
 
   /**
