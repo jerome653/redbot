@@ -2178,8 +2178,48 @@ function collecting(root){
         w.style.cssText='margin:.1rem 0 .5rem 2.6rem;padding:.5rem .7rem';
         w.innerHTML=`<b>${esc(actingHandle)} does not speak in r/${esc(id)}.</b> `
           +`It declares ${actingSubs.map(x=>'r/'+esc(x)).join(', ')}, so threads collected here `
-          +`are dropped as “wrong subreddit” before anything is written. Add r/${esc(id)} to the `
-          +`account, or collect as somebody who covers it.`;
+          +`are dropped as “wrong subreddit” before anything is written.`;
+
+        /**
+         * THE WARNING FIXES IT, rather than describing what you should go and do.
+         *
+         * The subreddit list is not hardcoded — it is a field on the account, editable behind
+         * Edit on the Accounts screen. The defect was never that it could not be changed; it was
+         * that NOTHING CONNECTED THE TWO PLACES. You add a source here and the list that decides
+         * whether its threads survive lives on another screen, behind a button, in a comma-joined
+         * text box. Telling somebody to go and do that by hand is a console describing work
+         * instead of doing it.
+         *
+         * One click, the same /api/account/update the Edit form posts to — no second path, no
+         * second rule about what a valid subreddit list is.
+         */
+        const fixRow=el('div');fixRow.style.cssText='margin-top:.5rem';
+        const fixBtn=el('button','mini');
+        fixBtn.textContent=`Add r/${id} to ${actingHandle}`;
+        fixBtn.style.cssText='padding:.4rem .8rem;font-size:.78rem;border-color:var(--jade);color:var(--jade)';
+        fixBtn.onclick=async()=>{
+          fixBtn.disabled=true; fixBtn.textContent='adding…';
+          const held=busy(`Adding r/${id} to ${actingHandle}…`);
+          try{
+            const r=await fetch('/api/account/update',{
+              method:'POST',headers:{'content-type':'application/json'},
+              body:JSON.stringify({handle:actingHandle,subreddits:[...actingSubs,id]})
+            }).then(x=>x.json());
+            if(!r.ok){held.fail(r.error||'could not save');toast(r.error||'could not save');
+                      fixBtn.disabled=false;fixBtn.textContent=`Add r/${id} to ${actingHandle}`;return}
+            /* Reload, then rebuild this dialog from the new state — leaving the warning on screen
+               after the thing it warned about is fixed is its own small lie. */
+            await load();
+            held.done(`${actingHandle} now covers r/${id}`);
+            openDialog('Where redbot looks','sources',collecting);
+          }catch(e){
+            held.fail(String(e&&e.message||e));
+            fixBtn.disabled=false;fixBtn.textContent=`Add r/${id} to ${actingHandle}`;
+          }
+        };
+        fixRow.append(fixBtn);
+        fixRow.append(el('span','tiny','  or collect as somebody who already covers it.'));
+        w.append(fixRow);
         b.append(w);
       }
     });
@@ -2418,6 +2458,45 @@ function discovery(){
   }
   grid.append(drop);
   r.append(grid);
+
+  /**
+   * THE COLLECTED THREADS THEMSELVES — the ones the funnel counted and no list showed.
+   *
+   * "20 collected · 0 looked at" was the entire account an operator got. The threads were in the
+   * database the whole time, each with the sentence the prefilter wrote about it; the console
+   * reported a number it would not let anybody look behind. Somebody whose sources point at the
+   * wrong place saw a screen of zeroes and no way to find out what came back.
+   *
+   * Each row carries the thread, where it came from, the rule that refused it and that rule's own
+   * words — and links out, because the honest check on "was this really not a question" is the
+   * page itself.
+   */
+  if((d.dropped||[]).length){
+    const seen=el('div','collect');
+    seen.append(el('div','collect-h',
+      `<h3>Collected, not assessed</h3><span class="hint">${d.droppedTotal} thread${d.droppedTotal===1?'':'s'} — what came back, and why it stopped here</span>`));
+    const sb=el('div','collect-b');
+    const w=el('div','wrap');
+    w.style.cssText='border:0;border-radius:0;box-shadow:none;background:none;-webkit-backdrop-filter:none;backdrop-filter:none';
+    const t=el('table');
+    t.innerHTML='<thead><tr><th>Thread</th><th>Where</th><th>Refused by</th><th>Why</th></tr></thead>';
+    const tb=el('tbody');
+    d.dropped.forEach(x=>{
+      const tr=el('tr');
+      tr.innerHTML=`<td><a href="${esc(x.permalink||'#')}" target="_blank" rel="noreferrer">${esc(x.title||x.threadId)}</a>`
+        +`${x.ageText?`<div class="cm">${esc(x.ageText)}${x.commentCount!=null?' · '+esc(String(x.commentCount))+' comments':''}</div>`:''}</td>`
+        +`<td>${x.subreddit?esc('r/'+x.subreddit):'—'}</td>`
+        +`<td>${x.kind?`<span class="tag no">${esc(DROPWORD[x.kind]||x.kind)}</span>`:'<span class="tag">not looked at yet</span>'}</td>`
+        +`<td class="cm">${esc(x.detail||'nothing rejected it — the analyser has not reached it')}</td>`;
+      tb.append(tr);
+    });
+    t.append(tb);w.append(t);sb.append(w);
+    if(d.droppedTotal>d.dropped.length){
+      sb.append(el('div','tiny',`Showing the ${d.dropped.length} most recent of ${d.droppedTotal}.`));
+    }
+    seen.append(sb);
+    r.append(seen);
+  }
 
   r.append(el('div','note',`<b>Leaving threads alone is most of the value.</b> ${d.skip} of the ${d.assessed} threads looked at were dropped before anyone spent time on them — a guide rather than a question, one already solved, or a subject these accounts cannot honestly speak to.`));
 }

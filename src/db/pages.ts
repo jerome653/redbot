@@ -70,6 +70,77 @@ export interface ThreadPageRow {
   draftStatus: string | null;
 }
 
+
+/**
+ * The Threads screen, second list: COLLECTED BUT NEVER ASSESSED.
+ *
+ * WHY THIS EXISTS. `pageThreads` above selects `FROM opportunity_assessments`, so a thread the
+ * mechanical prefilter dropped is in `threads`, counted in the funnel, and invisible everywhere
+ * else. Measured on this machine: 20 collected, 0 rows sent to the console, and the only account
+ * of what those twenty were lived in a run log that scrolls away.
+ *
+ * "20 collected · 0 looked at" is honest and useless. An operator whose sources are pointed at the
+ * wrong place sees a screen reporting nothing and has no way to find out what came back or why it
+ * was refused — which is exactly the state that produced two minutes of browser work for nothing.
+ *
+ * The join is LEFT: a thread can be collected and not yet run through the prefilter at all, and
+ * that is a different fact from being dropped. It is reported as such rather than being given a
+ * reason it was never assigned.
+ */
+export interface DroppedThreadRow {
+  threadId: string;
+  title: string;
+  permalink: string;
+  subreddit: string | null;
+  commentCount: number | null;
+  ageText: string | null;
+  /** The rule that dropped it, or null when it has not been through the prefilter yet. */
+  kind: string | null;
+  /** The sentence the filter wrote for a person, verbatim. */
+  detail: string | null;
+}
+
+export async function pageDroppedThreads(db: Db, q: PageQuery = {}): Promise<Page<DroppedThreadRow>> {
+  const { offset, limit } = clampPage(q);
+
+  const t = await db.query<{ n: number }>(
+    `SELECT count(*) AS n FROM threads t
+      WHERE NOT EXISTS (SELECT 1 FROM opportunity_assessments a WHERE a.thread_id = t.id)`
+  );
+  const total = Number(t.rows[0]?.n ?? 0);
+
+  const r = await db.query<{
+    id: string; title: string; permalink: string; subreddit: string | null;
+    comment_count: number | null; age_text: string | null;
+    kind: string | null; detail: string | null;
+  }>(
+    /* Newest first: a thread that has just been collected and refused is the one somebody is
+       asking about, and `id` breaks ties so a page boundary cannot repeat or skip a row. */
+    `SELECT t.id, t.title, t.permalink, t.subreddit, t.comment_count, t.age_text,
+            p.kind, p.detail
+       FROM threads t
+       LEFT JOIN thread_prefilter p ON p.thread_id = t.id
+      WHERE NOT EXISTS (SELECT 1 FROM opportunity_assessments a WHERE a.thread_id = t.id)
+      ORDER BY t.collected_at DESC, t.id
+      LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+
+  return {
+    total, offset, limit,
+    rows: r.rows.map((x) => ({
+      threadId: x.id,
+      title: x.title,
+      permalink: x.permalink,
+      subreddit: x.subreddit,
+      commentCount: x.comment_count == null ? null : Number(x.comment_count),
+      ageText: x.age_text,
+      kind: x.kind,
+      detail: x.detail
+    }))
+  };
+}
+
 /**
  * The Threads screen: assessed threads, best score first.
  *

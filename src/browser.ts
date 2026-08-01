@@ -111,24 +111,15 @@ async function browserUA(endpoint: string): Promise<string | null> {
 }
 
 /**
- * Bring a window that was opened off-screen back where a person can see it.
- *
- * THE OTHER HALF OF OFF-SCREEN. Boot opens a browser per account with
- * `--window-position=-32000,-32000` so two Chromes do not take the screen every launch (headed,
- * never headless — Reddit block-pages a headless browser with a 200). A window parked there
- * cannot be reached by clicking, alt-tabbing, or launching Chrome again: a second launch only
- * messages the running instance, which raises a window nobody can see. Moving it is the only way
- * back, and CDP is the only thing that can move it.
+ * The window operation shared by "show me that browser" and "get it out of the way".
  *
  * `Browser.setWindowBounds` needs a windowId, `Browser.getWindowForTarget` needs a targetId, and
  * Playwright does not expose a page's targetId — so the target comes from the debugger's own HTTP
  * listing, which is the same endpoint `isBrowserUp` already trusts.
- *
- * Deliberately does NOT open a tab or navigate. It is a window operation, and a "show me the
- * browser" that also changed what was on screen would be a different verb.
  */
-export async function showBrowserWindow(
-  endpoint = config.browser.cdpEndpoint
+async function setWindowState(
+  endpoint: string,
+  apply: (send: (m: string, p: object) => Promise<unknown>, windowId: number) => Promise<void>
 ): Promise<{ ok: boolean; reason?: string }> {
   if (!(await isBrowserUp(endpoint))) return { ok: false, reason: 'that browser is not running' };
 
@@ -147,20 +138,51 @@ export async function showBrowserWindow(
   try {
     const cdp = await browser.newBrowserCDPSession();
     const { windowId } = await cdp.send('Browser.getWindowForTarget', { targetId }) as { windowId: number };
-    /* `normal` first and on its own: a minimised or fullscreen window rejects a bounds change,
-       and Chrome requires the state transition to be its own call. */
-    await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } });
-    await cdp.send('Browser.setWindowBounds', {
-      windowId, bounds: { left: 80, top: 60, width: 1280, height: 900 }
-    });
+    await apply((m, p) => cdp.send(m as never, p as never) as Promise<unknown>, windowId);
     return { ok: true };
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   } finally {
-    /* Detaches this CDP client. It does NOT close the operator's browser — connectOverCDP
-       attaches to a browser it did not launch, and Playwright leaves such a browser running. */
+    /* Detaches this CDP client. It does NOT close the operator's browser — connectOverCDP attaches
+       to a browser it did not launch, and Playwright leaves such a browser running. */
     await browser.close().catch(() => {});
   }
+}
+
+/**
+ * Put a browser out of the way WITHOUT putting it out of reach.
+ *
+ * Boot opens a Chrome per account, and two windows taking the screen every launch is the problem
+ * this solves. The first attempt was `--window-position=-32000,-32000`, and it is worse than it
+ * sounds: Windows still lists the window in the taskbar, and clicking that entry restores it to a
+ * position on no monitor — so it reads as broken rather than tidy. Reported from the machine: the
+ * entries were visible and could not be clicked.
+ *
+ * Minimised instead. The taskbar button does what a taskbar button does, the window is one click
+ * away, and nothing is hidden from the person whose machine it is.
+ */
+export async function minimizeBrowserWindow(
+  endpoint = config.browser.cdpEndpoint
+): Promise<{ ok: boolean; reason?: string }> {
+  return setWindowState(endpoint, async (send, windowId) => {
+    await send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+  });
+}
+
+/**
+ * Bring a minimised window back where a person can see it.
+ *
+ * The counterpart to the above, and what the Accounts screen's "Show browser" calls.
+ */
+export async function showBrowserWindow(
+  endpoint = config.browser.cdpEndpoint
+): Promise<{ ok: boolean; reason?: string }> {
+  return setWindowState(endpoint, async (send, windowId) => {
+    /* `normal` first and on its own: a minimised or fullscreen window rejects a bounds change, and
+       Chrome requires the state transition to be its own call. */
+    await send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } });
+    await send('Browser.setWindowBounds', { windowId, bounds: { left: 80, top: 60, width: 1280, height: 900 } });
+  });
 }
 
 export async function attach(): Promise<Session> {

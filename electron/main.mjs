@@ -367,7 +367,22 @@ async function openBoundBrowsers(port) {
       const out = await res.json().catch(() => ({}));
       /* Recorded ONLY on a real open. `alreadyRunning` means the browser was already there when
          boot looked — this process did not start it, so this process must not close it. */
-      if (out && out.ok && !out.alreadyRunning) bootOpened.push(b.handle);
+      if (out && out.ok && !out.alreadyRunning) {
+        bootOpened.push(b.handle);
+        /* Minimise it, once it is answering. Chrome has no start-minimised flag, so this is a CDP
+           call and CDP is not up the instant the process starts — hence the wait-and-retry. Failure
+           is logged and ignored: a window that stayed open is a nuisance, not a fault. */
+        void (async () => {
+          const endpoint = `http://127.0.0.1:${out.port ?? b.port}`;
+          const { minimizeBrowserWindow } = await import('../dist/browser.js');
+          for (let i = 0; i < 12; i++) {
+            const r = await minimizeBrowserWindow(endpoint).catch(() => ({ ok: false, reason: 'threw' }));
+            if (r.ok) { boot_log(`browsers    ${b.handle} minimised`); return; }
+            await new Promise((res) => setTimeout(res, 1000));
+          }
+          boot_log(`browsers    ${b.handle} could not be minimised — left as it opened`);
+        })();
+      }
       boot_log(out && out.ok
         ? `browsers    ${b.handle} opened on ${out.port ?? b.port}${out.movedFrom ? ` (moved off ${out.movedFrom} — another program had it)` : ''}`
         : `browsers    ${b.handle} NOT opened — ${(out && out.error) || `HTTP ${res.status}`}`);

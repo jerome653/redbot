@@ -178,6 +178,8 @@ try {
      can quietly go back to loading a table and slicing it. */
   pagesApi = {
     threads: (q) => pages.pageThreads(db.getPool(), q),
+    /* Collected but never assessed — the threads the funnel counts and no screen showed. */
+    dropped: (q) => pages.pageDroppedThreads(db.getPool(), q),
     outcomes: (q) => pages.pageOutcomes(db.getPool(), q),
     observations: (q) => pages.pageObservations(db.getPool(), q),
     draftIds: (q) => pages.pageDraftIds(db.getPool(), q),
@@ -319,6 +321,9 @@ async function buildState(opts = {}) {
    * blank one.
    */
   let threadPage = { rows: [], total: 0, offset: 0, limit: 25 };
+  /* Collected but never assessed. Same fallback shape: a degraded console shows an empty list
+     rather than failing, and says so through the same catch below. */
+  let droppedPage = { rows: [], total: 0, offset: 0, limit: 25 };
   let threadCounts = {
     threadsCollected: threads.length, assessed: assessments.length,
     contribute: assessments.filter((a) => a.verdict === 'contribute').length,
@@ -345,9 +350,10 @@ async function buildState(opts = {}) {
 
   if (pagesApi && !dom.unavailable) {
     try {
-      [threadPage, threadCounts, observationPage, checkpoints, prefilterDrops] = await Promise.all([
+      [threadPage, threadCounts, observationPage, checkpoints, prefilterDrops, droppedPage] = await Promise.all([
         pagesApi.threads({}), pagesApi.funnel(), pagesApi.observations({}), pagesApi.checkpoints(),
-        summaryApi ? summaryApi.prefilter() : null
+        summaryApi ? summaryApi.prefilter() : null,
+        pagesApi.dropped({})
       ]);
     } catch (e) {
       /**
@@ -692,6 +698,16 @@ async function buildState(opts = {}) {
       total: threadPage.total,
       offset: threadPage.offset,
       limit: threadPage.limit,
+      /**
+       * THE THREADS THAT WERE COLLECTED AND SHOWN NOWHERE.
+       *
+       * `items` comes from opportunity_assessments, so a thread the prefilter refused was counted
+       * in the funnel and sent to no screen. Measured on this machine: 20 collected, 0 rows, and
+       * the only account of what those twenty were living in a run log that scrolls away. The
+       * console reported a number it would not let anybody look behind.
+       */
+      dropped: droppedPage.rows,
+      droppedTotal: droppedPage.total,
       /**
        * WHY the threads that never reached a model call were dropped.
        *
@@ -1634,15 +1650,18 @@ async function launchChrome(handle, { background = false } = {}) {
    * Only the boot path asks for this. Pressing Open Chrome on the Accounts screen means a person
    * wants to see it — that is the signing-in path — so it opens where it always did.
    */
-  const OFFSCREEN = ['--window-position=-32000,-32000',
-                     '--disable-backgrounding-occluded-windows',
-                     '--disable-renderer-backgrounding'];
+  /* Not off-screen any more — see minimizeBrowserWindow in src/browser.ts. A window parked at
+     -32000 still gets a taskbar entry, and clicking it restores the window to a position on no
+     monitor, which reads as broken. The two backgrounding flags stay: Chrome throttles a window it
+     believes is not visible, and a minimised one qualifies. */
+  const BACKGROUND = ['--disable-backgrounding-occluded-windows',
+                      '--disable-renderer-backgrounding'];
   try {
     const child = spawn(bin, [
       `--remote-debugging-port=${a.debugPort}`,
       `--user-data-dir=${dir}`,
       '--no-first-run', '--no-default-browser-check',
-      ...(background ? OFFSCREEN : []),
+      ...(background ? BACKGROUND : []),
       'https://www.reddit.com/login'
     ], { detached: true, stdio: 'ignore' });
     child.unref();

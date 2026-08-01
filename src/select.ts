@@ -49,11 +49,35 @@ export interface Candidate {
 }
 
 /**
- * Subreddits this account has any business posting in. Deliberately narrow for the pilot:
- * one reply, in a room whose rules we have actually read (r/WordPress rule 1 — no promotion
- * of products or services — is recorded in STATUS.md).
+ * The FALLBACK set of subreddits, used only when the acting account declares none.
+ *
+ * THIS USED TO BE THE WHOLE RULE, and that was the defect. Every account record carries its own
+ * `subreddits` list — editable from the console at Accounts → Edit — and the prefilter ignored it
+ * in favour of this constant. So an operator could add a source, widen the account, watch redbot
+ * spend two minutes reading twenty threads, and have all of them refused as "outside the pilot
+ * set" by an array in a source file they had no way to reach. Measured exactly that way on
+ * 2026-08-01: r/website added to the sources AND to docs-architect, 14 threads still dropped.
+ *
+ * The narrowness was right for the pilot — one reply, in a room whose rules had actually been read
+ * (r/WordPress rule 1, no promotion, is recorded in STATUS.md). It was never right that it could
+ * not be changed without a rebuild.
+ *
+ * It remains the default for an account with an empty list, because "speaks nowhere" should not
+ * silently mean "speaks everywhere".
  */
 export const PILOT_SUBREDDITS = ['wordpress', 'wordpress_help', 'webdev'] as const;
+
+/**
+ * Where THIS account may post: its own declared list, or the fallback above when it has none.
+ *
+ * Lower-cased at the boundary because Reddit stores "Wordpress" for a source typed "wordpress",
+ * and an exact compare here is the bug that reports zero threads for a subreddit holding sixteen.
+ */
+export function allowedSubreddits(account?: { subreddits?: readonly string[] } | null): readonly string[] {
+  const own = account?.subreddits;
+  if (Array.isArray(own) && own.length) return own.map((s) => String(s).toLowerCase());
+  return PILOT_SUBREDDITS as readonly string[];
+}
 
 /**
  * Titles that announce content rather than ask for help.
@@ -204,7 +228,13 @@ export function currentAgeHours(
   return thread.ageMinutes / 60 + Math.max(0, sinceCollection);
 }
 
-export function evaluateCandidate(thread: Thread, assessment: OpportunityAssessment): Candidate {
+export function evaluateCandidate(
+  thread: Thread,
+  assessment: OpportunityAssessment,
+  /* The acting account, so the subreddit rule reads what THIS account declares rather than a
+     constant. Optional so every existing caller keeps compiling and falls back to the pilot set. */
+  account?: { handle?: string; subreddits?: readonly string[] } | null
+): Candidate {
   const criteria: Criterion[] = [];
 
   /* a gap worth filling — mechanical over the gap analysis, not a model's opinion of the title */
@@ -254,12 +284,13 @@ export function evaluateCandidate(thread: Thread, assessment: OpportunityAssessm
       : `${Math.round(ageH)}h old (limit ${policy.maxThreadAgeHoursToPublish.value}h)`
   });
 
-  /* appropriate subreddit */
+  /* appropriate subreddit — the ACTING ACCOUNT's list, not a constant. See allowedSubreddits. */
   const sub = thread.subreddit.toLowerCase();
+  const allowed = allowedSubreddits(account);
   criteria.push({
     name: 'appropriate subreddit',
-    pass: (PILOT_SUBREDDITS as readonly string[]).includes(sub),
-    detail: `r/${thread.subreddit} — pilot set is ${PILOT_SUBREDDITS.map((s) => 'r/' + s).join(', ')}`
+    pass: allowed.includes(sub),
+    detail: `r/${thread.subreddit} — ${account?.handle ?? 'this account'} speaks in ${allowed.map((x) => 'r/' + x).join(', ')}`
   });
 
   /* expertise match (proxy) — the thread's vocabulary, not the model's confidence in itself */

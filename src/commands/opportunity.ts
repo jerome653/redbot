@@ -13,8 +13,9 @@
 import { loadThreads, loadGaps, saveGaps, loadAssessments, saveAssessments } from '../store.js';
 import { analyzeGap } from '../gap.js';
 import { assessOpportunity, MIN_OPPORTUNITY_SCORE } from '../opportunity.js';
-import { isQuestionShaped, PILOT_SUBREDDITS, currentAgeHours } from '../select.js';
+import { isQuestionShaped, PILOT_SUBREDDITS, allowedSubreddits, currentAgeHours } from '../select.js';
 import { policy } from '../policy.js';
+import { selectedAccount } from '../config.js';
 import { trace, timed } from '../trace.js';
 import { record, say } from '../log.js';
 import { getPool } from '../db.js';
@@ -38,11 +39,38 @@ export interface Dropped {
   why: string;
 }
 
-export function prefilter(threads: Thread[]): { keep: Thread[]; dropped: Dropped[] } {
+/**
+ * THE FILTER ADVISES. IT DOES NOT LOCK THE OPERATOR OUT.
+ *
+ * `opts.allowed` is the acting account's own subreddit list — see allowedSubreddits in select.ts.
+ * It used to be the PILOT_SUBREDDITS constant, which meant an operator could add a source, widen
+ * the account from the console, and still watch every thread refused by an array in a source file
+ * they had no way to reach. Measured on 2026-08-01: r/website added in both places, 14 threads
+ * still dropped as "outside the pilot set".
+ *
+ * `opts.force` is the override. A thread the operator has explicitly asked for skips the
+ * mechanical rules and goes to assessment — because the rules are cheap proxies (does the title
+ * look like a question, is this subreddit on the list) and a person reading the actual thread
+ * knows things the proxies cannot. THE HUMAN HAS THE FINAL SAY, which is the same principle that
+ * puts a typed SEND in front of every publish.
+ *
+ * What an override does NOT do: it does not publish, it does not skip certification, and it does
+ * not touch the gates in src/gates.ts. It buys one thread a model call it would otherwise not
+ * have had.
+ */
+export function prefilter(
+  threads: Thread[],
+  opts: { allowed?: readonly string[]; force?: ReadonlySet<string> } = {}
+): { keep: Thread[]; dropped: Dropped[] } {
   const keep: Thread[] = [];
   const dropped: Dropped[] = [];
+  const allowed = opts.allowed ?? (PILOT_SUBREDDITS as readonly string[]);
+  const force = opts.force ?? new Set<string>();
 
   for (const t of threads) {
+    /* Asked for by name: the mechanical rules are skipped entirely rather than argued with. */
+    if (force.has(t.id)) { keep.push(t); continue; }
+
     const shape = isQuestionShaped(t);
     if (!shape.pass) { dropped.push({ thread: t, kind: 'not-a-question', why: shape.detail }); continue; }
 
@@ -54,8 +82,11 @@ export function prefilter(threads: Thread[]): { keep: Thread[]; dropped: Dropped
       continue;
     }
 
-    if (!(PILOT_SUBREDDITS as readonly string[]).includes(t.subreddit.toLowerCase())) {
-      dropped.push({ thread: t, kind: 'outside-pilot', why: `r/${t.subreddit} is outside the pilot set` });
+    if (!allowed.includes(t.subreddit.toLowerCase())) {
+      dropped.push({
+        thread: t, kind: 'outside-pilot',
+        why: `r/${t.subreddit} is not one this account speaks in (${allowed.map((x) => 'r/' + x).join(', ')})`
+      });
       continue;
     }
 
@@ -64,7 +95,7 @@ export function prefilter(threads: Thread[]): { keep: Thread[]; dropped: Dropped
   return { keep, dropped };
 }
 
-export async function opportunity(opts?: { force?: boolean; limit?: number }): Promise<number> {
+export async function opportunity(opts?: { force?: boolean; limit?: number; only?: string[] }): Promise<number> {
   say.head('redbot opportunity');
 
   const threads = await loadThreads();
@@ -73,7 +104,24 @@ export async function opportunity(opts?: { force?: boolean; limit?: number }): P
     return 1;
   }
 
-  const { keep, dropped } = prefilter(threads);
+  /**
+   * WHERE THIS ACCOUNT MAY POST, from the account itself.
+   *
+   * Read here rather than baked into prefilter(), so the rule is the operator's setting and the
+   * function stays testable without a database. An account that declares nothing falls back to the
+   * pilot set — "speaks nowhere" must not quietly mean "speaks everywhere".
+   */
+  let allowed: readonly string[] = PILOT_SUBREDDITS as readonly string[];
+  try {
+    /* `selectedAccount()` already returns the record, not a handle. */
+    allowed = allowedSubreddits(selectedAccount());
+  } catch { /* no account resolvable — the fallback above is the honest answer */ }
+
+  /* `--only <id>` names threads the operator asked for by hand. They skip the mechanical rules;
+     see prefilter() for why that is a decision the person is entitled to make. */
+  const force = new Set(opts?.only ?? []);
+  const { keep, dropped } = prefilter(threads, { allowed, force });
+  if (force.size) say.step(`${force.size} thread(s) forced past the prefilter by request`);
   say.step(`${threads.length} collected · ${keep.length} pass the mechanical prefilter · ${dropped.length} dropped`);
 
   /**
