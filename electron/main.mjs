@@ -222,6 +222,74 @@ function startServer(port, env) {
   });
 }
 
+/**
+ * Open the Chrome belonging to every account bound to this machine, once, at boot.
+ *
+ * WHY THIS EXISTS. redbot cannot read or publish without a debuggable Chrome — the product IS a
+ * browser. Before this, a launch produced an app that looked fine and refused every action, with
+ * two "browser is not open" problems on the pulse and nothing having gone wrong: the operator
+ * simply had not clicked Open Chrome twice yet. Requiring a person to perform the same two clicks
+ * every morning is not a safety property, it is a chore, and it is why `src/requirements.ts` could
+ * only report the browser as advisory. Opening them here is what lets that become blocking: the
+ * condition is normally already met, so an unmet one is a real fault worth stopping for.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO. It does not sign anybody in — a Chrome opens on Reddit's login
+ * page and stays there until a person uses it. It does not touch an account whose port is held by
+ * something else: `launchChrome` refuses a `foreign` port, because Chrome handed an occupied
+ * --remote-debugging-port starts anyway and silently yields the port, and redbot would then attach
+ * to the squatter. And it does not retry — a boot-time convenience that fights a real fault in a
+ * loop is worse than one that reports it.
+ *
+ * It goes through the console's own HTTP surface rather than importing the launcher, so there is
+ * exactly one code path that opens a browser and one place that decides whether it is allowed.
+ *
+ * Opt out with REDBOT_NO_AUTO_BROWSER=1.
+ */
+async function openBoundBrowsers(port) {
+  if (process.env.REDBOT_NO_AUTO_BROWSER === '1') {
+    boot_log('browsers    skipped — REDBOT_NO_AUTO_BROWSER=1');
+    return;
+  }
+
+  const base = `http://127.0.0.1:${port}`;
+  let browsers;
+  try {
+    const res = await fetch(`${base}/api/pulse`, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) throw new Error(`pulse answered ${res.status}`);
+    browsers = (await res.json()).browsers;
+  } catch (e) {
+    boot_log(`browsers    could not be checked — ${e && e.message ? e.message : e}`);
+    return;
+  }
+
+  if (!Array.isArray(browsers) || !browsers.length) {
+    boot_log('browsers    none bound to this machine');
+    return;
+  }
+
+  for (const b of browsers) {
+    /* 'ours' is already this account's Chrome; 'foreign' is another program on the port and is a
+       fault to report, not to fight. Only 'free' is ours to take. */
+    if (b.state === 'ours') { boot_log(`browsers    ${b.handle} already open on ${b.port}`); continue; }
+    if (b.state !== 'free') { boot_log(`browsers    ${b.handle} NOT opened — ${b.detail || b.state}`); continue; }
+
+    try {
+      const res = await fetch(`${base}/api/account/open`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ handle: b.handle }),
+        signal: AbortSignal.timeout(30_000)
+      });
+      const out = await res.json().catch(() => ({}));
+      boot_log(out && out.ok
+        ? `browsers    ${b.handle} opened on ${out.port ?? b.port}`
+        : `browsers    ${b.handle} NOT opened — ${(out && out.error) || `HTTP ${res.status}`}`);
+    } catch (e) {
+      boot_log(`browsers    ${b.handle} NOT opened — ${e && e.message ? e.message : e}`);
+    }
+  }
+}
+
 async function boot() {
   /* Working state, before ANYTHING imports src/config.ts — which freezes DATA at module load. */
   const userData = app.getPath('userData');
@@ -287,6 +355,11 @@ async function boot() {
   wireUpdater();
 
   await win.loadURL(`http://127.0.0.1:${port}/`);
+
+  /* Deliberately AFTER loadURL and deliberately not awaited: opening two Chromes takes seconds,
+     and the window must not wait on them. Whatever it achieves is reported through /api/setup on
+     the next poll like any other state. */
+  void openBoundBrowsers(port);
 
   if (bootError) {
     if (!process.env.REDBOT_NO_DIALOGS) dialog.showMessageBox(win, {
