@@ -252,7 +252,11 @@ td a:hover{color:var(--ember);text-decoration:underline}
   font-family:var(--mono);font-size:.7rem;font-weight:700;padding:.08rem .38rem;border-radius:6px;
   background:var(--ember);color:#fff;
 }
-.right{margin-left:auto;display:flex;align-items:center;gap:.5rem}
+/* Wraps for the same reason `.bar` above does. `.bar` wrapping was never enough on its own: this
+   group was one unbreakable row inside it, so adding a fifth button (update) pushed a 390px phone
+   13px sideways while the bar around it had room to give. Ends flush right so a wrapped second row
+   sits under the first rather than drifting left. */
+.right{margin-left:auto;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;row-gap:.45rem;justify-content:flex-end}
 button.mini{
   font:inherit;font-family:var(--mono);font-size:.72rem;cursor:pointer;
   background:var(--glass);color:var(--ink-2);border:1px solid var(--edge);
@@ -1231,6 +1235,11 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
          count nobody can see is not a warning. -->
     <button class="mini q" id="settingsBtn" aria-expanded="false" aria-controls="settings"
             title="Settings — accounts, model, dashboard">⚙ <span class="g" id="nSet">–</span></button>
+    <!-- Updating was reachable from exactly two places, and neither was a place a person goes
+         when they want to update. The card is inside Settings, and the bar only appears when a
+         newer release happens to be detected — and can be dismissed for that version, after which
+         there is no way to ask again. This is the way to ask. -->
+    <button class="mini" id="updateBtn" title="Check for a newer redbot">update</button>
     <button class="mini" id="reload">refresh</button>
     <button class="mini" id="theme">theme</button>
   </div>
@@ -4401,6 +4410,41 @@ function settings(open){
   const body=p.querySelector('.guide-b'); if(body)body.scrollTop=0;
   $('#settingsX').focus();
 }
+
+/**
+ * "update" — ask now, from anywhere.
+ *
+ * WHAT IT DOES NOT DO: install. It checks, and if there is something newer it reveals the bar with
+ * Install now in it. Replacing the running application is not a thing to do on the same click as
+ * asking whether there is anything to replace it with — and the whole design of this page is that
+ * `refreshUpdates(false)` never reaches the network and a download begins on a real click and at
+ * no other time. This is the real click for CHECKING; the bar carries the one for INSTALLING.
+ *
+ * `force` on both calls is what makes it a manual trigger rather than a repaint: it spends a live
+ * request instead of answering from what is already known, and it bypasses the per-version
+ * dismissal, so a version somebody hid last week can be found again. That is the case the button
+ * exists for — before it, hiding the bar for a version was permanent for that version.
+ *
+ * It reports the negative out loud. "You are on the latest" is the answer most presses will get,
+ * and a button that goes quiet when the answer is no reads as a button that did not work.
+ */
+$('#updateBtn').onclick=async()=>{
+  const b=$('#updateBtn');
+  if(b.disabled)return;
+  b.disabled=true; b.textContent='checking…';
+  try{
+    const st=await refreshUpdates(true);
+    await updateCheck(true);
+    if(st&&st.phase==='error'){ toast(st.reason||'the update check could not run'); }
+    else if(st&&(st.newer||st.phase==='available')){
+      toast(`redbot ${st.latest||'(newer)'} is available — the bar at the top can install it.`);
+      scrollTo({top:0,behavior:'instant'});
+    }else{
+      toast(`You are on the latest${st&&st.current?` (${st.current})`:''}.`);
+    }
+  }catch(e){ toast(String(e&&e.message||e)); }
+  finally{ b.disabled=false; b.textContent='update'; }
+};
 
 $('#help').onclick=()=>guide($('#guide').hidden,CUR);
 $('#guideX').onclick=()=>guide(false);
