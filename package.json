@@ -11,7 +11,8 @@
     "redbot": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc",
     "dev": "tsc --watch",
     "redbot": "node dist/cli.js",
     "test": "tsc && node --env-file=db/sqlite/.env.test db/sqlite/reset-test-db.mjs && node --env-file=db/sqlite/.env.test --test \"dist/test/*.test.js\" \"db/sqlite/schema.test.mjs\" \"tools/operator/server.test.mjs\" \"tools/product/server.test.mjs\" \"electron/updater.test.mjs\"",
