@@ -247,6 +247,10 @@ td a:hover{color:var(--ember);text-decoration:underline}
   overflow-x:auto;min-width:0;max-width:100%;
   scrollbar-width:none;-ms-overflow-style:none;
 }
+/* The tabs fill the row rather than huddling at the left with dead space beside them. Equal
+   shares — `flex:1 1 0` rather than `flex:1 1 auto` — so the widths do not shift as the badge
+   numbers change from one digit to two, which would make the whole row twitch on every poll. */
+.steps .step{flex:1 1 0;justify-content:center;min-width:max-content}
 .steps::-webkit-scrollbar{display:none}
 .step{
   appearance:none;border:1px solid transparent;background:none;cursor:pointer;font:inherit;
@@ -1292,7 +1296,11 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
     <button class="step" data-v="review">Review <span class="g" id="nRev">0</span></button>
     <button class="step" data-v="discovery">Threads <span class="g" id="nDisc">0</span></button>
     <button class="step" data-v="outcomes">Results <span class="g" id="nOut">0</span></button>
-    <button class="step" data-v="logs">Log <span class="g" id="nLog">–</span></button>
+    <!-- Log is NOT a tab. It is where you go when something has gone wrong or you want to watch a
+         run you did not start — which is not five times a day, and a permanent tab for it costs
+         every other tab a share of the row. It is a button in Settings, and `#nLog` still lives
+         here, hidden, because the poller writes to it and a missing node would throw. -->
+    <span id="nLog" hidden></span>
   </nav>
 </div>
 
@@ -4558,6 +4566,27 @@ function setup(){
   upd.append(updCardBody);root.append(upd);
   paintUpdates();
   refreshUpdates(false).catch(()=>{});
+
+  /**
+   * The run log, which used to be a tab.
+   *
+   * It is where you go when something has gone wrong, or to watch a run you did not start — not
+   * five times a day. A permanent tab for it cost every other tab a share of the row, and the row
+   * is now shared equally, so that cost was real. It keeps its screen and its poller; only the
+   * way in moved.
+   */
+  const lg=el('div','collect');
+  lg.append(el('div','collect-h','<h3>Run log</h3><span class="hint">what the last run printed, line by line</span>'));
+  const lgb=el('div','collect-b');
+  lgb.append(el('div','tiny','Every action redbot runs writes here as it goes, including one started before this window was opened.'));
+  const lgRow=el('div');lgRow.style.marginTop='.7rem';
+  const lgBtn=el('button','mini','Open the run log');
+  lgBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+  /* Closing first, for the same reason the requirement rows do: routing underneath the panel
+     would change the screen behind the scrim and leave somebody looking at Settings. */
+  lgBtn.onclick=()=>{settings(false);go('logs')};
+  lgRow.append(lgBtn);lgb.append(lgRow);
+  lg.append(lgb);root.append(lg);
 }
 
 /**

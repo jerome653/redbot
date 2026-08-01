@@ -196,6 +196,23 @@ async function tab(page, v) {
     await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });
     return;
   }
+  /**
+   * Log is not a tab either. It is a button inside Settings — it is where you go when something
+   * has gone wrong, not five times a day, and a permanent tab cost every other tab a share of a
+   * row that is now divided equally.
+   *
+   * Routed here rather than at nine call sites, because every one of them means the same thing:
+   * put that screen in front of me. The button closes the panel itself, so the wait is on the
+   * screen, exactly as it is for a real tab.
+   */
+  if (v === 'logs') {
+    await page.click('#settingsBtn');
+    await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });
+    await page.locator('#v-setup button', { hasText: 'Open the run log' }).first().click();
+    await page.waitForFunction(() => !document.querySelector('#v-logs')?.hidden,
+                               null, { timeout: 5000 });
+    return;
+  }
   await page.click(`.step[data-v="${v}"]`);
   await page.waitForFunction((k) => !document.querySelector('#v-' + k)?.hidden, v, { timeout: 5000 });
 }
