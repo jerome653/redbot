@@ -271,7 +271,48 @@ function startServer(port, env) {
  *
  * Opt out with REDBOT_NO_AUTO_BROWSER=1.
  */
+/**
+ * The handles whose browsers THIS process opened, and the port to reach the console on.
+ *
+ * Recorded so the quit handler can close exactly those and nothing else. A browser the operator
+ * started themselves is not in here and is never touched.
+ */
+const bootOpened = [];
+let consolePort = null;
+
+/**
+ * Close the browsers boot opened. Best effort, and bounded.
+ *
+ * A quit that hangs waiting on a browser is worse than a browser left running, so every request
+ * carries its own timeout and a failure is logged rather than raised. The whole thing is also
+ * capped by the caller: whatever has not finished when the deadline passes is abandoned and the
+ * app exits.
+ */
+async function closeBootBrowsers() {
+  const deadline = new Promise((r) => setTimeout(r, 8_000).unref?.());
+  const work = (async () => {
+    for (const handle of bootOpened) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${consolePort}/api/account/stop`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ handle }),
+          signal: AbortSignal.timeout(4_000)
+        });
+        const out = await res.json().catch(() => ({}));
+        boot_log(out && out.ok
+          ? `browsers    ${handle} closed on the way out`
+          : `browsers    ${handle} NOT closed — ${(out && out.error) || `HTTP ${res.status}`}`);
+      } catch (e) {
+        boot_log(`browsers    ${handle} NOT closed — ${e && e.message ? e.message : e}`);
+      }
+    }
+  })();
+  await Promise.race([work, deadline]);
+}
+
 async function openBoundBrowsers(port) {
+  consolePort = port;
   if (process.env.REDBOT_NO_AUTO_BROWSER === '1') {
     boot_log('browsers    skipped — REDBOT_NO_AUTO_BROWSER=1');
     return;
@@ -311,6 +352,9 @@ async function openBoundBrowsers(port) {
         signal: AbortSignal.timeout(30_000)
       });
       const out = await res.json().catch(() => ({}));
+      /* Recorded ONLY on a real open. `alreadyRunning` means the browser was already there when
+         boot looked — this process did not start it, so this process must not close it. */
+      if (out && out.ok && !out.alreadyRunning) bootOpened.push(b.handle);
       boot_log(out && out.ok
         ? `browsers    ${b.handle} opened on ${out.port ?? b.port}${out.movedFrom ? ` (moved off ${out.movedFrom} — another program had it)` : ''}`
         : `browsers    ${b.handle} NOT opened — ${(out && out.error) || `HTTP ${res.status}`}`);
@@ -454,9 +498,36 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('window-all-closed', () => app.quit());
 
-  /* The server child is ours; it must not outlive us. `before-quit` rather than
-     `window-all-closed` so a quit from the menu or a signal also takes it down. */
-  app.on('before-quit', () => {
+  /**
+   * On the way out: close the browsers WE opened, then the server child.
+   *
+   * THE LEAK THIS FIXES. Boot opens a Chrome per account, detached — deliberately, because a
+   * browser must survive the console crashing. Nothing then closed them. Measured on the
+   * development machine after a few restarts: FOUR browser instances, 39 processes, 3.6 GB, two
+   * of them belonging to an app that was no longer running. They also keep holding their debug
+   * ports, so the next launch finds them `foreign` and reallocates — the ports walk upward
+   * (9223 → 9222 → 9225) one restart at a time, and the windows pile up in the taskbar.
+   *
+   * ONLY THE ONES BOOT OPENED. `bootOpened` is recorded by openBoundBrowsers, so a browser the
+   * operator started themselves — from the Accounts screen, or by hand — is left alone. redbot
+   * cleans up after itself and does not tidy away somebody else's window.
+   *
+   * It goes through /api/account/stop, which proves ownership from the process's own
+   * --user-data-dir before killing anything (src/ports.ts). A "stop" that trusted the port number
+   * would terminate whatever answered — which on this machine is sometimes Lenovo Vantage.
+   *
+   * ASYNC IN before-quit needs the dance below: preventDefault, do the work, quit again. The
+   * `quitting` guard is what stops the second pass repeating it, and the server child is killed
+   * only on that second pass — killing it first would take away the API this needs.
+   */
+  let quitting = false;
+  app.on('before-quit', (e) => {
+    if (!quitting && bootOpened.length && consolePort) {
+      e.preventDefault();
+      quitting = true;
+      closeBootBrowsers().finally(() => app.quit());
+      return;
+    }
     if (serverChild && serverChild.exitCode === null) {
       try { serverChild.kill(); } catch { /* already gone */ }
     }
