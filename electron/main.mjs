@@ -378,6 +378,11 @@ async function boot() {
     }
   });
 
+  /* The menu template stays registered for its accelerators; the bar itself never appears.
+     See the Menu.setApplicationMenu block below for why both calls are needed. */
+  win.setAutoHideMenuBar(true);
+  win.setMenuBarVisibility(false);
+
   win.once('ready-to-show', () => win.show());
 
   /* Registered BEFORE the page loads: the Setup screen asks for a snapshot as soon as it renders,
@@ -458,8 +463,23 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-/* A minimal menu. The default Electron menu offers reload and devtools, which are useful, and
-   nothing else here needs to be in a menu — the console is its own navigation. */
+/**
+ * A menu that exists but is never shown.
+ *
+ * The bar itself was two words — "redbot  Edit" — sitting above a console that is its own
+ * navigation, on every screen, for the life of the window. It said nothing the app does not say
+ * better, and it made the window look like a document viewer.
+ *
+ * IT IS HIDDEN RATHER THAN DELETED, and that distinction is the whole reason this is not a
+ * one-line removal. On Windows, `Menu.setApplicationMenu(null)` also unregisters the accelerators
+ * the roles carry — Ctrl+C, Ctrl+V, Ctrl+A stop working in the console's own text fields, which
+ * is where an operator pastes a profile path, a dashboard endpoint and a token. `Ctrl+R` for
+ * reload goes with it. So the template stays and the BAR is hidden instead: `setMenuBarVisibility`
+ * takes it off screen, and `setAutoHideMenuBar` stops Alt bringing it back.
+ *
+ * Both calls are needed. Visibility alone leaves Alt as a way to summon it, which is a surprise
+ * rather than a feature on a window with no menu-driven actions.
+ */
 Menu.setApplicationMenu(Menu.buildFromTemplate([
   {
     label: 'redbot',

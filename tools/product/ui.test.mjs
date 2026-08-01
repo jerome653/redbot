@@ -1887,7 +1887,11 @@ test('Results reports an empty screen rather than a screen of zeroes', async () 
     const txt = await page.textContent('#v-outcomes');
     assert.match(txt, /(nothing has been sent|no reply has been published)/i,
       'the screen must state the absence in words');
-    assert.match(txt, /only exists after something is sent/,
+    /* `exist(s)`: the sentence now has a plural subject ("votes, replies and removals") after the
+       two explanatory paragraphs here were cut to one line and the reasoning moved to the
+       walkthrough. What this asserts is that the empty state still SAYS WHY it is empty rather
+       than being blank — that is the property, not the conjugation. */
+    assert.match(txt, /only exists? after something is sent/,
       'the empty state must explain itself, not just be blank');
     assert.match(txt, /karma/, 'what HAS been measured still shows');
     assert.match(txt, /212/);

@@ -826,6 +826,12 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
 .track i.mid{background:var(--amber)} .track i.done{background:var(--jade)}
 .wtoday{margin-top:1.1rem;padding-top:1rem;border-top:1px solid var(--edge)}
 .wtoday h4{font-family:var(--mono);font-size:.665rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);margin:0 0 .6rem;font-weight:600}
+/* The routine, now that it lives in the walkthrough rather than on the landing screen. Numbers
+   are the list's own — a manual is one of the few places an ordered list earns its markers. */
+.g-steps{margin:.8rem 0 0;padding-left:1.35rem;display:grid;gap:.75rem}
+.g-steps li{color:var(--ink-2);line-height:1.65;font-size:.9rem}
+.g-steps li b{color:var(--ink)}
+
 .todo{display:flex;gap:.65rem;padding:.42rem 0;font-size:.87rem;color:var(--ink-2);line-height:1.6;align-items:baseline}
 .todo .box{font-family:var(--mono);color:var(--ink-3);flex:none}
 .todo b{color:var(--ink)}
@@ -1329,6 +1335,25 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
       <h3>Growing — why nothing is happening yet</h3>
       <p>Both accounts are new. Getting them to where a reply survives is roughly six weeks of comments written by a person, two to four a day, no links and no product names.</p>
       <p><b>redbot cannot speed this up.</b> Karma comes from other people finding comments useful. It can find threads, write, keep the pace slow and record what gets taken down — that is all.</p>
+
+      <!-- MOVED HERE FROM THE TODAY SCREEN (2026-08-01). It was eight numbered steps and about
+           450 words sitting under the day's checklist — measured: Today rendered 714 words against
+           6 controls, 133 words per control, 2523px tall, and it is the screen the app opens on.
+           None of it is wrong; it is a manual, and a manual on the landing screen is read once and
+           then scrolled past for the life of the install. It is one keystroke away here, and the
+           checklist above it is the part you act on daily. -->
+      <h3 style="margin-top:1.4rem">Doing it, if you have never commented on Reddit</h3>
+      <ol class="g-steps">
+        <li><b>Karma is other people upvoting your comments.</b> A comment that helps somebody might earn 5–20. One that reads like an advert earns nothing and can get you removed. There is no way to buy it and no way to rush it.</li>
+        <li><b>Open the subreddit and sort by New.</b> Threads under two hours old have few answers, so yours gets read. A thread from yesterday already has twenty replies.</li>
+        <li><b>Find a question you can genuinely answer</b> — not one where you would be guessing. If you have to look it up to sound sure, pick a different thread. Being wrong in public costs more than saying nothing.</li>
+        <li><b>Write two or three sentences in your own words.</b> No greeting, no sign-off, no company name, and no links at all — a link from a new account is the fastest way to get filtered.
+          <div class="egs"><span class="tagline">a comment that works</span>Check whether the plugin is loading its own copy of jQuery — you can see it in the page source as two separate script tags. That is usually what breaks the slider after an update.</div></li>
+        <li><b>Post it, then open the same thread in a private window.</b> If it is not there while signed out, it was removed or held for a moderator — <em>you would never know from your own screen, because it still looks fine to you.</em> Do this for your first ten comments.</li>
+        <li><b>Come back in a few hours and answer any reply.</b> A conversation earns far more than a single comment, and it is what makes the account read as a person.</li>
+        <li><b>Stop at your daily number</b> — two to four while the account is new, spread across the day. Ten comments in an hour from a new account is the pattern that gets accounts caught.</li>
+        <li><b>Re-check karma once a week</b> from the Today screen. The targets move as the number does.</li>
+      </ol>
     </div>
 
     <div class="g-sec" data-g="outcomes">
@@ -3306,26 +3331,26 @@ function today(){
   pair.append(loop,cmdBox);
   r.append(pair);
 
-  /* ---- the routine, for somebody who has never used Reddit ---- */
-  const h=el('h2','sec');h.textContent='How to actually do it';h.style.marginTop='2rem';r.append(h);
-  r.append(el('div','sub','assume you have never commented on Reddit before'));
-  const steps=el('div','card steps-n');
-  [
-   ['<b>Karma is just other people upvoting your comments.</b> One comment that helps somebody might earn 5-20. One that reads like an advert earns nothing and can get you removed. There is no way to buy it, and no way to rush it.'],
-   ['<b>Open the subreddit and sort by New.</b> Threads under two hours old have few answers, so yours actually gets read. A thread from yesterday already has twenty replies and nobody will reach yours.'],
-   ['<b>Find a question you can genuinely answer.</b> Not one where you would be guessing. If you have to look it up to sound sure, pick a different thread — being wrong in public is the one thing that costs more than saying nothing.'],
-   ['<b>Write two or three sentences, in your own words.</b> Say the specific thing that helps. No greeting, no sign-off, no company name, no links at all — links from a new account are the fastest way to get filtered.',
-    '<span class="tagline">a comment that works</span>Check whether the plugin is loading its own copy of jQuery — you can see it in the page source as two separate script tags. That is usually what breaks the slider after an update.'],
-   ['<b>Post it, then open the same thread in a private window.</b> If your comment is not there while signed out, it was removed or held for a moderator — <em>you would never know from your own screen, because it still looks fine to you.</em> Do this for your first ten comments.'],
-   ['<b>Come back in a few hours and answer any reply.</b> A conversation earns far more than a single comment, and it is what makes the account look like a person rather than a drop-box.'],
-   ['<b>Stop at your daily number.</b> Two to four while the account is new. Spread across the day, not in one sitting. Ten comments in an hour from a new account is the pattern that gets accounts caught.'],
-   ['<b>Once a week, re-check karma</b> with the command above, and look at this screen again. The targets move as the number does.']
-  ].forEach(([txt,eg])=>{
-    const s=el('div','stepn');
-    s.append(el('div','txt',txt+(eg?`<div class="egs">${eg}</div>`:'')));
-    steps.append(s);
-  });
-  r.append(steps);
+  /**
+   * The routine MOVED TO THE WALKTHROUGH (2026-08-01), and what is left is the way in.
+   *
+   * It was eight numbered steps and about 450 words, under the day's checklist, on the screen the
+   * app opens on. Measured before the change: Today rendered 714 words against 6 controls — 133
+   * words per control, 2523px tall — the worst ratio in the app and the first thing anybody sees.
+   *
+   * None of it was wrong. It is a manual, and a manual on the landing screen is read once and
+   * scrolled past every day after that, pushing the checklist — the part you act on — below the
+   * fold. It now lives in the walkthrough, which is where "how do I do this" already lives, and
+   * this line opens it AT that section rather than making somebody hunt for it.
+   */
+  const howRow=el('div','card');
+  howRow.style.cssText='margin-top:1.4rem;display:flex;gap:.9rem;align-items:center;flex-wrap:wrap';
+  howRow.append(el('div','tiny','Never commented on Reddit before? The eight steps that keep a new account out of trouble are in the walkthrough.'));
+  const howBtn=el('button','mini','Read the routine');
+  howBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;margin-left:auto';
+  howBtn.onclick=()=>guide(true,'today');
+  howRow.append(howBtn);
+  r.append(howRow);
 
   /* ---- the hard lines ---- */
   const nh=el('h2','sec');nh.textContent='Never, at any point';nh.style.marginTop='2rem';r.append(nh);
@@ -3383,15 +3408,24 @@ function outcomes(){
 
   /* ---- centre: published replies, or the honest absence of them ---- */
   const pub=panel('Published replies',String(o.published));
+  /**
+   * The empty state, in one line rather than two paragraphs.
+   *
+   * Measured 2026-08-01: this screen rendered 258 words against ZERO controls — the only screen in
+   * the app with nothing to press, and the most explaining. Both paragraphs were true and neither
+   * changes what anybody does next; the reasoning ("an empty result is a fact, a predicted one is
+   * not") is the walkthrough's job, and the walkthrough already carries it under
+   * "Results — empty on purpose".
+   */
   if(o.published===0){
-    pub.append(el('div','prose',
-      '<b>No reply has been published.</b> Everything this screen exists to show — votes on a '+
-      'comment, replies to it, whether a moderator took it down — only exists after something '+
-      'is sent. Nothing has been.'));
-    pub.append(el('div','prose',
-      'This screen fills in once one has, and not before. It will never show a projection, a '+
-      'score, or an estimate in the meantime. <b>An empty result is a fact. A predicted one '+
-      'is not</b>, and the difference is the whole reason this screen exists.'));
+    const empty=el('div','prose');
+    empty.innerHTML='<b>No reply has been published.</b> Votes, replies and removals only exist '+
+      'after something is sent, so there is nothing to show yet. ';
+    const more=el('button','mini','why this is empty, not zero');
+    more.style.cssText='padding:.3rem .7rem;font-size:.75rem;vertical-align:baseline';
+    more.onclick=()=>guide(true,'outcomes');
+    empty.append(more);
+    pub.append(empty);
   }
   const w=el('div','wrap');
   w.style.cssText='border:0;border-radius:0;box-shadow:none;background:none;-webkit-backdrop-filter:none;backdrop-filter:none';
