@@ -1210,7 +1210,10 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
     <button class="step" data-v="review">Review <span class="g" id="nRev">0</span></button>
     <button class="step" data-v="discovery">Threads <span class="g" id="nDisc">0</span></button>
     <button class="step" data-v="outcomes">Results <span class="g" id="nOut">0</span></button>
-    <button class="step" data-v="setup">Setup <span class="g" id="nSet">–</span></button>
+    <!-- Setup used to sit here, between Results and Log. It is configuration, not work: an
+         operator passes it once and then walks past it every day for the rest of the install's
+         life. It now lives behind the gear on the right, and opens ITSELF on an install that
+         still has a blocking requirement — which is the only time it is the job. -->
     <!-- The log had nowhere to live: it appeared under whichever button you pressed and
          vanished from view the moment you changed screen. A run you did not personally start
          (or started before a reload) was unreachable. -->
@@ -1223,6 +1226,11 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
   <div class="right">
     <button class="mini" id="pulseChip" title="Connection health">checking…</button>
     <button class="mini q" id="help" aria-expanded="false" aria-controls="guide" title="What is this?">?</button>
+    <!-- The badge keeps its old id, `nSet`, and its old meaning: the number of UNMET
+         requirements, from the server's shared list. It moved here with the screen, because a
+         count nobody can see is not a warning. -->
+    <button class="mini q" id="settingsBtn" aria-expanded="false" aria-controls="settings"
+            title="Settings — accounts, model, dashboard">⚙ <span class="g" id="nSet">–</span></button>
     <button class="mini" id="reload">refresh</button>
     <button class="mini" id="theme">theme</button>
   </div>
@@ -1327,7 +1335,22 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 <section id="v-accounts" class="sheet" hidden></section>
 <section id="v-outcomes" class="sheet" hidden></section>
 <section id="v-logs" class="sheet" hidden></section>
-<section id="v-setup" class="sheet" hidden></section>
+
+<!-- SETTINGS — the old Setup screen, in a panel.
+     It reuses the walkthrough's shell (.guide + #scrim) rather than growing a second modal
+     implementation: same geometry, same scrim, same Escape, same focus return. `#v-setup` keeps
+     its id and its class because `setup()` renders into it and the ui suite addresses it; what
+     changed is where it hangs, and that it is no longer `hidden` — the PANEL's hidden attribute
+     is now the thing that decides whether it is on screen. -->
+<aside class="guide" id="settings" hidden aria-label="Settings">
+  <div class="guide-h">
+    <h2>Settings</h2>
+    <button class="mini x" id="settingsX">close</button>
+  </div>
+  <div class="guide-b">
+    <section id="v-setup" class="sheet"></section>
+  </div>
+</aside>
 
 <div class="toast" id="toast"></div>
 
@@ -3728,13 +3751,26 @@ const actBtn=(label,fn)=>{
   return x;
 };
 
+/**
+ * Redraw the Settings panel where it stands.
+ *
+ * Replaces the four `go('setup')` calls this screen used to make on itself. Those worked only
+ * because setup was a routed screen; it is a panel now, and routing to it would throw.
+ *
+ * SILENT WHEN THE PANEL IS CLOSED. Two of the old callers are background refreshes — the
+ * dependency scan finishing, a "Check again" press — and a background result must never be able
+ * to open a modal over somebody's work. A function declaration rather than a const, because
+ * `setup()` can run during load() and would otherwise reach this through the temporal dead zone.
+ */
+function setupAgain(){ if(!$('#settings').hidden)setup(); }
+
 function setup(){
   const root=$('#v-setup'); root.textContent='';
-  if(!SETUP){root.append(el('div','note','Reading setup…'));loadSetup().then(()=>go('setup'));return}
+  if(!SETUP){root.append(el('div','note','Reading setup…'));loadSetup().then(setupAgain);return}
   if(SETUP.error){root.append(el('div','note warn','<b>Could not read setup.</b> '+esc(SETUP.error)));return}
   const s=SETUP;
 
-  const again=async()=>{await loadSetup();go('setup')};
+  const again=async()=>{await loadSetup();setupAgain()};
 
   /* ---------------------------------------------------------------- what is done ----
    *
@@ -3776,7 +3812,7 @@ function setup(){
       if(!DEPS){
         b.append(el('div','tiny','Checking what is installed…'));
         /* Kicked off once, then the screen redraws itself with the answer. */
-        loadDeps(false).then(()=>{ if(CUR==='setup')go('setup') });
+        loadDeps(false).then(setupAgain);
       }else if(!DEPS.ok){
         b.append(setupRow('warn','Could not check',esc(DEPS.reason||'the check did not run')));
       }else{
@@ -3803,7 +3839,7 @@ function setup(){
         r.append(actBtn('Check again',async()=>{
           toast('Checking…');
           await loadDeps(true);
-          if(CUR==='setup')go('setup');
+          setupAgain();
         }));
         b.append(r);
       }
@@ -4153,7 +4189,9 @@ function setup(){
       if(!r.ok&&r.fix&&r.fix.screen&&r.fix.screen!=='setup'){
         const go2=el('button','mini','Go to '+r.fix.screen);
         go2.style.cssText='padding:.4rem .8rem;font-size:.78rem;white-space:nowrap';
-        go2.onclick=()=>go(r.fix.screen);
+        /* Closing first is load-bearing now that this lives in a panel: routing underneath it
+           would change the screen behind the scrim and leave the person looking at Settings. */
+        go2.onclick=()=>{settings(false);go(r.fix.screen)};
         row.append(go2);
       }
       nbody.append(row);
@@ -4300,7 +4338,14 @@ function setup(){
   refreshUpdates(false).catch(()=>{});
 }
 
-const R={today,accounts,review,discovery,outcomes,logs,setup};
+/**
+ * The screens. `setup` is deliberately NOT one of them any more.
+ *
+ * It is reached through `settings()` below, and `go()` iterates these keys to hide every screen
+ * but one — leaving setup in would hide `#v-setup` on every navigation, including while the
+ * Settings panel is open in front of the person reading it.
+ */
+const R={today,accounts,review,discovery,outcomes,logs};
 function go(v){
   CUR=v;
   document.querySelectorAll('.steps .step').forEach(b=>b.setAttribute('aria-current',b.dataset.v===v?'page':'false'));
@@ -4326,12 +4371,48 @@ function guide(open,section){
   $('#guideX').focus();
   try{localStorage.setItem('redbot.seenGuide','1')}catch{}
 }
+/* ---------------- settings ----------------
+ * The old Setup screen, opened from the gear instead of from the tab strip.
+ *
+ * WHY IT MOVED. Setup is configuration: an account, a model, a dashboard endpoint. An operator
+ * passes through it once and then walks past it every working day for the life of the install,
+ * where it takes up a slot beside the five screens that are the actual job. Everything in it is
+ * still reachable — one click, from every screen, instead of a permanent tab.
+ *
+ * It opens ITSELF when a blocking requirement is unmet (see load()), which is the one case where
+ * configuration IS the work. That is a fresh install, and a install that has since broken.
+ *
+ * `setup()` is re-run on every open rather than once, for the same reason `checkRequirements()`
+ * derives instead of remembering: a port gets taken, a browser gets closed, a key gets rotated.
+ * A panel showing what was true the last time it was opened would be worse than one showing
+ * nothing.
+ *
+ * One modal at a time — both this and the walkthrough own `#scrim`, and two open at once would
+ * leave the scrim behind when the first closed.
+ */
+function settings(open){
+  const p=$('#settings'), s=$('#scrim'), btn=$('#settingsBtn');
+  if(open&&!$('#guide').hidden)guide(false);
+  p.hidden=!open; s.hidden=!open;
+  btn.setAttribute('aria-expanded',String(open));
+  if(!open){btn.focus();return}
+  setup();
+  /* `$` is a one-argument querySelector, so this is scoped through the node, not through it. */
+  const body=p.querySelector('.guide-b'); if(body)body.scrollTop=0;
+  $('#settingsX').focus();
+}
+
 $('#help').onclick=()=>guide($('#guide').hidden,CUR);
 $('#guideX').onclick=()=>guide(false);
-$('#scrim').onclick=()=>guide(false);
+$('#settingsBtn').onclick=()=>settings($('#settings').hidden);
+$('#settingsX').onclick=()=>settings(false);
+/* The scrim closes whichever is open. It cannot close both blindly: calling guide(false) while
+   the settings panel is up would hide the scrim and leave the panel floating over a live page. */
+$('#scrim').onclick=()=>{ if(!$('#settings').hidden)settings(false); else guide(false); };
 addEventListener('keydown',e=>{
-  if(e.key==='Escape'&&!$('#guide').hidden)guide(false);
-  else if(e.key==='?'&&$('#guide').hidden&&!/^(INPUT|TEXTAREA)$/.test(e.target.tagName))guide(true,CUR);
+  if(e.key==='Escape'&&!$('#settings').hidden)settings(false);
+  else if(e.key==='Escape'&&!$('#guide').hidden)guide(false);
+  else if(e.key==='?'&&$('#guide').hidden&&$('#settings').hidden&&!/^(INPUT|TEXTAREA)$/.test(e.target.tagName))guide(true,CUR);
 });
 
 $('#theme').onclick=()=>{
@@ -4462,7 +4543,11 @@ async function load(){
 
   argusRecord();
   pulse();
-  go(blockers.length?'setup':CUR);
+  /* Navigation always lands on a WORK screen now. Setup is no longer one, so a blocking
+     requirement opens the Settings panel over the top instead of routing to it — the person still
+     sees the screen they were on behind it, and closing the panel does not strand them. */
+  go(CUR);
+  if(blockers.length)settings(true);
 
   /* THE WALKTHROUGH NO LONGER OPENS ITSELF (2026-08-01).
    *

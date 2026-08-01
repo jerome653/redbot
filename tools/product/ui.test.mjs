@@ -183,6 +183,19 @@ async function open(opts = {}) {
 
 /** Switch screen through the real tab button, the way a person does. */
 async function tab(page, v) {
+  /**
+   * Setup is no longer a tab. It is the Settings panel behind the gear, so "go to setup" is now a
+   * different gesture — and it is routed here rather than fixed at each call site, because every
+   * caller means the same thing by it: put that screen in front of me.
+   *
+   * The wait is on the PANEL, not on `#v-setup`: the section lives inside the panel and is no
+   * longer `hidden` itself, so waiting on it would pass before the panel had opened.
+   */
+  if (v === 'setup') {
+    await page.click('#settingsBtn');
+    await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });
+    return;
+  }
   await page.click(`.step[data-v="${v}"]`);
   await page.waitForFunction((k) => !document.querySelector('#v-' + k)?.hidden, v, { timeout: 5000 });
 }
@@ -269,7 +282,7 @@ test('the bar reports every screen\'s count, and the banner says nothing has bee
 const chromeText = (page) => page.evaluate(() =>
   [...document.body.children]
     .filter((n) => n.tagName !== 'SECTION' && n.tagName !== 'SCRIPT'
-                   && !['guide', 'scrim', 'toast'].includes(n.id))
+                   && !['guide', 'settings', 'scrim', 'toast'].includes(n.id))
     .map((n) => n.innerText || '')
     .join(' ')
     .replace(/\s+/g, ' ')
