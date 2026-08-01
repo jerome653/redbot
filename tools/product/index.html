@@ -1322,11 +1322,14 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
        vanished the moment you changed screen, so a run you did not personally start (or started
        before a reload) was unreachable. -->
   <nav class="steps" id="steps">
+    <!-- Ordered as the work runs: what to do today, what was found, what is waiting on you, what
+         came of it — and Accounts last, because who redbot posts as is set up once and then only
+         revisited when karma is re-checked. -->
     <button class="step" data-v="today" aria-current="page">Today <b id="nTod">0</b></button>
-    <button class="step" data-v="accounts">Accounts <span class="g" id="nAcc">0</span></button>
-    <button class="step" data-v="review">Review <span class="g" id="nRev">0</span></button>
     <button class="step" data-v="discovery">Threads <span class="g" id="nDisc">0</span></button>
+    <button class="step" data-v="review">Review <span class="g" id="nRev">0</span></button>
     <button class="step" data-v="outcomes">Results <span class="g" id="nOut">0</span></button>
+    <button class="step" data-v="accounts">Accounts <span class="g" id="nAcc">0</span></button>
     <!-- Log is NOT a tab. It is where you go when something has gone wrong or you want to watch a
          run you did not start — which is not five times a day, and a permanent tab for it costs
          every other tab a share of the row. It is a button in Settings, and `#nLog` still lives
@@ -2903,8 +2906,16 @@ function accounts(){
   /* The old nodes are about to be thrown away; a stale entry here would have paintPorts()
      writing into a card that is no longer on the page. */
   PORTNODES.clear();
-  r.append(el('h2','sec','Accounts'));
-  r.append(el('div','sub','who redbot would be posting as'));
+  const ahead=el('div','sec-row');
+  const aheads=el('div');
+  aheads.append(el('h2','sec','Accounts'));
+  aheads.append(el('div','sub','who redbot would be posting as'));
+  ahead.append(aheads);
+  const addBtnTop=el('button','mini srcbtn','Add an account');
+  addBtnTop.title='four steps, about ten minutes';
+  addBtnTop.onclick=()=>openDialog('Add an account','four steps, about ten minutes',addAccount);
+  ahead.append(addBtnTop);
+  r.append(ahead);
 
   /* ---------------- which account this machine acts as ----------------
    *
@@ -3118,14 +3129,6 @@ function accounts(){
    * to read the screen, the other is the same list of rules Today used to carry. They are in the
    * walkthrough, where every other "what am I looking at" already lives.
    */
-  const addRow=el('div');
-  addRow.style.cssText='margin-top:1rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap';
-  const addBtn=el('button','mini','Add an account');
-  addBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
-  addBtn.onclick=()=>openDialog('Add an account','four steps, about ten minutes',addAccount);
-  addRow.append(addBtn);
-  addRow.append(el('span','tiny','A folder on this machine is not proof of an account — see the walkthrough for how to read this screen.'));
-  cardCol.append(addRow);
 }
 
 /**
@@ -3260,8 +3263,18 @@ const STAGE=k=>k==null?null
 
 function today(){
   const r=$('#v-today'); r.textContent='';
-  r.append(el('h2','sec','Growing the accounts'));
-  r.append(el('div','sub','what to do today, per account'));
+  /* Same shape as Threads: the screen's own action at the end of the title row, where the eye
+     finishes, rather than as a card at the bottom nobody scrolls to. */
+  const thead=el('div','sec-row');
+  const theads=el('div');
+  theads.append(el('h2','sec','Growing the accounts'));
+  theads.append(el('div','sub','what to do today, per account'));
+  thead.append(theads);
+  const howBtn=el('button','mini srcbtn','Read the routine');
+  howBtn.title='The eight steps that keep a new account out of trouble';
+  howBtn.onclick=()=>guide(true,'today');
+  thead.append(howBtn);
+  r.append(thead);
 
   /* ================= the three zones ================= */
   const grid=el('div','grid3');
@@ -3418,26 +3431,6 @@ function today(){
   /* Both now live in Settings — see autoLoopCard(). Today ends with the checklist and the
      account cards, which is what "today" means. */
 
-  /**
-   * The routine MOVED TO THE WALKTHROUGH (2026-08-01), and what is left is the way in.
-   *
-   * It was eight numbered steps and about 450 words, under the day's checklist, on the screen the
-   * app opens on. Measured before the change: Today rendered 714 words against 6 controls — 133
-   * words per control, 2523px tall — the worst ratio in the app and the first thing anybody sees.
-   *
-   * None of it was wrong. It is a manual, and a manual on the landing screen is read once and
-   * scrolled past every day after that, pushing the checklist — the part you act on — below the
-   * fold. It now lives in the walkthrough, which is where "how do I do this" already lives, and
-   * this line opens it AT that section rather than making somebody hunt for it.
-   */
-  const howRow=el('div','card');
-  howRow.style.cssText='margin-top:1.4rem;display:flex;gap:.9rem;align-items:center;flex-wrap:wrap';
-  howRow.append(el('div','tiny','Never commented on Reddit before? The eight steps that keep a new account out of trouble are in the walkthrough.'));
-  const howBtn=el('button','mini','Read the routine');
-  howBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;margin-left:auto';
-  howBtn.onclick=()=>guide(true,'today');
-  howRow.append(howBtn);
-  r.append(howRow);
 
   /**
    * THE HARD LINES MOVED TO THE WALKTHROUGH (2026-08-01), and were not deleted.
@@ -4547,7 +4540,21 @@ function setup(){
   sum.append(el('span',null,reqLeft
     ? '<span class="tag no">'+reqLeft+' still needed</span>'
     : '<span class="tag ok">redbot can run</span>'));
-  root.append(sum);
+  /**
+   * THE WIZARD LIVES IN A FOLD OF ITS OWN.
+   *
+   * Eight steps with their progress bar is the tallest thing in Settings, and it is a first-run
+   * surface: once an install is set up it is a wall of ticks you scroll past to reach anything
+   * else. Folded, its summary line — "6 of 8 done", and whether redbot can run — is still the
+   * first thing you see, which is the only part that matters after setup.
+   *
+   * OPEN WHEN THERE IS STILL SOMETHING REQUIRED, so a fresh install, or one that has broken, opens
+   * on the work rather than on a closed heading.
+   */
+  const wiz=foldCard('Setup', doneCount+' of '+steps.length+' done'+(reqLeft?' · '+reqLeft+' still needed':''),
+                     {open:reqLeft>0});
+  const wroot=wiz.body;
+  wroot.append(sum);
 
   /**
    * THE BUILD CARD IS FIRST, and it is the one section that does not fold.
@@ -4612,8 +4619,9 @@ function setup(){
     });
     try{ st.build(card.body); }
     catch(e){ card.body.append(el('div','note warn','This step could not render: '+esc(String(e&&e.message||e)))); }
-    root.append(card);
+    wroot.append(card);
   });
+  root.append(wiz);
 
   /* ---------------------------------------------------------------- checked before every run ----
    *

@@ -239,6 +239,13 @@ async function tab(page, v) {
   if (v === 'setup') {
     await page.click('#settingsBtn');
     await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });
+    /* The eight-step wizard is folded now — it is a first-run surface, and after setup it is a
+       wall of ticks between you and everything else in Settings. Opened here so the tests that
+       drive its steps keep meaning what they meant. */
+    const wiz = page.locator('#v-setup details.fold').filter({ hasText: 'Setup' }).first();
+    if (await wiz.count() && !(await wiz.evaluate((n) => n.open))) {
+      await wiz.locator('summary').first().click();
+    }
     return;
   }
   /**
