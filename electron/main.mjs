@@ -268,10 +268,11 @@ async function openBoundBrowsers(port) {
   }
 
   for (const b of browsers) {
-    /* 'ours' is already this account's Chrome; 'foreign' is another program on the port and is a
-       fault to report, not to fight. Only 'free' is ours to take. */
+    /* 'ours' is the only state worth skipping — that Chrome is already open. Everything else is
+       handed to /api/account/open, which re-checks authoritatively and, since 2026-08-01, MOVES an
+       account off a port another program is holding rather than refusing. Deciding here which
+       states are openable would be a second copy of that rule, and the two would disagree. */
     if (b.state === 'ours') { boot_log(`browsers    ${b.handle} already open on ${b.port}`); continue; }
-    if (b.state !== 'free') { boot_log(`browsers    ${b.handle} NOT opened — ${b.detail || b.state}`); continue; }
 
     try {
       const res = await fetch(`${base}/api/account/open`, {
@@ -282,7 +283,7 @@ async function openBoundBrowsers(port) {
       });
       const out = await res.json().catch(() => ({}));
       boot_log(out && out.ok
-        ? `browsers    ${b.handle} opened on ${out.port ?? b.port}`
+        ? `browsers    ${b.handle} opened on ${out.port ?? b.port}${out.movedFrom ? ` (moved off ${out.movedFrom} — another program had it)` : ''}`
         : `browsers    ${b.handle} NOT opened — ${(out && out.error) || `HTTP ${res.status}`}`);
     } catch (e) {
       boot_log(`browsers    ${b.handle} NOT opened — ${e && e.message ? e.message : e}`);

@@ -4464,16 +4464,22 @@ async function load(){
   pulse();
   go(blockers.length?'setup':CUR);
 
-  /* The walkthrough no longer decides what first boot SHOWS — the gate above does — but it keeps
-     its own existing flag, `redbot.seenGuide`.
-     Renaming it to `seenTour` was the first attempt and was wrong twice over: it re-opens the
-     walkthrough for every existing operator (their seenGuide is already set), and it silently broke
-     the whole UI suite, which pre-sets seenGuide to keep the overlay from intercepting clicks — 14
-     tests failed with 30-second click timeouts against an overlay nobody could see.
-     It is suppressed while something is BLOCKING, because an overlay on top of the checklist hides
-     the thing the person has to act on. */
-  let seenGuide=false; try{seenGuide=localStorage.getItem('redbot.seenGuide')==='1'}catch{}
-  if(!seenGuide&&!blockers.length)guide(true);
+  /* THE WALKTHROUGH NO LONGER OPENS ITSELF (2026-08-01).
+   *
+   * It used to open on a first visit, keyed on `redbot.seenGuide`. Two things were wrong with that
+   * in the desktop app. The flag lives in the renderer's localStorage, which is per-install — so a
+   * reinstall, and every operator who has just been handed the app, meets a full-screen overlay
+   * before they have seen the thing it describes. And it landed in front of the one screen they
+   * had opened the app to look at, which is the definition of an interruption.
+   *
+   * It is not removed, it is unasked-for. The ? button and the ? key still open it, and opening it
+   * from a screen still highlights that screen's section — which is the moment somebody actually
+   * wants it: when they are looking at something and do not recognise it.
+   *
+   * `redbot.seenGuide` is deliberately still WRITTEN by `guide()`. The UI suite pre-sets it to keep
+   * the overlay from intercepting clicks, and renaming or dropping it broke 14 tests with 30-second
+   * click timeouts against an overlay nobody could see. Nothing reads it here any more.
+   */
 }
 load().catch(e=>{$('#banner').textContent='Could not load: '+e.message});
 pulseCheck(); setInterval(pulseCheck,15000);

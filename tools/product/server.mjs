@@ -1525,13 +1525,14 @@ async function launchChrome(handle) {
   // opened here is the same browser the CLI will later attach to. Reading the seed file
   // instead would open the wrong Chrome the moment the two disagreed.
   const { accounts } = await consoleAccounts();
-  const a = accounts.find((x) => x.handle === handle);
+  /* `let`, because a port held by another program is moved off below and the record changes. */
+  let a = accounts.find((x) => x.handle === handle);
   if (!a) return { ok: false, error: `${handle} is not set up.` };
   const bin = chromeBinary();
   if (!bin) return { ok: false, error: 'Chrome could not be found in the usual place. Set CHROME_PATH and try again.' };
 
   /**
-   * Refuse when the port is not this account's to take.
+   * Never open a window on a port that is not this account's to take.
    *
    * Chrome given an occupied --remote-debugging-port does NOT fail: it starts, silently gives
    * up the port to whoever holds it, and the window looks perfectly normal. redbot then
@@ -1540,11 +1541,44 @@ async function launchChrome(handle) {
    * before a window is opened that would look like success.
    */
   const [live] = await portStatusImpl([a]);
-  if (live && live.state === 'foreign') {
-    return { ok: false, error: live.detail };
-  }
   if (live && live.ours) {
     return { ok: true, handle, port: a.debugPort, profileDir: a.profileDir, alreadyRunning: true };
+  }
+
+  /**
+   * A port somebody else is holding is MOVED OFF, not reported.
+   *
+   * This used to return `live.detail` and stop: "port 9222 is held by msedgewebview2.exe, pick
+   * another one on the Accounts screen." Every word of that is true and none of it is the
+   * operator's problem. A debug port is an implementation detail of how redbot talks to Chrome —
+   * a person cannot be expected to know why 9222 matters, which number is safe, or that Lenovo
+   * Vantage took it at boot. Handing them that decision is handing them a puzzle they have no
+   * way to solve, in exchange for nothing: any free port works equally well.
+   *
+   * So the account is reallocated to the next port that actually binds, the record is updated,
+   * and the browser opens. `changeAccountPort({auto:true})` is the SAME allocator the Accounts
+   * screen's "pick one for me" button uses — this is that button, pressed automatically at the
+   * only moment it was ever needed.
+   *
+   * WHAT THIS IS NOT: it is not attaching to the squatter. That is the defect the foreign check
+   * was written for — Chrome handed an occupied --remote-debugging-port starts anyway, silently
+   * yields the port, and redbot then reads whatever answers, which is how a signed-in account
+   * once reported "not signed in". Moving to a free port is the opposite of that: it guarantees
+   * the browser redbot opens is the browser redbot attaches to.
+   *
+   * It reports what it did rather than doing it silently — `movedFrom` is surfaced so a person
+   * who is curious can see it, and so a port that moves every single launch is visible as a
+   * pattern instead of as nothing at all.
+   */
+  let movedFrom = null;
+  if (live && live.state === 'foreign') {
+    const moved = await changePortImpl({ handle: a.handle, auto: true });
+    if (!moved.ok) {
+      /* No free port at all is a real fault and stays a refusal — but it says what was tried. */
+      return { ok: false, error: `${live.detail} redbot tried to move ${a.handle} to a free port and could not: ${moved.error}` };
+    }
+    movedFrom = a.debugPort;
+    a = moved.account ?? { ...a, debugPort: moved.port };
   }
 
   const dir = join(DATA, a.profileDir);
@@ -1556,7 +1590,7 @@ async function launchChrome(handle) {
       'https://www.reddit.com/login'
     ], { detached: true, stdio: 'ignore' });
     child.unref();
-    return { ok: true, handle, port: a.debugPort, profileDir: a.profileDir };
+    return { ok: true, handle, port: a.debugPort, profileDir: a.profileDir, ...(movedFrom ? { movedFrom } : {}) };
   } catch (e) {
     return { ok: false, error: String(e && e.message || e) };
   }

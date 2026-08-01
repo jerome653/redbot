@@ -331,12 +331,23 @@ test('the theme toggle flips the document theme both ways', async () => {
   } finally { await context.close(); }
 });
 
-test('the guide opens on first visit, and only on first visit', async () => {
+/**
+ * The guide never opens itself — not even on a first visit.
+ *
+ * This assertion is the REVERSE of the one it replaces, and the reversal is the point. The
+ * walkthrough used to open on a first visit, which in a desktop app means every reinstall and
+ * every freshly handed-over machine begins with a full-screen overlay in front of the screen the
+ * person opened the app to look at. `seenGuide: false` is left in deliberately: it is the exact
+ * condition that used to trigger it, so this test fails the moment the behaviour comes back.
+ */
+test('the guide never opens unasked, not even on a first visit', async () => {
   const first = await open({ seenGuide: false });
   try {
-    await first.page.waitForSelector('#guide:not([hidden])', { timeout: 8000 });
-    assert.ok(await first.page.isVisible('#guide'), 'a first-time visitor must be told what this is');
-    await shot(first.page, '01-guide');
+    /* Given time to do the wrong thing rather than checked instantly — an overlay that appears
+       after the first render would otherwise pass. */
+    await first.page.waitForTimeout(2500);
+    assert.ok(await first.page.isHidden('#guide'), 'the walkthrough opened by itself');
+    await shot(first.page, '01-no-guide-on-first-visit');
   } finally { await first.context.close(); }
 
   const again = await open({ seenGuide: true });
