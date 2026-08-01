@@ -289,25 +289,38 @@ let consolePort = null;
  * app exits.
  */
 async function closeBootBrowsers() {
-  const deadline = new Promise((r) => setTimeout(r, 8_000).unref?.());
-  const work = (async () => {
-    for (const handle of bootOpened) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${consolePort}/api/account/stop`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ handle }),
-          signal: AbortSignal.timeout(4_000)
-        });
-        const out = await res.json().catch(() => ({}));
-        boot_log(out && out.ok
-          ? `browsers    ${handle} closed on the way out`
-          : `browsers    ${handle} NOT closed — ${(out && out.error) || `HTTP ${res.status}`}`);
-      } catch (e) {
-        boot_log(`browsers    ${handle} NOT closed — ${e && e.message ? e.message : e}`);
-      }
+  /**
+   * TIMED FOR WHAT A STOP ACTUALLY COSTS, and measured rather than guessed.
+   *
+   * The first version gave each stop 4s in sequence, and both timed out on a real quit —
+   * "NOT closed — The operation was aborted due to timeout" for two browsers that were then
+   * abandoned exactly as before. Stopping is not a cheap call: `stopAccountBrowser` proves the
+   * process is redbot's own from its `--user-data-dir` before killing it, and src/ports.ts
+   * measures that inspection at roughly 6.8s for three ports on an idle machine. A stop that
+   * trusted the port number instead would be instant and would sometimes terminate Lenovo
+   * Vantage, so the cost is the point, not an inefficiency to trim.
+   *
+   * IN PARALLEL for the same reason. Sequential stops pay that inspection once per account;
+   * fired together they overlap, so the wall clock is one inspection rather than N — which is
+   * what makes a real timeout affordable in a quit path.
+   */
+  const deadline = new Promise((r) => setTimeout(r, 20_000).unref?.());
+  const work = Promise.allSettled(bootOpened.map(async (handle) => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${consolePort}/api/account/stop`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ handle }),
+        signal: AbortSignal.timeout(15_000)
+      });
+      const out = await res.json().catch(() => ({}));
+      boot_log(out && out.ok
+        ? `browsers    ${handle} closed on the way out`
+        : `browsers    ${handle} NOT closed — ${(out && out.error) || `HTTP ${res.status}`}`);
+    } catch (e) {
+      boot_log(`browsers    ${handle} NOT closed — ${e && e.message ? e.message : e}`);
     }
-  })();
+  }));
   await Promise.race([work, deadline]);
 }
 
