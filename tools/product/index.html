@@ -2481,6 +2481,41 @@ function paintPortBar(node,s){
   const post=(path,body)=>fetch(path,{method:'POST',headers:{'content-type':'application/json'},
     body:JSON.stringify(body)}).then(r=>r.json());
 
+  /**
+   * Use a profile that is already signed in, rather than signing in again.
+   *
+   * The commonest real situation on a machine that has run redbot before: the Reddit session
+   * exists, in a folder from an earlier install or a checkout, and redbot has opened a brand-new
+   * empty profile beside it and reported the account signed out. Nothing is copied — a Chrome
+   * profile is bound to one Windows user, so it is used where it already is.
+   *
+   * Offered while the profile has never been used, which is exactly when it helps and when
+   * repointing it costs nothing. Once a profile IS in use, changing it is a bigger decision than
+   * a text box on a card.
+   */
+  if(account.profileState!=='used'){
+    /* Labelled "existing", not "signed-in": this control sits on a card whose folder has NEVER
+       been used, and ui.test.mjs asserts such a card never carries the words "signed-in profile".
+       That assertion is protecting the whole point of the three-state display — an empty folder
+       must not read as a session. The button offers to go and find one; it is not a claim that
+       this account has one. */
+    bar.append(mini('Use an existing profile',`Point ${account.handle} at a Chrome profile that already has a Reddit login`,async()=>{
+      const p=prompt(`Full path to the Chrome profile folder that is already signed in as ${account.handle}.\n\n`
+        +'This is the --user-data-dir folder — the one CONTAINING "Default", not "Default" itself.\n'
+        +'Nothing is copied; redbot uses it where it is.');
+      if(p===null)return;
+      const held=busy('Checking that folder…');
+      try{
+        const r=await post('/api/account/use-profile',{handle:account.handle,path:p});
+        if(!r.ok){say(r.error||'that folder could not be used',true);held.fail(r.error);return}
+        held.update('Re-reading accounts…');
+        await loadPorts();
+        await load();
+        held.done('Using that profile');
+      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+    }));
+  }
+
   /* Both of these spawn or terminate a real process and then re-read who owns the port —
      several seconds each, with nothing on screen to say so before this. */
   if(!s||s.state==='free'){

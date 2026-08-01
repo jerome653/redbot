@@ -27,7 +27,8 @@ import {
 import type { AccountDependents } from './db/accounts.js';
 import { portIsFree, statusForAccounts } from './ports.js';
 import { machineId } from './machine.js';
-import { allocateProfileDir } from './profiles.js';
+import { allocateProfileDir, profileState, resolveProfileDir } from './profiles.js';
+import { isAbsolute, dirname, basename } from 'node:path';
 
 /* Re-exported: the allocator here and the status screen must ask "is this port free" in exactly
    one way. Two definitions is how a console hands out a port it has just called occupied. */
@@ -703,6 +704,112 @@ export async function changeAccountPort(body: {
 
   forgetAccounts();
   return { ok: true, account, storedIn, port };
+}
+
+/**
+ * Point an account at a Chrome profile that is ALREADY SIGNED IN, wherever it lives.
+ *
+ * THE PROBLEM THIS SOLVES. Every other path here allocates a fresh folder and creates it empty,
+ * which is right for a new account and wrong for the commonest real situation: the operator has
+ * already signed in to Reddit in a Chrome profile — an earlier install, a checkout, a folder they
+ * made by hand — and redbot cheerfully opens a brand-new empty one beside it and reports the
+ * account signed out. Signing in again is not the fix; the session already exists.
+ *
+ * The folder is USED WHERE IT IS. Nothing is copied: a Chrome profile's cookie and login stores
+ * are DPAPI-bound to one Windows user, so copying is at best pointless and at worst produces a
+ * profile that looks populated and cannot authenticate. `profileDir` simply holds an absolute
+ * path, which `resolveProfileDir` understands everywhere a folder is resolved.
+ *
+ * WHAT IT REFUSES, and why each one is a real failure rather than a formality:
+ *
+ *  - a running browser — the same rule `changeAccountPort` follows. Repointing the record while
+ *    Chrome holds the old folder leaves the two naming different profiles.
+ *  - a folder with no Chrome markers — `Default`/`Local State`. Adopting an empty directory is
+ *    exactly the outcome this function exists to prevent, so it must not be the thing it does.
+ *  - a folder another account already uses — two accounts in one profile is two identities in one
+ *    browser, which is the rule `data/accounts.json` opens with.
+ */
+export async function adoptProfileDir(body: {
+  handle?: unknown; path?: unknown;
+}): Promise<CreateResult> {
+  const handle = String(body.handle ?? '').trim();
+  if (!HANDLE_RE.test(handle)) {
+    return { ok: false, error: 'A Reddit username is 3–20 characters: letters, numbers, underscore or dash.' };
+  }
+
+  const raw = String(body.path ?? '').trim().replace(/^"|"$/g, '');
+  if (!raw) return { ok: false, error: 'Give the folder that holds the signed-in Chrome profile.' };
+  if (!isAbsolute(raw)) {
+    return { ok: false, error: `"${raw}" is not a full path. Paste the whole folder, starting from the drive.` };
+  }
+  if (!existsSync(raw)) return { ok: false, error: `There is no folder at ${raw}.` };
+
+  /* `used`, not merely `exists`: an empty folder is what the operator is trying to get away from.
+     The dirname/basename split is because profileState resolves relative to a root. */
+  if (profileState(dirname(raw), basename(raw)) !== 'used') {
+    return {
+      ok: false,
+      error: `${raw} does not look like a Chrome profile that has been signed in to — `
+           + 'it holds neither "Default" nor "Local State". Point at the --user-data-dir folder, '
+           + 'not at the "Default" folder inside it.'
+    };
+  }
+
+  const known = await knownAccounts();
+  const current = known.find((a) => a.handle.toLowerCase() === handle.toLowerCase());
+  if (!current) return { ok: false, error: `${handle} is not set up.` };
+
+  const [live] = await statusForAccounts([current]);
+  if (live?.ours) {
+    return {
+      ok: false,
+      error: `${current.handle}'s browser is running on port ${current.debugPort}. Stop it first — `
+           + 'moving the record while Chrome holds the old profile leaves them pointing at different browsers.'
+    };
+  }
+
+  const clash = known.find((a) =>
+    a.handle.toLowerCase() !== handle.toLowerCase() &&
+    typeof a.profileDir === 'string' &&
+    resolveProfileDir(DATA, a.profileDir).toLowerCase() === raw.toLowerCase());
+  if (clash) {
+    return { ok: false, error: `${clash.handle} already uses that profile. Two accounts in one profile is two identities in one browser.` };
+  }
+
+  const account: AccountRecord = { ...current, profileDir: raw };
+
+  let storedIn: 'database' | 'seed-file' = 'seed-file';
+  if (!dbUnavailableReason()) {
+    try {
+      await upsertAccounts(getPool(), [account]);
+      storedIn = 'database';
+    } catch (e) {
+      return { ok: false, error: `The profile could not be saved to the database: ${
+        e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+
+  /* The seed file is kept in lockstep, exactly as every other mutation here does — it is the
+     fallback the day the database is down, and an account it cannot see is an account with no
+     known profile. */
+  let seed: Record<string, unknown> = { accounts: [] };
+  if (existsSync(accountsPath())) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(accountsPath(), 'utf8'));
+      if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { accounts?: unknown }).accounts)) {
+        seed = parsed as Record<string, unknown>;
+      }
+    } catch { /* rewritten below from what is known */ }
+  }
+  const list = seed.accounts as AccountRecord[];
+  const at = list.findIndex((a) => a && typeof a.handle === 'string'
+                                && a.handle.toLowerCase() === handle.toLowerCase());
+  if (at >= 0) list[at] = account; else list.push(account);
+  mkdirSync(DATA, { recursive: true });
+  writeFileSync(accountsPath(), JSON.stringify(seed, null, 2), 'utf8');
+
+  forgetAccounts();
+  return { ok: true, account, storedIn };
 }
 
 /** The fields the console may offer, exported so the UI and the tests cannot drift from it. */

@@ -91,7 +91,7 @@ const PORT = portArg > -1 ? Number(process.argv[portArg + 1]) : 7902;
  */
 let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccountImpl = null,
     deleteAccountImpl = null, changePortImpl = null, suggestPortImpl = null,
-    portStatusImpl = null, stopBrowserImpl = null, setUpHereImpl = null,
+    portStatusImpl = null, stopBrowserImpl = null, setUpHereImpl = null, adoptProfileImpl = null,
     boundHandlesImpl = null, machineImpl = null, pagesApi = null, summaryApi = null,
     selectAccountImpl = null, selectedHandleImpl = null,
     dbStatus = null, sourcesApi = null, requirementsApi = null, configApi = null,
@@ -140,6 +140,7 @@ try {
   portStatusImpl = ports.statusForAccounts;
   stopBrowserImpl = ports.stopAccountBrowser;
   setUpHereImpl = a.setUpAccountHere;
+  adoptProfileImpl = a.adoptProfileDir;
   boundHandlesImpl = () => dbAccounts.boundHandles(db.getPool());
   /**
    * Which account this machine acts as (migration 0015).
@@ -497,7 +498,11 @@ async function buildState(opts = {}) {
       debugPort: cfg ? cfg.debugPort : null,
       note: cfg ? cfg.note : null,
       /* a profile folder that actually exists on disk, not merely named in the config */
-      profileExists: cfg && cfg.profileDir ? existsSync(join(DATA, cfg.profileDir)) : false,
+      /* resolveProfileDir, not join: an adopted profile carries an ABSOLUTE path, and
+         join(DATA, 'D:\\...') yields a path that exists nowhere — so this would report a
+         signed-in profile as missing. See src/profiles.ts. */
+      profileExists: cfg && cfg.profileDir && profilesApi
+        ? existsSync(profilesApi.resolveProfileDir(DATA, cfg.profileDir)) : false,
       /**
        * THREE states, not two — see src/profiles.ts.
        *
@@ -1586,7 +1591,10 @@ async function launchChrome(handle, { background = false } = {}) {
     a = moved.account ?? { ...a, debugPort: moved.port };
   }
 
-  const dir = join(DATA, a.profileDir);
+  /* resolveProfileDir, not join — an adopted profile's path is absolute, and join would build a
+     folder that exists nowhere, so Chrome would open a brand-new empty profile and report the
+     account signed out. See src/profiles.ts. */
+  const dir = profilesApi ? profilesApi.resolveProfileDir(DATA, a.profileDir) : join(DATA, a.profileDir);
 
   /**
    * OFF-SCREEN, NOT HEADLESS — and the difference is the whole product.
@@ -2255,6 +2263,19 @@ const server = createServer((req, res) => {
        * pulls in Playwright, and the console has no other reason to load it. A screen nobody has
        * opened should not cost that.
        */
+      /**
+       * Use a Chrome profile that is already signed in, instead of signing in again.
+       *
+       * The rules live in dist/console-accounts.js beside the ones create/change-port follow, so
+       * the console cannot grow its own idea of what a valid profile is.
+       */
+      if (url.pathname === '/api/account/use-profile') {
+        if (!adoptProfileImpl) {
+          return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing — run npm run build' }));
+        }
+        const r = await adoptProfileImpl({ handle: body.handle, path: body.path });
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
       if (url.pathname === '/api/account/show') {
         const { accounts: accts } = await consoleAccounts();
         const a = accts.find((x) => x.handle === String(body.handle || ''));

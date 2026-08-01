@@ -30,7 +30,7 @@
  * ---------------------------------------------------------------------------
  */
 import { existsSync as fsExists, mkdirSync as fsMkdir, readdirSync as fsReaddir } from 'node:fs';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
 
 export const PROFILE_PREFIX = 'chrome-profile-';
 
@@ -61,6 +61,25 @@ export function profileName(i: number): string {
   return PROFILE_PREFIX + s;
 }
 
+/**
+ * Where an account's Chrome profile actually lives.
+ *
+ * `profileDir` is normally a bare folder name under the data root — that is what `allocateProfileDir`
+ * hands out, and keeping it relative is what lets the whole data directory move.
+ *
+ * It may ALSO be an absolute path, and that is not an accident. An operator who has already signed
+ * in to Reddit in a Chrome profile somewhere else should be able to point an account at it rather
+ * than sign in a second time into an empty folder redbot just created. A Chrome profile carries
+ * DPAPI-bound session state; it cannot be copied to another machine, but it can be USED where it
+ * already is.
+ *
+ * `join()` cannot express that — `join('C:\\app', 'D:\\real')` yields `C:\app\D:\real`, a path that
+ * exists nowhere — so every caller resolving a profile folder goes through here instead.
+ */
+export function resolveProfileDir(dataRoot: string, dir: string): string {
+  return isAbsolute(dir) ? dir : join(dataRoot, dir);
+}
+
 /** `missing` — no folder. `empty` — folder made, never used. `used` — Chrome has a profile here. */
 export type ProfileState = 'missing' | 'empty' | 'used';
 
@@ -82,7 +101,7 @@ export function profileState(
   const exists = io.exists ?? fsExists;
   const readdir = io.readdir ?? fsReaddir;
   if (!dir) return 'missing';
-  const full = join(dataRoot, dir);
+  const full = resolveProfileDir(dataRoot, dir);
   if (!exists(full)) return 'missing';
   try {
     const entries = readdir(full);
@@ -167,7 +186,7 @@ export function ensureProfileDirs(
     if (seen.has(dir.toLowerCase())) continue;
     seen.add(dir.toLowerCase());
 
-    const full = join(dataRoot, dir);
+    const full = resolveProfileDir(dataRoot, dir);
     if (exists(full)) continue;
     try {
       mkdir(full);

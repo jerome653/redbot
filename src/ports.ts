@@ -22,6 +22,7 @@ import { createServer } from 'node:net';
 import { existsSync, openSync, closeSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DATA } from './config.js';
+import { resolveProfileDir } from './profiles.js';
 import type { AccountRecord } from './config.js';
 
 /**
@@ -335,7 +336,7 @@ export async function statusForAccounts(accounts: AccountRecord[]): Promise<Port
   const { owners, reason: lookupReason } = await inspectPorts(ports);
 
   return Promise.all(accounts.map(async (a): Promise<PortStatus> => {
-    const profileOnDisk = !!a.profileDir && existsSync(join(DATA, a.profileDir));
+    const profileOnDisk = !!a.profileDir && existsSync(resolveProfileDir(DATA, a.profileDir));
 
     if (typeof a.debugPort !== 'number') {
       return {
@@ -346,7 +347,7 @@ export async function statusForAccounts(accounts: AccountRecord[]): Promise<Port
 
     const owner = owners.get(a.debugPort);
     const cdp = await probeCdp(a.debugPort);
-    const expected = a.profileDir ? join(DATA, a.profileDir) : null;
+    const expected = a.profileDir ? resolveProfileDir(DATA, a.profileDir) : null;
 
     // Nothing holds the port and nothing answers: not running. The ordinary resting state.
     if (!owner && !cdp.up) {
