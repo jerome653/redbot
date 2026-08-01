@@ -843,6 +843,17 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
 .track i.mid{background:var(--amber)} .track i.done{background:var(--jade)}
 .wtoday{margin-top:1.1rem;padding-top:1rem;border-top:1px solid var(--edge)}
 .wtoday h4{font-family:var(--mono);font-size:.665rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);margin:0 0 .6rem;font-weight:600}
+/* A screen heading with its own action at the end of the row. The action is where the eye
+   finishes rather than where the body begins. */
+.sec-row{display:flex;align-items:flex-start;gap:1rem;flex-wrap:wrap}
+.sec-row>div:first-child{flex:1;min-width:0}
+/* The one control on Threads that changes what redbot DOES, rather than reporting what it did. */
+button.srcbtn{
+  border-color:var(--ember);color:var(--ember);
+  padding:.5rem 1rem;font-size:.8rem;flex:none;align-self:center;
+}
+button.srcbtn:hover{background:color-mix(in srgb,var(--ember) 14%,transparent)}
+
 /* A Settings section that folds. The chevron turns; the header is otherwise the `.collect-h` the
    unfolded cards already use, so a folded section and a plain one read as the same object. */
 .fold>summary{cursor:pointer;list-style:none;align-items:center}
@@ -2108,6 +2119,13 @@ function collecting(root){
   const s=S.collect;
   if(!s){root.append(el('div','note warn','<b>No sources file.</b> Add <code>data/sources.json</code> to choose where redbot looks.'));return}
 
+  /* Who this machine acts as, and which subreddits that account declares — the pair the prefilter
+     compares every collected thread against. Read here so each source row can say, before any
+     browser work, whether what it collects would survive. */
+  const actingHandle=collectAcctGet(S.accounts||[]);
+  const actingAcct=(S.accounts||[]).find(a=>a.handle===actingHandle)||null;
+  const actingSubs=actingAcct&&Array.isArray(actingAcct.subreddits)?actingAcct.subreddits:null;
+
   const box=el('div','collect');
   box.append(el('div','collect-h','<h3>Where redbot looks</h3>'+
     `<span class="hint">${s.maxPerRun?esc(s.maxPerRun+' threads per run'):''}</span>`));
@@ -2137,6 +2155,30 @@ function collecting(root){
       const n=kind==='sub'?((s.collectedByKey||{})[String(id).toLowerCase()]||0):null;
       row.append(el('div','src-n',n==null?'':`${n} on file`));
       b.append(row);
+
+      /**
+       * SAY IT HERE, NOT AFTER A TWO-MINUTE COLLECT.
+       *
+       * The prefilter drops a thread whose subreddit is not one the ACTING account declares —
+       * `outside-pilot`, rendered as "wrong subreddit". Nothing checked that when the source was
+       * added, so redbot would open Chrome, read fifteen threads over a couple of minutes, and
+       * then discard every one of them for coming from exactly where it was told to look.
+       * Measured on this machine: 20 collected, 20 dropped, 14 of them "wrong subreddit".
+       *
+       * A WARNING, NOT A BLOCK. Widening the account is a legitimate answer and so is collecting
+       * for a different account — but it is a decision to make in a second, not after the browser
+       * work is done.
+       */
+      if(kind==='sub'&&actingSubs&&actingSubs.length&&
+         !actingSubs.some(x=>String(x).toLowerCase()===String(id).toLowerCase())){
+        const w=el('div','note warn');
+        w.style.cssText='margin:.1rem 0 .5rem 2.6rem;padding:.5rem .7rem';
+        w.innerHTML=`<b>${esc(actingHandle)} does not speak in r/${esc(id)}.</b> `
+          +`It declares ${actingSubs.map(x=>'r/'+esc(x)).join(', ')}, so threads collected here `
+          +`are dropped as “wrong subreddit” before anything is written. Add r/${esc(id)} to the `
+          +`account, or collect as somebody who covers it.`;
+        b.append(w);
+      }
     });
   };
   rows('sub',s.subreddits,'subreddits to read',x=>x.name,x=>x.why);
@@ -2256,8 +2298,30 @@ function discovery(){
   /* The first page arrives inside /api/state so the screen paints without a second round trip;
      after that PAGE_STATE owns the position and `d.items` is whatever page was last fetched. */
   seedPage('threads',d.total,d.offset,d.limit);
-  r.append(el('h2','sec','Threads redbot found'));
-  r.append(el('div','sub',esc(`${d.threadsCollected} collected · ${d.assessed} looked at · ${d.contribute} worth answering · ${d.skip} left alone · ${d.drafted} written`)));
+  /**
+   * THE HEADING ROW CARRIES THE ONE CONTROL THIS SCREEN HAS.
+   *
+   * "Where redbot looks" was a button in the body, under the funnel, in the reading order of a
+   * footnote — for the only thing on Threads that changes what the screen will show next time.
+   * It sits at the end of the title row instead: the first place the eye lands, and the
+   * conventional home for a screen-level action.
+   *
+   * `ember` because it is the one thing here that changes what redbot DOES. Everything else on
+   * this screen reports; this decides.
+   */
+  const head=el('div','sec-row');
+  const heads=el('div');
+  heads.append(el('h2','sec','Threads redbot found'));
+  heads.append(el('div','sub',esc(`${d.threadsCollected} collected · ${d.assessed} looked at · ${d.contribute} worth answering · ${d.skip} left alone · ${d.drafted} written`)));
+  head.append(heads);
+
+  const nOn=((S.collect&&S.collect.subreddits)||[]).filter(x=>x.enabled!==false).length
+           +((S.collect&&S.collect.searches)||[]).filter(x=>x.enabled!==false).length;
+  const srcBtn=el('button','mini srcbtn','Where redbot looks');
+  srcBtn.title=nOn?(nOn+' source'+(nOn===1?'':'s')+' switched on'):'no sources switched on — nothing would be collected';
+  srcBtn.onclick=()=>openDialog('Where redbot looks',nOn+' source'+(nOn===1?'':'s')+' switched on',collecting);
+  head.append(srcBtn);
+  r.append(head);
 
   /* The funnel and what came back go first; the collect controls sit under them. Reading the
      result is the frequent task and collecting is the occasional one — leading with the tall
@@ -2351,24 +2415,6 @@ function discovery(){
   }
   grid.append(drop);
   r.append(grid);
-  /**
-   * "WHERE REDBOT LOOKS" IS A DIALOG.
-   *
-   * Sources, the add-a-source form and the collect control — a full panel, permanently, on the
-   * screen you come to in order to READ what was collected. Choosing where it looks is done once
-   * and revisited rarely; reading threads is done every day. The button is the way in, and the
-   * dialog closes itself when a run starts so the log is not behind it.
-   */
-  const srcRow=el('div');
-  srcRow.style.cssText='margin:1rem 0 .2rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap';
-  const srcBtn=el('button','mini','Where redbot looks');
-  srcBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
-  const nOn=((S.collect&&S.collect.subreddits)||[]).filter(x=>x.enabled!==false).length
-           +((S.collect&&S.collect.searches)||[]).filter(x=>x.enabled!==false).length;
-  srcBtn.onclick=()=>openDialog('Where redbot looks',nOn+' source'+(nOn===1?'':'s')+' switched on',collecting);
-  srcRow.append(srcBtn);
-  srcRow.append(el('span','tiny',nOn?(nOn+' source'+(nOn===1?'':'s')+' switched on'):'no sources switched on — nothing would be collected'));
-  r.append(srcRow);
 
   r.append(el('div','note',`<b>Leaving threads alone is most of the value.</b> ${d.skip} of the ${d.assessed} threads looked at were dropped before anyone spent time on them — a guide rather than a question, one already solved, or a subject these accounts cannot honestly speak to.`));
 }
@@ -2869,58 +2915,20 @@ function accounts(){
    *
    * Rendered whenever there is a choice to make. With a single account there is nothing to choose
    * and `selectedAccount()` resolves it by arithmetic, so a picker would be ceremony. */
-  if(S.accounts.length>1){
-    const sel=(SETUP&&!SETUP.error)?(SETUP.requirements||[]).find(x=>x.id==='account'):null;
-    const acting=sel&&sel.ok?(sel.detail.replace(/^acting as /,'')):null;
-    const box=el('div','collect');
-    box.append(el('div','collect-h',
-      '<h3>'+(acting?'This machine acts as '+esc(acting):'Choose who this machine acts as')+'</h3>'+
-      '<span class="hint">redbot refuses to act until one is chosen</span>'));
-    const bb=el('div','collect-b');
-    if(!acting){
-      bb.append(el('div','tiny',
-        'Nothing runs while this is unset — a pass that guessed would act as the wrong person.'));
-    }
-    for(const a of S.accounts){
-      const row=el('div','src-row');
-      const tag=el('span','tag '+(a.handle===acting?'ok':'no'));
-      tag.textContent=a.handle===acting?'acting as':'not selected';
-      row.append(tag);
-      const mid=el('div');
-      mid.append(el('div','src-t',esc(a.handle)));
-      if(a.role)mid.append(el('div','src-w',esc(a.role)));
-      row.append(mid);
-      if(a.handle!==acting){
-        const pick=el('button','btn tiny','Act as this account');
-        /* `fetch` directly rather than the `post` helper: that helper is declared with `const`
-           INSIDE addAccount() and editAccount(), so it is not in scope here at all — referencing it
-           would be a ReferenceError the moment somebody opened this screen. */
-        pick.onclick=async()=>{
-          pick.disabled=true; pick.textContent='choosing…';
-          let res=null;
-          try{
-            res=await fetch('/api/account/select',{
-              method:'POST',headers:{'content-type':'application/json'},
-              body:JSON.stringify({handle:a.handle})
-            }).then(x=>x.json());
-          }catch(e){ res={ok:false,error:String(e&&e.message||e)} }
-          if(res&&res.ok){
-            /* Re-read setup AND state: the selection changes which browser every other screen
-               reports on, so a partial refresh would leave the rest of the app describing the
-               previous account. */
-            await loadSetup(); await load(); go('accounts');
-            toast('redbot now acts as '+a.handle);
-          }else{
-            pick.disabled=false; pick.textContent='Act as this account';
-            toast((res&&res.error)||'could not choose that account');
-          }
-        };
-        row.append(pick);
-      }
-      bb.append(row);
-    }
-    box.append(bb); r.append(box);
-  }
+  /**
+   * THE "THIS MACHINE ACTS AS …" PANEL IS GONE, and the choosing moved onto the cards.
+   *
+   * It was a summary band above the account cards, restating each account's name and role and
+   * offering "Act as this account" — the same accounts, listed twice on one screen, with the
+   * action on the copy that carried the least information about them.
+   *
+   * The capability could not simply be deleted: the cards had no selector, `account` is a BLOCKING
+   * requirement, and an install with two accounts would have been left unable to choose and
+   * refusing to act. So the button is on each card now, beside the account it selects.
+   */
+  const selReq=(SETUP&&!SETUP.error)?(SETUP.requirements||[]).find(x=>x.id==='account'):null;
+  const acting=selReq&&selReq.ok?(selReq.detail.replace(/^acting as /,'')):null;
+
 
   /* ---- the limits actually in force, as a rail beside the cards ---- */
   const grid=el('div','grid2');
@@ -2974,6 +2982,48 @@ function accounts(){
     c.append(el('div','chead',`<b>${esc(a.handle)}</b>`+
       (a.role?`<span class="tag">${esc(a.role)}</span>`:'')+
       `<span class="tag ${a.stage==='warming'?'no':a.stage==='unmeasured'?'stop':'ok'}">${esc(a.stage==='warming'?'still growing':a.stage==='unmeasured'?'never measured':a.stage)}</span>`));
+
+    /**
+     * Which account this machine acts as, chosen ON the account.
+     *
+     * Only offered when there is a choice to make: with one account `selectedAccount()` resolves
+     * it by arithmetic and a picker would be ceremony. The one currently acting says so and is not
+     * a button — there is nothing to press, and a control that reselects what is already selected
+     * is a control that does nothing.
+     */
+    if(S.accounts.length>1){
+      if(a.handle===acting){
+        c.append(el('div','tiny','<span class="tag ok">acting as</span> redbot acts as this account on this machine.'));
+      }else{
+        const pickRow=el('div');pickRow.style.marginTop='.5rem';
+        const pick=el('button','mini','Act as this account');
+        pick.style.cssText='padding:.4rem .8rem;font-size:.78rem';
+        /* `fetch` directly rather than the `post` helper: that helper is declared with `const`
+           INSIDE addAccount() and editAccount(), so it is not in scope here — referencing it would
+           be a ReferenceError the moment somebody opened this screen. */
+        pick.onclick=async()=>{
+          pick.disabled=true; pick.textContent='choosing…';
+          let res=null;
+          try{
+            res=await fetch('/api/account/select',{
+              method:'POST',headers:{'content-type':'application/json'},
+              body:JSON.stringify({handle:a.handle})
+            }).then(x=>x.json());
+          }catch(e){ res={ok:false,error:String(e&&e.message||e)} }
+          if(res&&res.ok){
+            /* Re-read setup AND state: the selection changes which browser every other screen
+               reports on, so a partial refresh would leave the rest of the app describing the
+               previous account. */
+            await loadSetup(); await load(); go('accounts');
+            toast('redbot now acts as '+a.handle);
+          }else{
+            pick.disabled=false; pick.textContent='Act as this account';
+            toast((res&&res.error)||'could not choose that account');
+          }
+        };
+        pickRow.append(pick);c.append(pickRow);
+      }
+    }
     if(a.speaks)c.append(el('div','tiny',esc(a.speaks)));
     c.append(el('div','cstats',`<span>karma ${num(a.karma)}</span><span>replies sent ${num(a.published)}</span><span>measurements ${num(a.observations)}</span>`));
     if(a.configured){
