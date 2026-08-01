@@ -2888,14 +2888,34 @@ function accounts(){
        * Falls back to the old two-state reading when the server did not send `profileState`, so a
        * console served by an older build still says something true.
        */
+      /**
+       * `used` MEANS "A BROWSER HAS WRITTEN HERE". IT DOES NOT MEAN SIGNED IN.
+       *
+       * This label used to read "signed-in profile", and until 2026-08-01 that was close enough:
+       * redbot created the folder and only a person opening the browser and logging in ever put
+       * anything in it. Boot opening every account's Chrome broke that inference in one step —
+       * Chrome writes `Local State` and `Default` the instant it starts, so a folder nobody has
+       * ever signed into is `used` by the first launch, and the card claimed a session that does
+       * not exist. Measured on this machine: chrome-profile-a held Local State, Default and
+       * Crashpad while the window sat on reddit.com/login.
+       *
+       * The disk cannot answer "is this account signed in" — only the running browser can, and
+       * `whoAmI` in src/browser.ts is what asks it. So this says what the disk actually proves and
+       * no more. src/profiles.ts opens with the rule this broke: an empty folder is not a
+       * signed-in one, and the UI must not say it is. Neither is a merely-started one.
+       */
       const pst=a.profileState||(a.profileExists?'used':'missing');
-      const ptag=pst==='used'?'<span class="tag ok">signed-in profile</span>'
-        :pst==='empty'?'<span class="tag no">created, not signed in yet</span>'
+      const ptag=pst==='used'?'<span class="tag">Chrome has used this folder</span>'
+        :pst==='empty'?'<span class="tag no">created, never opened</span>'
         :'<span class="tag stop">missing</span>';
       c.append(el('div','tiny',
         `Sign-in folder <code>${esc(a.profileDir||'—')}</code> ${ptag}`));
       if(pst==='empty')c.append(el('div','tiny',
         'redbot made the folder; Chrome has never written to it. Start this account’s browser below and sign in to Reddit once.'));
+      /* Said out loud, because "Chrome has used this folder" is easy to read as "ready". The
+         only thing that proves a session is the running browser, and karma is what asks it. */
+      if(pst==='used'&&!a.karmaMeasuredAt)c.append(el('div','tiny',
+        'Whether this account is actually signed in has never been confirmed — a folder Chrome has opened looks the same as one somebody logged in to. Check karma to find out.'));
       /* The port line and its buttons are repainted by paintPorts() on a timer, so they are
          held by reference rather than rebuilt: re-rendering the whole screen every few seconds
          would wipe whatever is half-typed in an open editor. */
@@ -4594,11 +4614,75 @@ $('#reload').onclick=()=>load().then(()=>toast('Refreshed'));
  * browser would be inventing a connection nobody has verified. It names the fix instead.
  */
 let PULSE_LAST=null;
+/**
+ * The banner, from whatever the current SETUP says.
+ *
+ * A FUNCTION rather than a block inside load(), because it has to be repaintable. Boot opens the
+ * account browsers a few seconds AFTER the console starts serving, so the page renders while the
+ * browser requirement is genuinely unmet and then never hears that it was met — leaving "No
+ * browser is open" on screen above two cards reporting `running`. A banner contradicting the
+ * screen under it is worse than no banner.
+ */
+/**
+ * The gear's badge: UNMET REQUIREMENTS, from the server's shared list.
+ *
+ * It used to count four hand-written conditions in the browser — which never included the browser
+ * itself, so the badge read "ok" on a machine that could not drive Chrome. Extracted alongside
+ * paintBanner() so both catch up together: a badge saying 1 beside a banner saying nothing is
+ * wrong is the same contradiction in a smaller space.
+ */
+function setupBadge(){
+  if(!SETUP||SETUP.error)return;
+  const nBlock=(SETUP.blocking||[]).length, nAdv=(SETUP.advisory||[]).length;
+  $('#nSet').textContent=nBlock?String(nBlock):(nAdv?String(nAdv):'ok');
+}
+
+function paintBanner(){
+  const blockers=(SETUP&&!SETUP.error)?(SETUP.blocking||[]):[];
+  /**
+   * "Setup is not finished" is a claim about the INSTALL, and a closed Chrome is not that.
+   *
+   * When the browser became a blocking requirement this banner started telling people their setup
+   * was unfinished because they had closed a window — on a machine where every step of setup had
+   * been completed. Reported like that it reads as a fault to go and fix in Settings, and Settings
+   * has nothing in it that opens a browser.
+   */
+  const browserOnly=blockers.length&&blockers.every(b=>b.id==='browser');
+  if(browserOnly){
+    $('#banner').innerHTML='<b>No browser is open.</b> redbot reads and publishes through a '
+      +'signed-in Chrome, so both refuse until one is running. Opening the app starts them; '
+      +'Accounts → Open Chrome starts one now.';
+  }else if(blockers.length){
+    $('#banner').innerHTML='<b>Setup is not finished.</b> '+blockers.length+
+      ' thing'+(blockers.length===1?'':'s')+' must be settled before redbot can run: '+
+      blockers.map(b=>esc(b.label)).join(', ')+'.';
+  }else{
+    const adv=(SETUP&&!SETUP.error)?(SETUP.advisory||[]):[];
+    $('#banner').innerHTML=adv.length
+      ? '<b>'+esc(adv[0].label)+' — '+esc(adv[0].detail)+'</b>'
+      : (S&&S.pulse&&S.pulse.published===0
+        ? '<b>Nothing has been sent yet.</b> Threads, scores and replies below are real output from live runs. Results is empty because there are no results.'
+        : `<b>${S&&S.pulse?S.pulse.published:0} sent.</b> Every figure is read fresh from the run records.`);
+  }
+}
+
 async function pulseCheck(){
   const chip=$('#pulseChip');
   try{
     const p=await fetch('/api/pulse').then(r=>r.json());
     const was=PULSE_LAST; PULSE_LAST=p;
+
+    /**
+     * Catch the banner up when the browsers arrive.
+     *
+     * Only on a CHANGE, and only for the condition that actually moves on its own — a browser
+     * being opened by boot, or closed by a person. Re-reading /api/setup every fifteen seconds
+     * would put a CDP probe and a database ping on a timer for a line of text.
+     */
+    const upNow=Array.isArray(p.browsers)&&p.browsers.length&&p.browsers.every(b=>b.browserUp);
+    const upBefore=was&&Array.isArray(was.browsers)&&was.browsers.length&&was.browsers.every(b=>b.browserUp);
+    if(was&&upNow!==upBefore){ await loadSetup(); paintBanner(); setupBadge(); }
+
     if(p.running){
       chip.textContent=`running ${p.running}`;
       chip.style.cssText='color:var(--amber);border-color:var(--amber)';
@@ -4670,13 +4754,7 @@ async function load(){
   $('#nDisc').textContent=S.discovery.assessed;
   $('#nAcc').textContent=S.accounts.length;
   $('#nOut').textContent=S.outcomes.published;
-  /* The Setup badge counts UNMET REQUIREMENTS, from the server's shared list.
-     It used to count four hand-written conditions here in the browser — which never included the
-     browser itself, so the badge read "ok" on a machine that could not drive Chrome. */
-  if(SETUP&&!SETUP.error){
-    const nBlock=(SETUP.blocking||[]).length, nAdv=(SETUP.advisory||[]).length;
-    $('#nSet').textContent=nBlock?String(nBlock):(nAdv?String(nAdv):'ok');
-  }
+  setupBadge();
 
   /* ---------------- first boot: Setup before anything else ----------------
    *
@@ -4705,23 +4783,7 @@ async function load(){
    * So the browser gets its own sentence, saying the true thing: the install is fine, redbot
    * simply cannot see Reddit until a Chrome is running, and here is what opens one.
    */
-  const browserOnly=blockers.length&&blockers.every(b=>b.id==='browser');
-  if(browserOnly){
-    $('#banner').innerHTML='<b>No browser is open.</b> redbot reads and publishes through a '
-      +'signed-in Chrome, so both refuse until one is running. Opening the app starts them; '
-      +'Accounts → Open Chrome starts one now.';
-  }else if(blockers.length){
-    $('#banner').innerHTML='<b>Setup is not finished.</b> '+blockers.length+
-      ' thing'+(blockers.length===1?'':'s')+' must be settled before redbot can run: '+
-      blockers.map(b=>esc(b.label)).join(', ')+'.';
-  }else{
-    const adv=(SETUP&&!SETUP.error)?(SETUP.advisory||[]):[];
-    $('#banner').innerHTML=adv.length
-      ? '<b>'+esc(adv[0].label)+' — '+esc(adv[0].detail)+'</b>'
-      : (S.pulse.published===0
-        ? '<b>Nothing has been sent yet.</b> Threads, scores and replies below are real output from live runs. Results is empty because there are no results.'
-        : `<b>${S.pulse.published} sent.</b> Every figure is read fresh from the run records.`);
-  }
+  paintBanner();
 
   argusRecord();
   pulse();

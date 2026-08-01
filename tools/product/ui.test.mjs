@@ -786,8 +786,23 @@ test('the accounts screen separates a signed-in profile from an empty folder', a
     await tab(page, 'accounts');
     const txt = await page.textContent('#v-accounts');
 
-    assert.match(txt, /signed-in profile/, 'a used profile must be reported as a real session');
-    assert.match(txt, /created, not signed in yet/,
+    /**
+     * THE WORDING CHANGED, AND THE REASON IS THE POINT OF THIS TEST.
+     *
+     * `used` was rendered as "signed-in profile", which was a fair inference while only a person
+     * ever opened the browser. Boot opening every account's Chrome ended that: Chrome writes
+     * `Local State` and `Default` the moment it starts, so a folder nobody has logged into is
+     * `used` after the first launch. Measured — chrome-profile-a held Local State, Default and
+     * Crashpad while the window sat on reddit.com/login, and the card claimed a session.
+     *
+     * The disk cannot answer "is this signed in"; only the running browser can. So the label now
+     * says what the disk proves. These assertions pin the honest wording — and the negative one
+     * below is the load-bearing half: `used` must never again claim a session.
+     */
+    assert.match(txt, /Chrome has used this folder/, 'a used folder must be reported as exactly that');
+    assert.doesNotMatch(txt, /signed-in profile/,
+      'the disk cannot prove a Reddit session — only the running browser can');
+    assert.match(txt, /created, never opened/,
       'an empty folder must NOT be reported as ready just because it exists');
     /* And it must say what to do about it, not merely label it. */
     assert.match(txt, /Chrome has never written to it/);
@@ -800,10 +815,10 @@ test('the accounts screen separates a signed-in profile from an empty folder', a
     const used = cards.find((c) => c.handle === 'docs-architect');
     const empty = cards.find((c) => c.handle === 'sgen-support');
     assert.ok(used && empty, 'both accounts should render');
-    assert.match(used.text, /signed-in profile/);
-    assert.doesNotMatch(used.text, /created, not signed in yet/,
-      'a real session must not be labelled as an unused folder');
-    assert.match(empty.text, /created, not signed in yet/);
+    assert.match(used.text, /Chrome has used this folder/);
+    assert.doesNotMatch(used.text, /created, never opened/,
+      'a folder a browser has written to must not be labelled as untouched');
+    assert.match(empty.text, /created, never opened/);
     assert.doesNotMatch(empty.text, /signed-in profile/,
       'an unused folder must not claim a session');
 
