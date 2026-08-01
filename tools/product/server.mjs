@@ -1519,8 +1519,13 @@ async function createAccount(body) {
   return createAccountImpl(body);
 }
 
-/** Opens that account's own Chrome. Detached — closing the console must not close it. */
-async function launchChrome(handle) {
+/**
+ * Opens that account's own Chrome. Detached — closing the console must not close it.
+ *
+ * `background` puts the window off-screen instead of in front of the person. See the spawn below
+ * for why that is off-screen and never headless.
+ */
+async function launchChrome(handle, { background = false } = {}) {
   // Which port and folder this account owns is read from the system of record, so a browser
   // opened here is the same browser the CLI will later attach to. Reading the seed file
   // instead would open the wrong Chrome the moment the two disagreed.
@@ -1582,15 +1587,39 @@ async function launchChrome(handle) {
   }
 
   const dir = join(DATA, a.profileDir);
+
+  /**
+   * OFF-SCREEN, NOT HEADLESS — and the difference is the whole product.
+   *
+   * Boot opens a browser for every bound account, which meant two Chrome windows taking the
+   * screen every launch. The obvious fix is headless and it is the one thing that cannot be done:
+   * Reddit answers a headless browser with a BLOCK PAGE SERVED AS HTTP 200, so reads come back
+   * empty and actions fail silently while looking fine. src/browser.ts refuses a headless UA for
+   * that reason and doctor calls it a FAIL; TIER0-BLOCKER records both send attempts hitting it.
+   *
+   * So the browser stays fully headed — real renderer, real user-agent, real Reddit — and is
+   * simply put where nobody has to look at it. `--window-position` is honoured at launch; the two
+   * backgrounding flags are what stop Chrome throttling a window it believes is not visible,
+   * which would otherwise make an off-screen page load slowly or not at all.
+   *
+   * Only the boot path asks for this. Pressing Open Chrome on the Accounts screen means a person
+   * wants to see it — that is the signing-in path — so it opens where it always did.
+   */
+  const OFFSCREEN = ['--window-position=-32000,-32000',
+                     '--disable-backgrounding-occluded-windows',
+                     '--disable-renderer-backgrounding'];
   try {
     const child = spawn(bin, [
       `--remote-debugging-port=${a.debugPort}`,
       `--user-data-dir=${dir}`,
       '--no-first-run', '--no-default-browser-check',
+      ...(background ? OFFSCREEN : []),
       'https://www.reddit.com/login'
     ], { detached: true, stdio: 'ignore' });
     child.unref();
-    return { ok: true, handle, port: a.debugPort, profileDir: a.profileDir, ...(movedFrom ? { movedFrom } : {}) };
+    return { ok: true, handle, port: a.debugPort, profileDir: a.profileDir,
+             ...(background ? { background: true } : {}),
+             ...(movedFrom ? { movedFrom } : {}) };
   } catch (e) {
     return { ok: false, error: String(e && e.message || e) };
   }
@@ -2208,8 +2237,39 @@ const server = createServer((req, res) => {
         // `await` is load-bearing: launchChrome became async when it started reading the port
         // from accounts. Without it, `r` is a Promise — `r.ok` is undefined, so the
         // button got 400 and a body of `{}` while Chrome opened perfectly well behind it.
-        const r = await launchChrome(String(body.handle || ''));
+        /* `background` is a placement request, not a capability — the worst a caller can do with
+           it is put a window where they cannot see it, and the same caller could close it. It is
+           NOT the shape of REDBOT_CDP, which is refused from the request because a caller could
+           point redbot at a debugger they control and harvest every scraped thread. */
+        const r = await launchChrome(String(body.handle || ''), { background: body.background === true });
         return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
+      /**
+       * Bring an off-screen browser back where it can be seen.
+       *
+       * The counterpart to `background`. A window at -32000,-32000 cannot be reached by clicking
+       * or alt-tabbing, and launching Chrome again only messages the running instance — so this
+       * is the only way back, and it is why the off-screen default is safe to ship.
+       *
+       * dist/browser.js is imported HERE rather than in the module's startup block because it
+       * pulls in Playwright, and the console has no other reason to load it. A screen nobody has
+       * opened should not cost that.
+       */
+      if (url.pathname === '/api/account/show') {
+        const { accounts: accts } = await consoleAccounts();
+        const a = accts.find((x) => x.handle === String(body.handle || ''));
+        if (!a) return send(400, JSON.stringify({ ok: false, error: `${body.handle} is not set up.` }));
+        const [live] = await portStatusImpl([a]);
+        if (!live || !live.ours) {
+          return send(400, JSON.stringify({ ok: false, error: live ? live.detail : 'that browser is not running' }));
+        }
+        try {
+          const { showBrowserWindow } = await import('../../dist/browser.js');
+          const r = await showBrowserWindow(`http://127.0.0.1:${a.debugPort}`);
+          return send(r.ok ? 200 : 400, JSON.stringify(r.ok ? { ok: true, handle: a.handle, port: a.debugPort } : { ok: false, error: r.reason }));
+        } catch (e) {
+          return send(400, JSON.stringify({ ok: false, error: String(e && e.message || e) }));
+        }
       }
       if (url.pathname === '/api/publish') {
         const r = await publish(body);

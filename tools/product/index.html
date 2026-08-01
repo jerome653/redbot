@@ -2495,6 +2495,25 @@ function paintPortBar(node,s){
       }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
     }));
   }
+  /**
+   * The way back from an off-screen window.
+   *
+   * Boot opens each account's Chrome at -32000,-32000 so two windows do not take the screen every
+   * launch. That window cannot be reached by clicking or alt-tabbing, and launching Chrome again
+   * only messages the running instance — so without this control the browser is running and
+   * unreachable, which is worse than it being in the way. Only shown while it IS running, because
+   * there is nothing to show otherwise.
+   */
+  if(s&&s.state==='running'){
+    bar.append(mini('Show browser',`Bring ${account.handle}'s window on screen`,async()=>{
+      const held=busy(`Finding ${account.handle}'s window…`);
+      try{
+        const r=await post('/api/account/show',{handle:account.handle});
+        if(!r.ok){say(r.error||'could not move the window',true);held.fail(r.error);return}
+        held.done('On screen');
+      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+    }));
+  }
   if(s&&s.state==='running'){
     bar.append(mini('Stop browser',`Stop ${account.handle}`,async()=>{
       const held=busy(`Stopping ${account.handle}'s browser…`);

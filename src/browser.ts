@@ -110,6 +110,59 @@ async function browserUA(endpoint: string): Promise<string | null> {
   }
 }
 
+/**
+ * Bring a window that was opened off-screen back where a person can see it.
+ *
+ * THE OTHER HALF OF OFF-SCREEN. Boot opens a browser per account with
+ * `--window-position=-32000,-32000` so two Chromes do not take the screen every launch (headed,
+ * never headless — Reddit block-pages a headless browser with a 200). A window parked there
+ * cannot be reached by clicking, alt-tabbing, or launching Chrome again: a second launch only
+ * messages the running instance, which raises a window nobody can see. Moving it is the only way
+ * back, and CDP is the only thing that can move it.
+ *
+ * `Browser.setWindowBounds` needs a windowId, `Browser.getWindowForTarget` needs a targetId, and
+ * Playwright does not expose a page's targetId — so the target comes from the debugger's own HTTP
+ * listing, which is the same endpoint `isBrowserUp` already trusts.
+ *
+ * Deliberately does NOT open a tab or navigate. It is a window operation, and a "show me the
+ * browser" that also changed what was on screen would be a different verb.
+ */
+export async function showBrowserWindow(
+  endpoint = config.browser.cdpEndpoint
+): Promise<{ ok: boolean; reason?: string }> {
+  if (!(await isBrowserUp(endpoint))) return { ok: false, reason: 'that browser is not running' };
+
+  let targetId: string | undefined;
+  try {
+    const res = await fetch(`${endpoint}/json/list`, { signal: AbortSignal.timeout(2500) });
+    if (!res.ok) return { ok: false, reason: `the debugger answered ${res.status}` };
+    const list = (await res.json()) as Array<{ type?: string; id?: string }>;
+    targetId = list.find((t) => t.type === 'page')?.id;
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+  if (!targetId) return { ok: false, reason: 'the browser has no page to find a window from' };
+
+  const browser = await chromium.connectOverCDP(endpoint, { noDefaults: true } as never);
+  try {
+    const cdp = await browser.newBrowserCDPSession();
+    const { windowId } = await cdp.send('Browser.getWindowForTarget', { targetId }) as { windowId: number };
+    /* `normal` first and on its own: a minimised or fullscreen window rejects a bounds change,
+       and Chrome requires the state transition to be its own call. */
+    await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } });
+    await cdp.send('Browser.setWindowBounds', {
+      windowId, bounds: { left: 80, top: 60, width: 1280, height: 900 }
+    });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  } finally {
+    /* Detaches this CDP client. It does NOT close the operator's browser — connectOverCDP
+       attaches to a browser it did not launch, and Playwright leaves such a browser running. */
+    await browser.close().catch(() => {});
+  }
+}
+
 export async function attach(): Promise<Session> {
   const endpoint = config.browser.cdpEndpoint;
   if (!(await isBrowserUp(endpoint))) throw new NoBrowserError(endpoint);

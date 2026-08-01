@@ -304,7 +304,10 @@ async function openBoundBrowsers(port) {
       const res = await fetch(`${base}/api/account/open`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ handle: b.handle }),
+        /* Off-screen: boot opens a window per account, and two Chromes taking the screen on every
+           launch is the interruption this whole feature was meant to remove. Headed, never
+           headless — Reddit block-pages a headless browser with a 200. See launchChrome. */
+        body: JSON.stringify({ handle: b.handle, background: true }),
         signal: AbortSignal.timeout(30_000)
       });
       const out = await res.json().catch(() => ({}));
