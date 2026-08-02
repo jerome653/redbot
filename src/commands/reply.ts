@@ -2,13 +2,19 @@
  * `redbot reply [draftId] [--quick]`
  *
  * The only path to Reddit. Shows a pending draft, asks a human to approve, edit or reject it,
- * and — only on approval, and only if every gate in src/gates.ts passes — publishes it.
+ * and — only on approval, and only if no HARD gate in src/gates.ts refuses — publishes it.
+ *
+ * "Hard" is doing real work in that sentence. Until 2026-08-03 every gate refused, and the
+ * measured result was 0 comments published in the product's lifetime while Argus returned REJECT
+ * 19 times out of 19. The checks all still run and every finding is still computed and recorded;
+ * what changed is that all but `identity` are now ADVISORY — printed in full immediately above
+ * the prompt, and overruled by the person who types the approval. See HARD_GATES.
  *
  * Order of operations, and why:
  *
  *   1. attach, open the thread, establish identity, probe live state
- *   2. run the gates BEFORE asking anyone — nobody should be asked to approve something that
- *      cannot be published
+ *   2. run the gates BEFORE asking anyone — a hard refusal must not reach the prompt, and an
+ *      advisory is worth nothing unless it arrives before the decision rather than after
  *   3. read the thread properly (Part A: comments are read before replying, not after)
  *   4. show the draft, the craft warnings, and the checklist a machine cannot decide
  *   5. approve / edit / reject — 'r' is the safe answer (DEFECT-08)
@@ -197,6 +203,20 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     );
     for (const w of pre.warnings) say.warn(w);
 
+    /**
+     * What the gates would have refused, put in front of the person who decides.
+     *
+     * These used to end the run before anyone was asked. They are now the operator's call, which
+     * only works if they are impossible to miss — an advisory that scrolls past unread is a gate
+     * that was removed, not a gate that was delegated. So they are printed as failures, counted,
+     * and named by gate, immediately above the prompt rather than up with the craft notes.
+     */
+    if (pre.advisories.length) {
+      say.warn(`\n  ${pre.advisories.length} gate(s) would have refused this. You can overrule them:`);
+      for (const b of pre.advisories) say.fail(`    [${b.gate}] ${b.reason}`);
+      say.warn('  Publishing anyway is a decision, and it is recorded as one.');
+    }
+
     if (target.contribution) {
       say.info('\n  The case this draft makes for itself:');
       say.info(`    why this thread : ${target.contribution.whyThread}`);
@@ -216,7 +236,14 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       permalink: target.permalink,
       operator: identity.username,
       quality: pre.quality.metrics,
-      gates: { allowed: pre.allow, blocked: pre.blocks.map((b) => b.gate) },
+      /* `overruled` is the durable record of what a person chose to publish over. Without it the
+         history would show an approval and no trace of what the gates had found, which is the
+         shape that makes a later review unable to tell a considered override from an oversight. */
+      gates: {
+        allowed: pre.allow,
+        blocked: pre.blocks.map((b) => b.gate),
+        overruled: pre.advisories.map((b) => b.gate)
+      },
       ...(target.contribution ? { contribution: target.contribution } : {})
     };
 
@@ -239,6 +266,41 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
      * no valid one, nothing changes and the interactive prompt runs exactly as before.
      */
     const preApproved = takeConsoleApproval(DATA, target.id);
+
+    /**
+     * A console approval does not carry permission for advisories nobody showed anyone.
+     *
+     * The interactive path prints every advisory immediately above the prompt, so approving there
+     * IS an informed override. A console SEND skips that prompt entirely — and most advisories
+     * (`duplicate`, `locked`, `archived`, `warming:*`, `window`, `health`) are live-page facts
+     * that do not exist until this command has probed the thread, so the console could not have
+     * displayed them at the moment SEND was typed.
+     *
+     * While every gate refused, this was unreachable: a console SEND could never arrive at a
+     * publish the gates objected to. Making them advisory opened it, so it closes here rather
+     * than in the console — this is the process that knows what the gates actually found.
+     *
+     * REFUSES rather than prompts, because there is no terminal to prompt on: the token exists
+     * precisely because the person is in the browser. The findings go to the run log they are
+     * already watching, and a second SEND carries `overrule` to say they have read them.
+     */
+    if (preApproved && pre.advisories.length) {
+      const acked = new Set(preApproved.overrule ?? []);
+      const unseen = pre.advisories.filter((b) => !acked.has(b.gate));
+      if (unseen.length) {
+        say.fail('Approved in the console, but these were found only after that approval:');
+        for (const b of unseen) say.fail(`  [${b.gate}] ${b.reason}`);
+        say.step('Nothing was posted. Send again to publish over them, now that they are on screen.');
+        await record('gate.block', `console approval lacked acknowledgement for ${target.id}`, {
+          draftId: target.id,
+          gates: unseen.map((b) => b.gate),
+          blocks: unseen,
+          stage: 'console-advisory'
+        });
+        return 1;
+      }
+    }
+
     if (preApproved) {
       say.ok('  Approved in the console — publishing without asking again.');
       if (preApproved.note) say.step(`  Reason given: ${preApproved.note}`);

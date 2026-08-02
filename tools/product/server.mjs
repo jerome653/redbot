@@ -1803,8 +1803,28 @@ async function publish(body) {
   const dir = join(DATA, 'approvals');
   mkdirSync(dir, { recursive: true });
   const tokenPath = join(dir, `${draftId}.json`);
+  /**
+   * `overrule` names the gates this operator has been shown and is publishing over.
+   *
+   * Since gates became advisory (src/gates.ts HARD_GATES), most of them are live-page facts that
+   * only exist once `reply` has probed the thread — so the first SEND cannot have displayed them,
+   * and `reply` refuses rather than publish over findings nobody saw. It writes them to the run
+   * log; a second SEND repeats them here to say they have been read.
+   *
+   * Sanitised to an array of plain strings on the way in. This is a capability file: whatever
+   * arrives in the request body decides what a later process will publish over, so it is not
+   * passed through on trust. Absent or malformed means "nothing acknowledged", which refuses —
+   * the failure direction that costs a second click rather than an unwanted comment.
+   */
+  const overrule = Array.isArray(body.overrule)
+    ? body.overrule.filter((g) => typeof g === 'string' && g.length > 0 && g.length < 64).slice(0, 40)
+    : [];
   writeFileSync(tokenPath,
-    JSON.stringify({ draftId, decision: 'approved', note: reason || '', at: new Date().toISOString() }, null, 2), 'utf8');
+    JSON.stringify({
+      draftId, decision: 'approved', note: reason || '',
+      at: new Date().toISOString(),
+      ...(overrule.length ? { overrule } : {})
+    }, null, 2), 'utf8');
 
   return runAction('__reply', { draftId, account: body.account })
     .then((r) => {

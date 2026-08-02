@@ -318,21 +318,28 @@ describe('updated_at triggers', () => {
      * Both the column default and the trigger use `strftime('%Y-%m-%dT%H:%M:%fZ','now')` —
      * MILLISECOND precision on the system clock (0002_accounts.up.sql). An INSERT and an UPDATE
      * that land inside the same millisecond therefore write the SAME string, and the assertion
-     * below fails with actual == expected while the trigger has behaved perfectly. Reported from
-     * a run that hit it; 400 forced attempts did not reproduce it on this machine, because each
-     * pair happened to take longer than a millisecond here — which is exactly what makes it a
-     * latency-dependent flake rather than a bug anyone can see on demand.
+     * below fails with actual == expected while the trigger has behaved perfectly.
      *
-     * Waiting is the honest fix: the assertions are unchanged, and what is under test is that the
-     * trigger MOVES the value, which cannot be observed until the clock it reads has moved.
-     * SQLite's `now` and Date.now() are the same system clock, so this is sufficient.
+     * WAITING IS THE HONEST FIX, BUT IT HAS TO WAIT ON THE RIGHT CLOCK. This spun on `Date.now()`
+     * and carried the note "SQLite's `now` and Date.now() are the same system clock, so this is
+     * sufficient". It is not, and the claim that 400 attempts could not reproduce it was an
+     * artefact of that assumption: with the Node-clock spin in place, 200 forced INSERT/UPDATE
+     * pairs on this machine produced 21 ties (2026-08-03). The two clocks step by 1ms each — that
+     * much was measured and is true — but they are not phase-locked, so Node ticking into a new
+     * millisecond does not mean the value SQLite is about to read has changed.
+     *
+     * Spinning on `strftime('now')` itself removes the assumption rather than tightening it: the
+     * loop exits only once the clock the TRIGGER reads has passed the value already stored. 500
+     * pairs, 0 ties. The assertions are untouched — what is under test is still that the trigger
+     * MOVES the value, which cannot be observed until that clock has moved.
      *
      * The product is NOT affected: push cursors are composite — `WHERE a > $1 OR (a = $2 AND
      * b > $3)` in src/push/streams.ts `forwardFrom` — so rows sharing a millisecond are still
-     * ordered by the unique second column and neither is skipped nor resent.
+     * ordered by the unique second column and neither is skipped nor resent. This is a test that
+     * could not see what it was asserting, not a defect in the schema.
      */
-    const startedAt = Date.now();
-    while (Date.now() === startedAt) { /* spin under 1ms, so the trigger writes a later value */ }
+    const sqliteNow = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') AS t");
+    while (sqliteNow.get().t <= was) { /* spin until the trigger's own clock has moved past `was` */ }
     db.prepare('UPDATE accounts SET note = $2 WHERE handle = $1').run(P('trig', 'after'));
     const now = db.prepare('SELECT updated_at FROM accounts WHERE handle = $1').get(P('trig')).updated_at;
     assert.notEqual(now, was, 'the trigger did not fire — check the WHERE clause names the real key');

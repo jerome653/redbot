@@ -57,6 +57,20 @@ export interface ConsoleApproval {
   reasonCode?: string;
   note?: string;
   at: string;
+  /**
+   * Gate names the operator was SHOWN and chose to publish over.
+   *
+   * A console approval skips the interactive prompt, which is where advisories are printed. That
+   * was harmless while every gate refused — a console SEND could not reach a publish the gates had
+   * anything to say about. Since gates became advisory (2026-08-03) it is not: without this, a
+   * SEND typed in the console would publish over `duplicate`, `locked` or `warming:pace` that
+   * nobody had seen, which is not the operator deciding, it is the operator being bypassed.
+   *
+   * The console shows the Argus verdict before SEND, so `certification` can be acknowledged there.
+   * The rest are live-page facts that only exist once `reply` has probed the thread, so they are
+   * acknowledged on a second SEND after the first reports them.
+   */
+  overrule?: string[];
 }
 
 const APPROVAL_TTL_MS = 5 * 60 * 1000;

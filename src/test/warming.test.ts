@@ -137,8 +137,16 @@ test('stage 1 is decided from the account, and an unmeasured account is still in
  * `checkWarmingPace` and `isWarmingTarget` had no caller anywhere on the publish path, so the
  * commit titled "enforce the account-warming rules" enforced none of them and this file was the
  * feature in its entirety. These tests are about the seam rather than the rules: they assert
- * that `evaluateGates` — the one function that can stop a publish — actually refuses. Each one
- * fails against the unwired code, because no gate named `warming:*` existed to be hit.
+ * that `evaluateGates` actually REACHES these checks and reports what they find. Each one fails
+ * against the unwired code, because no gate named `warming:*` existed to be hit.
+ *
+ * They no longer assert that it refuses, and the distinction is the point rather than a
+ * concession. Since 2026-08-03 `warming:*` is advisory: the rule still fires on exactly the same
+ * inputs, names itself, and is put in front of the operator, who may publish over it. What these
+ * tests protect is the wiring — the defect that made the original commit a lie — and that is
+ * unchanged. Whether a warming finding refuses or advises is pinned in gates.test.ts under
+ * "the authority boundary"; it is deliberately not restated here, so there is one place to change
+ * when the policy does.
  * ------------------------------------------------------------------ */
 
 const NOW = new Date('2026-07-27T12:00:00.000Z');
@@ -217,8 +225,19 @@ const gateInput = (over: Partial<GateInput> = {}): GateInput => ({
   ...over
 });
 
-const gatesHit = (over: Partial<GateInput> = {}) =>
-  evaluateGates(gateInput(over)).blocks.map((b) => b.gate);
+/**
+ * Every gate that FIRED, hard or advisory — see the same helper in gates.test.ts.
+ *
+ * The warming rules are the ones these tests exist for, and they still fire on exactly the inputs
+ * they always did. What changed on 2026-08-03 is that firing no longer refuses the publish: the
+ * operator is shown what the rule found and decides. These assertions are about the RULE — that a
+ * link, a product mention, an essay or a cluster from a warming account is detected and named —
+ * and that is unchanged, which is why the test bodies are not.
+ */
+const gatesHit = (over: Partial<GateInput> = {}) => {
+  const r = evaluateGates(gateInput(over));
+  return [...r.blocks, ...r.advisories].map((b) => b.gate);
+};
 
 const withBody = (body: string, over: Partial<GateInput> = {}): Partial<GateInput> => ({
   ...over,

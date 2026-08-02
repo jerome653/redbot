@@ -97,8 +97,23 @@ const base = (over: Partial<GateInput> = {}): GateInput => ({
   ...over
 });
 
-const gatesHit = (over: Partial<GateInput> = {}) =>
-  evaluateGates(base(over)).blocks.map((b) => b.gate);
+/**
+ * Every gate that FIRED, hard or advisory.
+ *
+ * This used to read `.blocks` alone, back when firing and refusing were the same event. They are
+ * not any more: `HARD_GATES` in src/gates.ts keeps `identity` as a refusal and hands the rest to
+ * the person typing SEND, so a gate that finds something now lands in `advisories` instead.
+ *
+ * The tests below are unchanged and still mean what their names say — each one asserts that the
+ * gate DETECTS its condition and names itself, which is the property that would actually regress
+ * if someone broke it. What they never asserted, even before, is who gets to overrule it; that is
+ * pinned explicitly in "the authority boundary" at the end of this file, so the split cannot be
+ * widened by accident without a test going red.
+ */
+const gatesHit = (over: Partial<GateInput> = {}) => {
+  const r = evaluateGates(base(over));
+  return [...r.blocks, ...r.advisories].map((b) => b.gate);
+};
 
 test('a clean draft on a live thread with a healthy account is allowed', () => {
   const r = evaluateGates(base());
@@ -139,9 +154,12 @@ test('an assessment satisfies the triage gate — the only thing that does', () 
 });
 
 test('a skip verdict blocks, and says which engine said so', () => {
-  const gates = evaluateGates(base({
+  const r = evaluateGates(base({
     assessment: assessment({ verdict: 'skip', score: 20, reasons: ['the thread is already answered'] })
-  })).blocks;
+  }));
+  /* Advisory since 2026-08-03, but it must still SAY which engine skipped it — an advisory that
+     drops its provenance is worse than the block it replaced, because it is overruled blind. */
+  const gates = [...r.blocks, ...r.advisories];
   assert.ok(gates.some((b) => b.gate === 'triage' && /Opportunity Engine/.test(b.reason)));
 });
 
@@ -188,7 +206,7 @@ test('thread age is measured against the injected now, not the wall clock', () =
 
   // a hundred hours after collection the same thread is past it, from the same inputs
   const stale = evaluateGates(base({ thread: collected, now: new Date(NOW.getTime() + 100 * 3_600_000) }));
-  assert.ok(stale.blocks.map((b) => b.gate).includes('stale-thread'));
+  assert.ok([...stale.blocks, ...stale.advisories].map((b) => b.gate).includes('stale-thread'));
 });
 
 test('a draft written yesterday is re-drafted, not posted', () => {
@@ -239,10 +257,13 @@ test('the safety linter and the craft gate both feed the decision', () => {
   assert.ok(gatesHit({ draft: generic }).some((g) => g.startsWith('quality:')));
 });
 
-test('every block names its gate and gives a reason', () => {
+test('every finding names its gate and gives a reason, hard or advisory', () => {
+  /* Both lists, deliberately: an advisory is the only thing the operator gets before overruling
+     it, so a thin reason there costs more than a thin reason on a refusal ever did. */
   const r = evaluateGates(base({ threadState: state({ locked: true }), identity: null }));
-  assert.ok(r.blocks.length >= 2);
-  for (const b of r.blocks) {
+  const findings = [...r.blocks, ...r.advisories];
+  assert.ok(findings.length >= 2);
+  for (const b of findings) {
     assert.ok(b.gate.length > 0);
     assert.ok(b.reason.length > 10, `reason too thin: ${b.reason}`);
   }
@@ -297,4 +318,70 @@ test('H7: a refusing account window blocks the interactive publish path', () => 
   // an allowing window does not block
   const allowed = { allowed: true as const, detail: 'clear to act' };
   assert.equal(evaluateGates(base({ window: allowed })).allow, true);
+});
+
+/* ------------------------------------------------------------------ *
+ * The authority boundary
+ *
+ * Which gates REFUSE and which merely ADVISE is a policy, and a policy that lives only in a
+ * `HARD_GATES` set is one edit away from being widened by somebody who thinks they are fixing a
+ * flaky test. Every case below states the whole boundary, so widening it goes red here first.
+ *
+ * The change these pin: until 2026-08-03 every gate refused. `docs/07-MODULE-MATURITY.md` records
+ * the cost — Argus returned REJECT 19 times out of 19, CERTIFIED and ESCALATE never fired once,
+ * and the corpus contains 0 published comments. The findings were never the problem; the lock was.
+ * ------------------------------------------------------------------ */
+
+test('identity is the only gate that still refuses', () => {
+  /* Not because overriding it would be worst, but because it is the only finding a person cannot
+     consent to: if redbot cannot say who it is on the page, nobody knows which account is being
+     approved for, and "two accounts never in one thread" becomes unenforceable by anyone. */
+  const r = evaluateGates(base({ identity: null }));
+  assert.equal(r.allow, false, 'an unestablished identity must still refuse');
+  assert.deepEqual(r.blocks.map((b) => b.gate), ['identity']);
+});
+
+test('every other gate advises, and publishing stays the operator\'s call', () => {
+  const cases: Array<[string, Partial<GateInput>]> = [
+    ['thread-state', { threadState: null }],
+    ['locked',       { threadState: state({ locked: true }) }],
+    ['archived',     { threadState: state({ archived: true }) }],
+    ['duplicate',    { threadState: state({ ownCommentPresent: true }) }],
+    ['no-composer',  { threadState: state({ composerPresent: false }) }]
+  ];
+  for (const [gate, over] of cases) {
+    const r = evaluateGates(base(over));
+    assert.equal(r.allow, true, `[${gate}] still refuses — it must advise instead`);
+    assert.ok(r.advisories.some((b) => b.gate === gate), `[${gate}] stopped being reported at all`);
+    assert.equal(r.blocks.length, 0, `[${gate}] leaked into the hard blocks`);
+  }
+});
+
+test('an Argus REJECT is reported in full and does not refuse', () => {
+  /* "Keep the review, drop the lock." The verdict, its date and its contradiction count must all
+     survive — an advisory that says less than the block it replaced is a downgrade, not a policy. */
+  const rejected = draft({
+    certification: { verdict: 'REJECT', at: '2026-08-01T00:00:00.000Z', fatalContradictions: 3 }
+  } as Partial<Draft>);
+  const r = evaluateGates(base({ draft: rejected }));
+  assert.equal(r.allow, true, 'a REJECT must no longer refuse');
+  const cert = r.advisories.find((b) => b.gate === 'certification');
+  assert.ok(cert, 'the REJECT vanished instead of being surfaced');
+  assert.match(cert.reason, /rejected/i);
+  assert.match(cert.reason, /3 fatal/, 'the contradiction count was dropped from the advisory');
+});
+
+test('a finding never appears in both blocks and advisories', () => {
+  /* Two copies of one reason is how a count on a screen ends up double-reporting a single gate. */
+  const r = evaluateGates(base({ identity: null, threadState: state({ locked: true }) }));
+  const hard = new Set(r.blocks.map((b) => b.gate));
+  assert.ok(!r.advisories.some((b) => hard.has(b.gate)), 'a gate was reported twice');
+  assert.equal(r.allow, false, 'a hard gate alongside advisories must still refuse');
+});
+
+test('a clean draft produces neither blocks nor advisories', () => {
+  const r = evaluateGates(base());
+  assert.equal(r.allow, true);
+  assert.deepEqual(r.blocks, []);
+  assert.deepEqual(r.advisories, [], 'a clean draft must not accumulate advisory noise');
 });

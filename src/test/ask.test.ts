@@ -88,3 +88,31 @@ test('the publish gate declares reject as its safe answer', async () => {
     "reply must pass 'r' as the safe answer to choose()",
   );
 });
+
+/* ---- the acknowledgement a console approval carries (2026-08-03) ---- */
+
+test('a token carries the gates the operator was shown and chose to publish over', () => {
+  /**
+   * `overrule` is what stops an advisory becoming a silent bypass.
+   *
+   * `reply` prints every advisory above the interactive prompt, so approving in a terminal is an
+   * informed override. A console SEND skips that prompt, and most advisories — `duplicate`,
+   * `locked`, `warming:*` — are live-page facts that do not exist until `reply` has probed the
+   * thread, so the console cannot have shown them when SEND was typed. This field is how a
+   * SECOND send says "I have now read them"; without it `reply` refuses.
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'redbot-appr-'));
+  writeToken(dir, 'd_1', { overrule: ['duplicate', 'warming:pace'] });
+  const t = takeConsoleApproval(dir, 'd_1');
+  assert.deepEqual(t?.overrule, ['duplicate', 'warming:pace']);
+});
+
+test('a token with no acknowledgement approves nothing extra', () => {
+  /* Absent must read as "nothing acknowledged", not "everything acknowledged" — the whole guard
+     inverts if a missing field is treated as blanket permission. */
+  const dir = mkdtempSync(join(tmpdir(), 'redbot-appr-'));
+  writeToken(dir, 'd_1');
+  const t = takeConsoleApproval(dir, 'd_1');
+  assert.equal(t?.draftId, 'd_1', 'the approval itself must still be valid');
+  assert.equal(t?.overrule, undefined, 'an absent acknowledgement must not materialise as one');
+});

@@ -32,10 +32,56 @@ export interface GateBlock {
 }
 
 export interface GateResult {
+  /** True when nothing HARD refused. Advisories do not affect it — see HARD_GATES. */
   allow: boolean;
+  /** Only the hard refusals. Empty whenever `allow` is true. */
   blocks: GateBlock[];
+  /**
+   * Everything a gate found that a person may overrule, in the same shape as `blocks`.
+   *
+   * These are not warnings-by-another-name: each one used to refuse the publish outright, and
+   * every reason is still computed, recorded and shown. What changed is who decides.
+   */
+  advisories: GateBlock[];
   warnings: string[];
   quality: QualityReport;
+}
+
+/**
+ * WHICH GATES STILL REFUSE — and why this is one list rather than a flag on thirty pushes.
+ *
+ * ---------------------------------------------------------------------------
+ * Until now every one of the ~30 findings below was a hard refusal, and the effect was not the
+ * safety it looked like. `docs/07-MODULE-MATURITY.md` records Argus returning REJECT 19 times out
+ * of 19, with CERTIFIED and ESCALATE never once fired on real input — so the certification gate
+ * alone refused 100% of everything the product ever produced. The measured result is in the
+ * corpus: 0 comments published, ever. A gate that has never passed anything has not been proven
+ * strict; it has not been proven at all, and it was the thing standing between this tool and any
+ * production evidence about whether its judgement is any good.
+ *
+ * So the gates keep doing exactly what they did — every check runs, every reason is computed and
+ * recorded — and the authority moves to the person who types SEND. Nothing is deleted, because
+ * the findings are the most useful thing here; what is removed is the lock.
+ *
+ * WHAT STAYS HARD, and the test is not "how bad would this be" but "can the operator meaningfully
+ * consent to it". `identity` is the one that fails that test: if redbot cannot establish who it is
+ * on the live page, the person approving cannot know which account they are approving FOR, and the
+ * standing rule that two accounts never appear in one thread is unenforceable by anyone. A
+ * mismatch is the same defect with the answer already known to be wrong. That is not a judgement
+ * call a human is being denied — it is a fact nobody has.
+ *
+ * WHAT THIS DOES NOT TOUCH. `PUBLISH_KINDS` in scheduler.ts still refuses to publish unattended,
+ * so nothing here reaches Reddit without a person at the keyboard for that specific comment. That
+ * is the property that keeps this an assistant rather than a bot, and it is enforced before a
+ * runner is even looked up. Loosening these gates widens what a person may choose to send; it
+ * does not widen what runs on its own.
+ * ---------------------------------------------------------------------------
+ */
+const HARD_GATES: ReadonlySet<string> = new Set(['identity']);
+
+/** Gate names are sometimes composed (`warming:pace`, `quality:disclosure`); match the family. */
+function isHardGate(gate: string): boolean {
+  return HARD_GATES.has(gate) || HARD_GATES.has(gate.split(':')[0] ?? gate);
 }
 
 export interface GateInput {
@@ -363,5 +409,9 @@ export function evaluateGates(input: GateInput): GateResult {
     });
   }
 
-  return { allow: blocks.length === 0, blocks, warnings, quality };
+  /* One split, at the end, so every check above stays exactly as it was written and the policy
+     lives in one readable place rather than in thirty scattered severities. */
+  const hard = blocks.filter((b) => isHardGate(b.gate));
+  const advisories = blocks.filter((b) => !isHardGate(b.gate));
+  return { allow: hard.length === 0, blocks: hard, advisories, warnings, quality };
 }
