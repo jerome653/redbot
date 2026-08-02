@@ -336,7 +336,10 @@ test('the bar reports every screen\'s count, and the banner says nothing has bee
     assert.equal(await page.textContent('#nRev'), '3', 'three pending, the ignored one excluded');
     assert.equal(await page.textContent('#nDisc'), '16');
     assert.equal(await page.textContent('#nAcc'), '2');
+    /* The number is still written (this read), but a zero count shows no pill. */
     assert.equal(await page.textContent('#nOut'), '0');
+    assert.ok(await page.isHidden('#nOut'), 'a zero count must not wear a badge');
+    assert.ok(await page.isVisible('#nAcc'), 'a real count must');
 
     const banner = await page.textContent('#banner');
     assert.match(banner, /Nothing has been sent yet/i,
@@ -382,12 +385,17 @@ test('the headline figures live on the tabs, and the waiting count clicks throug
        helper sees them, not as they are written in the markup. */
     for (const [what, label, n] of [
       ['pending replies', 'review', '3'],
-      ['accounts', 'accounts', '2'],
-      ['published', 'results', '0']
+      ['accounts', 'accounts', '2']
     ]) {
       assert.match(txt, new RegExp(`${label}[^0-9]{0,4}${n}`),
         `the chrome must report ${what} = ${n} on its tab; got: ${txt}`);
     }
+    /* CHANGED INTENT (2026-08-02). published = 0 used to render as a literal "0" beside the
+       tab name; a zero count now shows NO badge, so none-ness is carried by absence and the
+       "empty on purpose" story stays on the Results screen itself. The shell test pins the
+       mechanism (#nOut keeps its number but is hidden); this pins the presentation. */
+    assert.doesNotMatch(txt, /results[^0-9]{0,4}0/,
+      'a zero count must not wear a badge on the tab');
 
     /* The version sits beside the name, and it comes from the SERVER (APP_VERSION in server.mjs)
        rather than from a constant in the page — a hand-maintained version string is one that lies
@@ -413,12 +421,67 @@ test('the health chip shows the problem the pulse reports, and names it on click
     assert.match(chip, /1 problem/, 'one problem in the fixture must surface in the bar');
     const title = await page.getAttribute('#pulseChip', 'title');
     assert.match(title, /browser folder is missing/, 'the chip must carry the reason, not just a count');
+
+    /* Clicking names the problems in a toast that holds ~5s — one line per account is a real
+       read, and the 1.9s default vanished mid-sentence. Still up at 3s, gone by ~6s. */
+    await page.click('#pulseChip');
+    await page.waitForFunction(() => /browser folder is missing/.test(document.querySelector('#toast')?.textContent || ''),
+                               null, { timeout: 5000 });
+    await page.waitForTimeout(3000);
+    assert.ok(await page.evaluate(() => document.querySelector('#toast').classList.contains('show')),
+      'the problems toast must still be readable at 3s');
+    await page.waitForFunction(() => !document.querySelector('#toast').classList.contains('show'),
+                               null, { timeout: 4000 });
+  } finally { await context.close(); }
+});
+
+test('the update button wears a dot once a newer release is known', async () => {
+  const { context, page } = await open();
+  try {
+    /* The suite's server points its update check at a repository that cannot exist, so at
+       boot nothing newer is known and the dot must be absent. */
+    assert.ok(await page.isHidden('#updateBtn .dot'), 'no dot before anything newer is known');
+
+    /* Page routes outrank the context fixture: the next check finds a newer release. */
+    await page.route('**/api/update*', (route) => route.fulfill({
+      status: 200, contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify({
+        ok: true, newer: true, current: '9.9.9', latest: '10.0.0',
+        release: { tag: 'v10.0.0', url: 'https://example.invalid/rel', prerelease: false, download: null }
+      })
+    }));
+    await page.click('#updateBtn');
+    await page.waitForSelector('#updateBtn .dot', { state: 'visible', timeout: 5000 });
+
+    /* Dismissing the BAR must not dismiss the FACT: the dot stays. */
+    await page.click('#updateBar .updx');
+    assert.ok(await page.isHidden('#updateBar'), 'the bar can be waved away');
+    assert.ok(await page.isVisible('#updateBtn .dot'), 'the dot must survive the dismissal');
+  } finally { await context.close(); }
+});
+
+test('F5 is the app\'s own refresh, not a page navigation', async () => {
+  const { context, page } = await open();
+  try {
+    /* A window flag survives an in-place repaint and dies with a real navigation — so the
+       toast proves the refresh RAN and the flag proves the page was not torn down. */
+    await page.evaluate(() => { window.__noReload = 1; });
+    await page.keyboard.press('F5');
+    await page.waitForFunction(() => /Refreshed/.test(document.querySelector('#toast')?.textContent || ''),
+                               null, { timeout: 5000 });
+    assert.equal(await page.evaluate(() => window.__noReload), 1,
+      'bare F5 must repaint in place, never navigate');
   } finally { await context.close(); }
 });
 
 test('the theme toggle flips the document theme both ways', async () => {
   const { context, page } = await open();
   try {
+    /* CHANGED INTENT (2026-08-02): the toggle moved from the bar to the head of the Settings
+       panel — flipping the look is configuration, not part of any day's work — so the flow
+       is now open-Settings-then-press. Same id, same handler. */
+    await page.click('#settingsBtn');
+    await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });
     await page.click('#theme');
     const a = await page.getAttribute('html', 'data-theme');
     assert.ok(a === 'light' || a === 'dark', `expected a theme, got ${a}`);
@@ -1955,6 +2018,30 @@ test('a step redbot cannot honestly start stays text, not a dead button', async 
     assert.ok(await signedOut.isVisible(), 'the signed-out check must still be on the list');
     const tag = await signedOut.evaluate((n) => n.tagName);
     assert.equal(tag, 'DIV', 'it needs a browser redbot does not drive — it must not look clickable');
+  } finally { await context.close(); }
+});
+
+test('picking an account on the rail narrows the day to it, and widens back', async () => {
+  const { context, page } = await open();
+  try {
+    await tab(page, 'today');
+    await page.waitForSelector('#v-today .job', { timeout: 5000 });
+    assert.equal(await page.locator('#v-today .job').count(), 2,
+      'with nothing picked, the day is planned for every account');
+
+    await page.click('#v-today button.acct:has-text("docs-architect")');
+    await page.waitForSelector('#v-today button.acct[aria-pressed="true"]', { timeout: 5000 });
+    assert.equal(await page.locator('#v-today .job').count(), 1,
+      'picking an account must narrow the checklist to that account');
+    assert.match(await page.locator('#v-today .job .jmeta').textContent(), /docs-architect/,
+      'and the remaining checklist must be the picked account\'s');
+
+    /* The way back must be visible on the panel itself, not a hidden toggle. */
+    await page.click('#v-today button:has-text("Show every account")');
+    await page.waitForFunction(
+      () => document.querySelectorAll('#v-today .job').length === 2, null, { timeout: 5000 });
+    assert.equal(await page.locator('#v-today button.acct[aria-pressed="true"]').count(), 0,
+      'widening back must clear the pressed state on the rail');
   } finally { await context.close(); }
 });
 

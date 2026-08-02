@@ -50,6 +50,16 @@
   --amber-soft:rgba(232,169,59,.12);
   --jade:#3DDC84;
   --jade-soft:rgba(61,220,132,.12);
+  /* The BUTTON fills. The raw accents above are signal colours — at chip size on a black
+     sheet a solid #3DDC84 reads as neon, so the fills are the same hues taken deep and rich.
+     The raw accent still appears on hover (the chip warms toward it) and in the border rim.
+     In the light theme the raw accents are already deep, so there the -deep vars alias them. */
+  --jade-deep:#1E6B44;
+  --ember-deep:#8C2A22;
+  --amber-deep:#74561F;
+  /* Type sitting ON a deep accent fill — white in both themes; kept as a var so a future
+     fill change only has one knob to turn. */
+  --on-accent:#FFFFFF;
 
   /* glass */
   --wash-a:rgba(255,68,56,.055);
@@ -118,6 +128,10 @@
   --amber-soft:rgba(138,106,43,.10);
   --jade:#00875A;
   --jade-soft:rgba(0,135,90,.09);
+  --jade-deep:var(--jade);
+  --ember-deep:var(--ember);
+  --amber-deep:var(--amber);
+  --on-accent:#FFFFFF;
 
   --wash-a:rgba(215,0,21,.05);
   --wash-b:rgba(0,135,90,.045);
@@ -140,6 +154,8 @@
     --ember:#D70015;--ember-soft:rgba(215,0,21,.08);
     --amber:#8A6A2B;--amber-soft:rgba(138,106,43,.10);
     --jade:#00875A;--jade-soft:rgba(0,135,90,.09);
+    --jade-deep:var(--jade);--ember-deep:var(--ember);--amber-deep:var(--amber);
+    --on-accent:#FFFFFF;
     --wash-a:rgba(215,0,21,.05);
     --wash-b:rgba(0,135,90,.045);
     --pane-a:rgba(255,255,255,.86);
@@ -258,69 +274,121 @@ td a:hover{color:var(--ember);text-decoration:underline}
   display:flex;align-items:center;gap:.45rem;transition:color .16s,background .16s,border-color .16s;
   flex:0 0 auto;white-space:nowrap;
 }
-.step:hover{color:var(--ink-2)}
+.step:hover{color:var(--ink-2);background:var(--sheen)}
 .step[aria-current="page"]{
   color:var(--ink);font-weight:600;border-color:var(--edge);
   background:linear-gradient(180deg,var(--gloss),transparent);
   box-shadow:inset 0 1px 0 var(--sheen);
 }
-.step .g{font-family:var(--mono);font-size:.72rem;color:var(--ink-3)}
+/* The same pill as Today's badge, in the quiet colour: counts are information, Today's is
+   the one that should make you click. Same geometry so the row sits on one line. */
+.step .g{
+  font-family:var(--mono);font-size:.7rem;font-weight:700;color:var(--ink-2);
+  padding:.08rem .5rem;border-radius:999px;font-variant-numeric:tabular-nums;
+  background:linear-gradient(180deg,rgba(255,255,255,.14),transparent 55%),
+             color-mix(in srgb,var(--ink-3) 16%,transparent);
+}
 .step b{
-  font-family:var(--mono);font-size:.7rem;font-weight:700;padding:.08rem .38rem;border-radius:6px;
-  background:var(--ember);color:#fff;
+  font-family:var(--mono);font-size:.7rem;font-weight:700;padding:.08rem .5rem;border-radius:999px;
+  /* ember because this count is the work waiting on a person — slightly see-through with a
+     gloss cap, so it sits IN the glass bar rather than stamped on it */
+  background:linear-gradient(180deg,rgba(255,255,255,.22),transparent 55%),
+             color-mix(in srgb,var(--ember) 88%,transparent);
+  color:#fff;
 }
 /* Wraps for the same reason `.bar` above does. `.bar` wrapping was never enough on its own: this
    group was one unbreakable row inside it, so adding a fifth button (update) pushed a 390px phone
    13px sideways while the bar around it had room to give. Ends flush right so a wrapped second row
    sits under the first rather than drifting left. */
 .right{margin-left:auto;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;row-gap:.45rem;justify-content:flex-end}
-button.mini{
-  font:inherit;font-family:var(--mono);font-size:.72rem;cursor:pointer;
-  background:var(--glass);color:var(--ink-2);border:1px solid var(--edge);
-  border-radius:9px;padding:.36rem .7rem;transition:color .16s,border-color .16s;
-  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
-}
-button.mini:hover:not(:disabled){color:var(--ink);border-color:var(--edge-2)}
-/**
- * The same control as a LINK.
- *
- * `button.mini` is tag-qualified, so an `<a class="mini">` matched nothing and rendered as bare
- * underlined text — measured on the dependency step's "Get it", which is the one control on a
- * failed row and looked like stray prose. Anything that navigates away (a download page, release
- * notes) has to be an anchor, so the styling has to cover both.
- */
-a.mini{
-  display:inline-block;text-decoration:none;white-space:nowrap;
-  font-family:var(--mono);font-size:.72rem;cursor:pointer;
-  background:var(--glass);color:var(--ink-2);border:1px solid var(--edge);
-  border-radius:9px;padding:.36rem .7rem;transition:color .16s,border-color .16s
-}
-a.mini:hover{color:var(--ink);border-color:var(--edge-2)}
+/* ---------- buttons: one glass grammar ----------
+   Every pressable chip shares one construction: a SOLID fill under a glassy gloss — a white
+   highlight rolling off the top, a faint darkening at the foot, an inset sheen and a real
+   shadow — that lifts a touch on hover and presses flat on click. Solid, not translucent:
+   a tinted see-through chip reads as a label on the pane behind it; an opaque one reads as
+   a thing you can pick up. The gloss is what keeps it glass rather than paint.
 
-/* Setup's action buttons — Register operator, Save endpoint, Store it, Remove, Check now, Push now.
-   Jade rather than the default glass, so the things that DO something on that screen read as
-   actionable instead of as chrome. Same treatment as the update card's Apply button, which is the
-   point: one look for "this performs an action", wherever it appears.
-   Scoped to `.collect.acts` on purpose — see the marker class in setup(). */
-#v-setup .collect.acts button.mini,
-#v-setup .wiz-b button.mini,
-#v-setup .wiz-b a.mini{
+   `a.mini` is in every rule alongside `button.mini` because anything that navigates away (a
+   download page, release notes) has to be an anchor, and a tag-qualified rule left those as
+   bare underlined prose — measured on the dependency step's "Get it".
+
+   COLOUR SAYS WHAT A PRESS DOES:
+     · jade  (.act)    does something — starts, saves, stores, runs, applies
+     · ember (.danger) stops or removes — and Send, which publishes under a person's name
+                       and is deliberately NOT dressed as the inviting next click
+     · amber (.warn)   proceeds past a warning the app just raised
+     · glass (plain)   navigation and meta: tabs, close, cancel, copy, theme, refresh
+   Ember doubles as "something is wrong" everywhere else on purpose: a destructive control
+   is the one place a press makes the wrong thing happen, so it wears the warning colour
+   before the fact. */
+button.mini,a.mini{
+  font:inherit;font-family:var(--mono);font-size:.75rem;line-height:1.5;cursor:pointer;
+  display:inline-block;text-decoration:none;white-space:nowrap;
   color:var(--ink);
-  border-color:color-mix(in srgb,var(--jade) 45%,transparent);
-  background:color-mix(in srgb,var(--jade) 14%,transparent)
+  background:linear-gradient(180deg,var(--gloss),transparent 55%),var(--glass-2);
+  border:1px solid var(--edge-2);border-radius:10px;padding:.42rem .85rem;
+  box-shadow:inset 0 1px 0 var(--sheen),0 1px 2px rgba(0,0,0,.12),0 8px 18px -14px rgba(0,0,0,.5);
+  transition:color .18s,border-color .18s,background-color .18s,box-shadow .18s,transform .18s;
 }
-#v-setup .collect.acts button.mini:hover:not(:disabled),
-#v-setup .wiz-b button.mini:hover:not(:disabled){
-  border-color:color-mix(in srgb,var(--jade) 70%,transparent);
-  background:color-mix(in srgb,var(--jade) 24%,transparent)
+button.mini:hover:not(:disabled),a.mini:hover{
+  border-color:var(--ink-3);transform:translateY(-1px);
+  box-shadow:inset 0 1px 0 var(--sheen),0 2px 4px rgba(0,0,0,.14),0 12px 24px -14px rgba(0,0,0,.55);
 }
-/* The step header is a button too, but it is navigation, not an action — it must stay neutral or
-   every collapsed step would shout as loudly as the thing you are meant to press. */
-#v-setup .wiz-h{background:none}
+button.mini:active:not(:disabled),a.mini:active{
+  transform:translateY(0);
+  box-shadow:inset 0 1px 0 var(--sheen),0 1px 2px rgba(0,0,0,.12);
+}
+/* the bigger cut, for the button that leads a panel — replaces the per-site inline sizes */
+button.mini.lg,a.mini.lg{font-size:.8rem;padding:.5rem .95rem}
+
+/* The candy gloss the accent fills share: a highlight rolling off the top, a breath of
+   shade at the foot. Kept as one custom property so the four fills cannot drift apart. */
+button.mini,a.mini{
+  --candy:linear-gradient(180deg,rgba(255,255,255,.28),rgba(255,255,255,.05) 46%,rgba(0,0,0,.10));
+}
+/* jade: this one DOES something */
+button.mini.act,a.mini.act{
+  color:var(--on-accent);
+  border-color:color-mix(in srgb,var(--jade) 45%,var(--edge-2));
+  background:var(--candy),var(--jade-deep);
+}
+button.mini.act:hover:not(:disabled),a.mini.act:hover{
+  border-color:color-mix(in srgb,var(--jade) 75%,var(--edge-2));
+  background:var(--candy),color-mix(in srgb,var(--jade-deep) 62%,var(--jade));
+}
+/* ember: this one stops, removes, or publishes */
+button.mini.danger{
+  color:var(--on-accent);
+  border-color:color-mix(in srgb,var(--ember) 45%,var(--edge-2));
+  background:var(--candy),var(--ember-deep);
+}
+button.mini.danger:hover:not(:disabled){
+  border-color:color-mix(in srgb,var(--ember) 75%,var(--edge-2));
+  background:var(--candy),color-mix(in srgb,var(--ember-deep) 62%,var(--ember));
+}
+/* amber: past a warning */
+button.mini.warn{
+  color:var(--on-accent);
+  border-color:color-mix(in srgb,var(--amber) 45%,var(--edge-2));
+  background:var(--candy),var(--amber-deep);
+}
+button.mini.warn:hover:not(:disabled){
+  border-color:color-mix(in srgb,var(--amber) 75%,var(--edge-2));
+  background:var(--candy),color-mix(in srgb,var(--amber-deep) 62%,var(--amber));
+}
+/* the saved state on a toggle chip (Ignore / Mark as read / Actioned) */
+button.mini.on{
+  color:var(--on-accent);
+  border-color:color-mix(in srgb,var(--jade) 45%,var(--edge-2));
+  background:var(--candy),var(--jade-deep);
+}
 /* A button that cannot be pressed has to LOOK like it cannot be pressed. Added after seeing the
    update card mid-download in a real render: both buttons were correctly `disabled` and both still
    looked live, which invites a click that does nothing and reads as the app having hung. */
-button.mini:disabled{opacity:.45;cursor:default;color:var(--ink-3)}
+button.mini:disabled{
+  opacity:.45;cursor:default;
+  box-shadow:inset 0 1px 0 var(--sheen);
+}
 
 /* ---------- dropdowns ----------
  * Every <select> in this console, in one place.
@@ -461,12 +529,19 @@ select.sel option{background:var(--glass-2);color:var(--ink)}
 /* Anchor OR button: in a browser the action is a download link, in the desktop app it is a button
    that installs in place. They have to look identical — it is the same action to the person. */
 .upd a.updbtn,.upd button.updbtn{
-  color:var(--ink);text-decoration:none;padding:.35rem .8rem;border-radius:9px;
-  border:1px solid color-mix(in srgb,var(--jade) 40%,transparent);
-  background:color-mix(in srgb,var(--jade) 12%,transparent);font-size:.8rem;white-space:nowrap;
-  font-family:inherit;cursor:pointer
+  color:var(--on-accent);text-decoration:none;padding:.38rem .85rem;border-radius:10px;
+  border:1px solid color-mix(in srgb,var(--jade) 45%,var(--edge-2));
+  background:linear-gradient(180deg,rgba(255,255,255,.28),rgba(255,255,255,.05) 46%,rgba(0,0,0,.10)),var(--jade-deep);
+  font-size:.8rem;white-space:nowrap;
+  font-family:inherit;cursor:pointer;
+  box-shadow:inset 0 1px 0 var(--sheen);
+  transition:border-color .18s,background-color .18s
 }
-.upd a.updbtn:hover,.upd button.updbtn:hover:not(:disabled){background:color-mix(in srgb,var(--jade) 22%,transparent)}
+.upd a.updbtn:hover,.upd button.updbtn:hover:not(:disabled){
+  border-color:color-mix(in srgb,var(--jade) 75%,var(--edge-2));
+  background:linear-gradient(180deg,rgba(255,255,255,.28),rgba(255,255,255,.05) 46%,rgba(0,0,0,.10)),
+             color-mix(in srgb,var(--jade-deep) 62%,var(--jade))
+}
 .upd button.updbtn:disabled{opacity:.6;cursor:default}
 .upd .updx{
   margin-left:auto;cursor:pointer;background:none;border:0;color:var(--ink-3);
@@ -688,13 +763,18 @@ td{padding:.95rem 1rem;border-bottom:1px solid var(--edge);vertical-align:top;li
 tr:last-child td{border-bottom:0}
 tr.dim td{color:var(--ink-3)}
 td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+/* Status pills. Full-round with a whisper of their own colour behind the text — the border
+   is mixed well back so the shape reads as a soft capsule, not a stamped box. The colour is
+   the meaning: jade = good/done, amber = attention, ember = wrong, grey = merely factual. */
 .tag{
-  display:inline-block;font-family:var(--mono);font-size:.655rem;padding:.16rem .5rem;border-radius:7px;
-  border:1px solid var(--edge-2);color:var(--ink-3);white-space:nowrap;letter-spacing:.03em;
+  display:inline-block;font-family:var(--mono);font-size:.655rem;padding:.18rem .6rem;border-radius:999px;
+  border:1px solid color-mix(in srgb,var(--ink-3) 38%,transparent);color:var(--ink-3);
+  background:color-mix(in srgb,var(--ink-3) 9%,transparent);
+  white-space:nowrap;letter-spacing:.03em;
 }
-.tag.ok{color:var(--jade);border-color:color-mix(in srgb,var(--jade) 34%,transparent);background:var(--jade-soft)}
-.tag.no{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 34%,transparent);background:var(--amber-soft)}
-.tag.stop{color:var(--ember);border-color:color-mix(in srgb,var(--ember) 34%,transparent);background:var(--ember-soft)}
+.tag.ok{color:var(--jade);border-color:color-mix(in srgb,var(--jade) 30%,transparent);background:var(--jade-soft)}
+.tag.no{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 30%,transparent);background:var(--amber-soft)}
+.tag.stop{color:var(--ember);border-color:color-mix(in srgb,var(--ember) 30%,transparent);background:var(--ember-soft)}
 
 /* ---------- cards ---------- */
 /**
@@ -888,8 +968,14 @@ button.srcbtn:hover{background:color-mix(in srgb,var(--ember) 14%,transparent)}
 .g-never li::before{content:'✕';position:absolute;left:0;top:0;color:var(--ember);font-weight:700}
 .g-never li b{color:var(--ink)}
 
-.todo{display:flex;gap:.65rem;padding:.42rem 0;font-size:.87rem;color:var(--ink-2);line-height:1.6;align-items:baseline}
-.todo .box{font-family:var(--mono);color:var(--ink-3);flex:none}
+.todo{display:flex;gap:.65rem;padding:.48rem 0;font-size:.87rem;color:var(--ink-2);line-height:1.6;align-items:flex-start}
+/* A drawn empty checkbox. Its unticked state is the point — the day's work is not done. */
+.todo .box{
+  flex:none;width:15px;height:15px;margin-top:.26rem;border-radius:5px;
+  border:1px solid color-mix(in srgb,var(--ink-3) 70%,transparent);
+  background:color-mix(in srgb,var(--ink-3) 8%,transparent);
+  transition:border-color .16s,background-color .16s;
+}
 .todo b{color:var(--ink)}
 /* A step you can DO is a button, and looks like the line it replaces until you point at it — the
    checklist should not turn into a wall of controls. `text-align:left` and `width:100%` because a
@@ -898,14 +984,53 @@ button.srcbtn:hover{background:color-mix(in srgb,var(--ember) 14%,transparent)}
 button.todo{
   width:100%;text-align:left;background:none;border:0;border-radius:6px;
   font:inherit;font-size:.87rem;color:var(--ink-2);cursor:pointer;
-  padding:.42rem .45rem;margin-left:-.45rem;
+  padding:.48rem .45rem;margin-left:-.45rem;
   transition:background .12s ease,color .12s ease;
 }
 button.todo:hover,button.todo:focus-visible{background:var(--glass-2);color:var(--ink)}
-button.todo:hover .box,button.todo:focus-visible .box{color:var(--ember)}
-button.todo .go{margin-left:auto;padding-left:.6rem;color:var(--ink-3);font-family:var(--mono);font-size:.76rem;flex:none}
-button.todo:hover .go,button.todo:focus-visible .go{color:var(--ember)}
+/* Jade, not ember: pressing this row STARTS the step, and ember is the "something is wrong"
+   colour everywhere else in here. The destination chip wears jade at rest, so a startable
+   row is tellable from a caption before the pointer arrives — the rest of the row stays
+   quiet so the checklist does not become a wall of controls. */
+button.todo:hover .box,button.todo:focus-visible .box{
+  border-color:color-mix(in srgb,var(--jade) 60%,transparent);background:var(--jade-soft);
+}
+/* Where pressing the row lands, as a small pill — the row's one visible affordance at rest. */
+button.todo .go{
+  margin-left:auto;flex:none;white-space:nowrap;margin-top:.05rem;
+  font-family:var(--mono);font-size:.72rem;color:var(--jade);
+  padding:.14rem .55rem;border-radius:999px;
+  border:1px solid color-mix(in srgb,var(--jade) 30%,transparent);
+  background:var(--jade-soft);
+  transition:border-color .16s;
+}
+button.todo:hover .go,button.todo:focus-visible .go{border-color:color-mix(in srgb,var(--jade) 65%,transparent)}
 button.todo[disabled]{opacity:.6;cursor:default}
+
+/* ---------- the routine, as a panel on Today ----------
+   A balanced grid, NOT CSS columns: `columns` fills the first column to the bottom of the
+   card and leaves a void in the middle of a wide screen. auto-fit deals the eight steps into
+   even tracks that fill the row at every width — one on a phone, two on a laptop, more past
+   ~2200px. The numeral wears the brand ember (the mark the logo and the tab badge already
+   carry) inside a glass ring — the same translucent gloss-and-sheen construction as the
+   panes, so the circle reads as part of the sheet rather than a solid chip on it. */
+.routine{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));
+  gap:0 2.6rem;padding:.55rem 1.2rem 1rem;
+}
+.rstep{display:grid;grid-template-columns:1.9rem 1fr;gap:.95rem;padding:.75rem 0}
+.rstep .n{
+  width:1.9rem;height:1.9rem;border-radius:50%;display:grid;place-items:center;
+  font-family:var(--mono);font-size:.78rem;font-weight:700;color:var(--ember);
+  border:1px solid var(--edge-2);
+  background:linear-gradient(180deg,var(--gloss),transparent 55%),
+             color-mix(in srgb,var(--glass) 74%,transparent);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+  box-shadow:inset 0 1px 0 var(--sheen),0 1px 2px rgba(0,0,0,.12);
+}
+.rstep .txt{font-size:.9rem;color:var(--ink-2);line-height:1.72;max-width:64ch}
+.rstep .txt b{color:var(--ink)}
+.rstep .txt em{font-style:normal;color:var(--ink-3)}
 
 .steps-n{counter-reset:s}
 /**
@@ -935,8 +1060,10 @@ button.todo[disabled]{opacity:.6;cursor:default}
 .stepn .txt{font-size:.9rem;color:var(--ink-2);line-height:1.74;max-width:64ch}
 .stepn .txt b{color:var(--ink)}
 .stepn .txt em{font-style:normal;color:var(--ink-3)}
-.egs{margin-top:.7rem;padding:.85rem 1rem;border-radius:10px;border:1px solid var(--edge);background:var(--glass-2);font-family:var(--serif);font-size:.92rem;line-height:1.7;color:var(--ink-2)}
-.egs .tagline{font-family:var(--mono);font-size:.63rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);display:block;margin-bottom:.4rem}
+/* `display:block` because the routine embeds this as a <span> inside a step's text (a <div>
+   would be invalid there); the jade edge marks it as the one POSITIVE exhibit on the screen. */
+.egs{display:block;margin-top:.7rem;padding:.85rem 1rem;border-radius:10px;border:1px solid var(--edge);border-left:3px solid color-mix(in srgb,var(--jade) 55%,transparent);background:var(--glass-2);font-family:var(--serif);font-size:.92rem;line-height:1.7;color:var(--ink-2)}
+.egs .tagline{font-family:var(--mono);font-size:.63rem;letter-spacing:.1em;text-transform:uppercase;color:var(--jade);display:block;margin-bottom:.4rem}
 .never{display:grid;gap:.5rem;margin-top:.3rem}
 .never div{display:flex;gap:.65rem;font-size:.88rem;color:var(--ink-2);line-height:1.65}
 .never i{font-style:normal;color:var(--ember);flex:none;font-family:var(--mono)}
@@ -949,8 +1076,43 @@ button.todo[disabled]{opacity:.6;cursor:default}
 .stage .txt b{color:var(--ink)}
 
 /* ---------- walkthrough ---------- */
-button.mini.q{width:2rem;padding:.36rem 0;text-align:center;font-weight:700}
-button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
+/* Square icon chips (?, gear, refresh, theme). line-height:0 because the svg is the only
+   content and inherited line-height would stretch the chip taller than its text-bearing
+   neighbours. */
+button.mini.ic{width:2.15rem;padding:0;height:2.02rem;display:inline-grid;place-items:center;line-height:0}
+button.mini.ic svg{width:15px;height:15px;display:block}
+/* The connection chip carries a status dot in its own state colour — pulseCheck() paints the
+   chip's `color` per state (jade connected / amber running / ember problems), and the dot
+   follows through currentColor without the JS knowing it exists. */
+#pulseChip{display:inline-flex;align-items:center;gap:.45rem}
+#pulseChip::before{
+  content:"";width:7px;height:7px;border-radius:50%;flex:none;
+  background:currentColor;box-shadow:0 0 7px currentColor;
+}
+/* An open panel is a place you are, not a problem — ember here would cry wolf. */
+button.mini.ic[aria-expanded="true"]{color:var(--ink);border-color:var(--ink-3)}
+/* The attention signal: a glassy dot on a chip's shoulder. On the gear it means "something
+   in Settings needs you" (the count stays in the node — font-size:0 hides the digit, not the
+   text — and in the title); on the update button it means "a newer release exists". Ember by
+   default, amber (gear only) when the need is merely advisory. */
+#settingsBtn,#updateBtn{position:relative}
+#settingsBtn .g,#updateBtn .dot{
+  position:absolute;top:-3.5px;right:-3.5px;width:10px;height:10px;border-radius:50%;
+  font-size:0;line-height:0;
+  background:linear-gradient(180deg,rgba(255,255,255,.4),rgba(255,255,255,0) 55%),var(--ember);
+  border:1px solid color-mix(in srgb,var(--ember) 55%,var(--bg));
+  box-shadow:0 0 7px color-mix(in srgb,var(--ember) 75%,transparent),inset 0 1px 0 rgba(255,255,255,.35);
+}
+#settingsBtn .g.adv{
+  background:linear-gradient(180deg,rgba(255,255,255,.4),rgba(255,255,255,0) 55%),var(--amber);
+  border-color:color-mix(in srgb,var(--amber) 55%,var(--bg));
+  box-shadow:0 0 7px color-mix(in srgb,var(--amber) 75%,transparent),inset 0 1px 0 rgba(255,255,255,.35);
+}
+/* The theme chip heads the Settings panel; the close chip keeps the far edge in the guide,
+   and in Settings the pair sits together on the right. */
+#settings .guide-h{align-items:center}
+.guide-h #theme{margin-left:auto}
+#settings .guide-h .x{margin-left:0}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:70}
 :root[data-theme="light"] .scrim{background:rgba(255,255,255,.72)}
 .guide{
@@ -958,6 +1120,15 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
   background:var(--bg);border-left:1px solid var(--edge-2);
   display:flex;flex-direction:column;
 }
+/* The drawer slides in and the scrim fades, instead of both popping into existence.
+   Entrance only: closing toggles `hidden`, and holding a dead panel on screen to animate
+   its exit would cost more than the exit is worth. An animation (not a transition) because
+   `hidden` works by display, which transitions cannot cross. The global reduced-motion rule
+   already turns both off. */
+@keyframes drawer-in{from{transform:translateX(102%)}to{transform:none}}
+@keyframes scrim-in{from{opacity:0}to{opacity:1}}
+.guide:not([hidden]){animation:drawer-in .32s cubic-bezier(.2,.8,.2,1)}
+.scrim:not([hidden]){animation:scrim-in .28s ease-out}
 @media (max-width:620px){.guide{width:100%;border-left:0}}
 .guide-h{
   display:flex;align-items:baseline;gap:.9rem;padding:1.4rem 1.6rem 1rem;
@@ -966,22 +1137,44 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 .guide-h h2{font-size:1.3rem;letter-spacing:-.025em}
 .guide-h .x{margin-left:auto}
 .guide-b{overflow-y:auto;padding:1.4rem 1.6rem 3rem}
-.g-sec{padding:1.15rem 0;border-bottom:1px solid var(--edge)}
+/* Disclosures, not a wall: the heading row is always on screen, the prose arrives on demand.
+   guide() opens the section for the screen the person came from. */
+.g-sec{border-bottom:1px solid var(--edge)}
 .g-sec:last-child{border-bottom:0}
+.g-sec[open]{padding-bottom:1.15rem}
+.g-sec summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;gap:.6rem;
+  padding:1.05rem 0;
+}
+.g-sec summary::-webkit-details-marker{display:none}
+.g-sec summary:hover h3{color:var(--ink-2)}
+/* The caret makes a closed section read as openable rather than as finished. */
+.g-sec summary::after{
+  content:"▸";margin-left:auto;flex:none;
+  font-family:var(--mono);font-size:.7rem;color:var(--ink-3);
+  transition:transform .16s;
+}
+.g-sec[open] summary::after{transform:rotate(90deg)}
 .g-sec h3{
   font-family:var(--mono);font-size:.7rem;letter-spacing:.11em;text-transform:uppercase;
-  color:var(--ink-3);margin-bottom:.5rem;
+  color:var(--ink-3);margin:0;
 }
-.g-sec.on h3{color:var(--ember)}
+/* Scoped to the summary row: the today section carries a second h3 inside its body, and
+   colouring that too would dress a sub-heading as a second section head. */
+.g-sec.on summary h3{color:var(--ember)}
 .g-sec p{margin:0 0 .6rem;font-size:.9rem;line-height:1.74;color:var(--ink-2);max-width:56ch}
 .g-sec p:last-child{margin-bottom:0}
 .g-sec b{color:var(--ink)}
 .g-flow{display:flex;flex-wrap:wrap;gap:.4rem;margin:.2rem 0 .8rem}
 .g-flow span{
-  font-family:var(--mono);font-size:.685rem;padding:.24rem .55rem;border-radius:7px;
-  border:1px solid var(--edge-2);color:var(--ink-2);
+  font-family:var(--mono);font-size:.685rem;padding:.24rem .65rem;border-radius:999px;
+  border:1px solid color-mix(in srgb,var(--ink-3) 45%,transparent);color:var(--ink-2);
+  background:color-mix(in srgb,var(--ink-3) 7%,transparent);
 }
-.g-flow span.you{border-color:var(--ember);color:var(--ember)}
+.g-flow span.you{
+  border-color:color-mix(in srgb,var(--ember) 45%,transparent);color:var(--ember);
+  background:var(--ember-soft);
+}
 .g-rule{
   margin-top:.7rem;padding:.85rem 1rem;border-radius:10px;border:1px solid var(--edge-2);
   border-left:3px solid var(--ember);font-size:.87rem;line-height:1.7;color:var(--ink-2);
@@ -1020,9 +1213,10 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 /* Sits inside the pill. Ember-edged because it interrupts work, and never the default focus. */
 .toast .stopbtn{
   font:inherit;font-size:.74rem;padding:.22rem .6rem;border-radius:100px;cursor:pointer;
-  border:1px solid var(--ember);color:var(--ember);background:transparent;
+  border:1px solid color-mix(in srgb,var(--ember) 45%,var(--edge-2));color:var(--on-accent);
+  background:linear-gradient(180deg,rgba(255,255,255,.26),rgba(255,255,255,.05) 46%,rgba(0,0,0,.10)),var(--ember-deep);
 }
-.toast .stopbtn:hover{background:color-mix(in srgb, var(--ember) 14%, transparent)}
+.toast .stopbtn:hover{background:linear-gradient(180deg,rgba(255,255,255,.26),rgba(255,255,255,.05) 46%,rgba(0,0,0,.10)),color-mix(in srgb,var(--ember-deep) 62%,var(--ember))}
 .toast .stopbtn:disabled{opacity:.45;cursor:not-allowed}
 .toast .spin{
   width:.85rem;height:.85rem;flex:none;border-radius:50%;
@@ -1109,11 +1303,27 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 /* --- an account, with how far along it is --- */
 .acct{padding:.85rem .95rem;border-bottom:1px solid var(--edge)}
 .acct:last-child{border-bottom:0}
+/* On Today the row is a real <button>: it narrows the day's checklist to that account. The
+   resets undo the UA button chrome; the jade spine is the pressed state, matching the spine
+   grammar the queue cards already use. */
+button.acct{
+  display:block;width:100%;text-align:left;background:none;border:0;
+  border-bottom:1px solid var(--edge);font:inherit;color:inherit;cursor:pointer;
+  transition:background .16s,box-shadow .16s;
+}
+button.acct:hover{background:var(--sheen)}
+button.acct.on{
+  background:linear-gradient(90deg,var(--jade-soft),transparent 70%);
+  box-shadow:inset 3px 0 0 var(--jade);
+}
+.meter{display:block}
 .acct .h{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem}
 .acct .nm{font-family:var(--mono);font-size:.8rem;font-weight:600}
 .st{
   font-family:var(--mono);font-size:.63rem;letter-spacing:.08em;text-transform:uppercase;
-  padding:.1rem .45rem;border-radius:999px;border:1px solid currentColor;white-space:nowrap;
+  padding:.12rem .55rem;border-radius:999px;white-space:nowrap;
+  /* currentColor mixed well back: the pill keeps its state colour without a hard rim */
+  border:1px solid color-mix(in srgb,currentColor 40%,transparent);
   background-image:linear-gradient(180deg,var(--gloss),transparent);
 }
 .st.warm{color:var(--amber);background-color:var(--amber-soft)}
@@ -1144,8 +1354,10 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 .sr{font-family:var(--mono);font-size:.665rem;color:var(--ink-3)}
 .jt{font-size:.875rem;line-height:1.4;margin:0 0 .2rem;text-wrap:balance}
 .jw{font-size:.79rem;color:var(--ink-3);line-height:1.5;margin:0}
-.jr{display:flex;align-items:center;padding:.8rem .85rem;border-left:1px solid var(--edge)}
+.jr{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.1rem;padding:.8rem .85rem;border-left:1px solid var(--edge)}
 .score{font-family:var(--mono);font-size:.95rem;font-weight:600;font-variant-numeric:tabular-nums}
+/* What the figure IS — without it the score column is a bare number you have to already know. */
+.jr .score-l{font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
 
 /* --- an observation: what was seen, and how --- */
 .ev{padding:.7rem .95rem;border-bottom:1px solid var(--edge);
@@ -1204,6 +1416,7 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
   }
   .stack-h,.collect-h,.lens-h,.ph,thead th{background:var(--glass-2)}
   .quote,.job:hover,.step[aria-current="page"]{background:var(--glass-2)}
+  /* the buttons are already opaque fills — nothing to override here */
 }
 
 /* ------------------------------------------------------------------
@@ -1265,6 +1478,7 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
   th,
   /* the instrument-panel primitives, held to the same floor */
   .ph h2, .ph h3, .ph .n,
+  .jr .score-l,   /* the "karma" caption under the score */
   .kv, .sr, .ev .s, .runbar, .fun .l,
   .tag, .lbl, .hint, .st, .tagline{
     font-size:.72rem;
@@ -1296,19 +1510,34 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
        Navigation that shifts under you is worse than a figure you have to click a tab to see. -->
   <div class="right">
     <button class="mini" id="pulseChip" title="Connection health">checking…</button>
-    <button class="mini q" id="help" aria-expanded="false" aria-controls="guide" title="What is this?">?</button>
+    <button class="mini ic" id="help" aria-expanded="false" aria-controls="guide" title="What is this?" aria-label="What is this?">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5.7 5.9a2.3 2.3 0 1 1 3.2 2.1c-.65.28-.9.75-.9 1.4v.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="12.4" r=".9" fill="currentColor"/></svg>
+    </button>
     <!-- The badge keeps its old id, `nSet`, and its old meaning: the number of UNMET
-         requirements, from the server's shared list. It moved here with the screen, because a
-         count nobody can see is not a warning. -->
-    <button class="mini q" id="settingsBtn" aria-expanded="false" aria-controls="settings"
-            title="Settings — accounts, model, dashboard">⚙ <span class="g" id="nSet">–</span></button>
+         requirements. It renders as a DOT on the gear's shoulder now — ember for blocking,
+         amber for advisory, absent when everything is met. The count itself still lands in
+         the node and in the button's title, so nothing that reads it loses the number. -->
+    <button class="mini ic" id="settingsBtn" aria-expanded="false" aria-controls="settings"
+            title="Settings — accounts, model, dashboard" aria-label="Settings">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="4.45" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5v2.1M8 12.4v2.1M1.5 8h2.1M12.4 8h2.1M3.4 3.4l1.5 1.5M11.1 11.1l1.5 1.5M12.6 3.4l-1.5 1.5M4.9 11.1l-1.5 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <span class="g" id="nSet" hidden>–</span>
+    </button>
     <!-- Updating was reachable from exactly two places, and neither was a place a person goes
          when they want to update. The card is inside Settings, and the bar only appears when a
          newer release happens to be detected — and can be dismissed for that version, after which
          there is no way to ask again. This is the way to ask. -->
-    <button class="mini" id="updateBtn" title="Check for a newer redbot">update</button>
-    <button class="mini" id="reload">refresh</button>
-    <button class="mini" id="theme">theme</button>
+    <!-- The label lives in its own span because the handler rewrites it ("checking…") via
+         textContent, which would take the dot with it. The dot says "a newer release exists"
+         and survives dismissing the top bar — the bar is a banner, the dot is the fact. -->
+    <button class="mini" id="updateBtn" title="Check for a newer redbot"><span id="updLbl">update</span><span class="dot" hidden></span></button>
+    <!-- Icon chips. The SVGs stroke currentColor so they follow the chip's ink; aria-labels
+         carry what the glyph no longer says. `update` stays text because its label is state
+         the JS rewrites ("checking…"), and an icon would be wiped by the first textContent.
+         The theme toggle is NOT here: it lives at the head of Settings — flipping the look
+         is configuration, not part of any day's work. -->
+    <button class="mini ic" id="reload" title="Refresh" aria-label="Refresh">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89M13.5 1.6v2.9h-2.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
   </div>
 
   <!-- Ordered by what the work actually is right now: both accounts are new, so nurturing
@@ -1346,24 +1575,27 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
   </div>
   <div class="guide-b">
 
-    <div class="g-sec" data-g="what">
-      <h3>in one line</h3>
+    <!-- Every section is a disclosure: seven headings scan in one glance, and guide() opens
+         the one for the screen the person was on. The whole manual is still here — it just
+         stopped arriving all at once. -->
+    <details class="g-sec" data-g="what" open>
+      <summary><h3>in one line</h3></summary>
       <p>redbot finds Reddit threads where somebody has a WordPress problem, writes a reply, and then tries to prove its own reply wrong. <b>You decide whether any of it goes out.</b></p>
       <div class="g-flow">
         <span>find</span><span>rank</span><span>write</span><span>fact-check</span><span class="you">you decide</span><span class="you">you send</span>
       </div>
       <div class="g-rule"><b>There is no send button anywhere in here.</b> Sending is a command you type in a terminal, so every word that goes out is one a person chose to put their name on. This screen can only read.</div>
-    </div>
+    </details>
 
-    <div class="g-sec" data-g="review">
-      <h3>Review — the screen you live on</h3>
+    <details class="g-sec" data-g="review">
+      <summary><h3>Review — the screen you live on</h3></summary>
       <p>Their question on the left, in their own words. What redbot made of it on the right.</p>
       <p>The verdict comes <b>before</b> the reply on purpose. Reading a well-written reply first makes you judge whether it <i>sounds</i> right instead of whether it <i>is</i> right — that is exactly how a confident, fluent, completely wrong reply nearly got sent.</p>
       <p><b>Do not send</b> means something in the reply was shown to be false. <b>Needs a look</b> means the check could not settle it. <b>Holds up</b> means nothing could be disproved — you still decide.</p>
-    </div>
+    </details>
 
-    <div class="g-sec" data-g="argus">
-      <h3>Argus — the part that tries to prove the reply wrong</h3>
+    <details class="g-sec" data-g="argus">
+      <summary><h3>Argus — the part that tries to prove the reply wrong</h3></summary>
       <p>Argus is the fact-checker. Everything before it is trying to write something good; Argus is the only step trying to show that what was written is <b>false</b>. It is where <b>Do not send</b>, <b>Needs a look</b> and <b>Holds up</b> come from.</p>
 
       <p><b>Why it exists.</b> One reply got all the way to the end of the queue: well written, specific, careful, and it said something about databases that is simply not true. Every other check passed it, because every other check can only measure how the writing reads. Nothing was measuring whether it was right. Argus is the answer to that one reply.</p>
@@ -1383,10 +1615,10 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
       <p><b>Its record so far</b> <span class="g-dim">— read from the log, not written here:</span></p>
       <div class="g-stat" id="g-argus">…</div>
       <p class="g-dim">And a known wobble worth your suspicion: run the same reply through twice and it does not always find the same number of statements. The final answer has been the same every time so far — but every reply so far got the same answer anyway, so that agreement proves very little.</p>
-    </div>
+    </details>
 
-    <div class="g-sec" data-g="discovery">
-      <h3>Threads — how one gets chosen</h3>
+    <details class="g-sec" data-g="discovery">
+      <summary><h3>Threads — how one gets chosen</h3></summary>
       <p>You collect them by hand: read a subreddit, or run a search. Up to 15 a time. Then each one has to survive six filters:</p>
       <p><b>1. Is it a question?</b> Anything tagged Guide, PSA, Showcase, Promo, Megathread and the like is dropped on the title alone. So is anyone shopping for a product.</p>
       <p><b>2. Is it still live?</b> Over 72 hours old and it is dropped — measured from right now, not from when it was collected.</p>
@@ -1395,10 +1627,10 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
       <p><b>5. Score it.</b> A wrong claim standing uncorrected is worth most, then a missing diagnostic question, then something never answered. What is already well covered is penalised, so a thread with twelve good answers does not win.</p>
       <p><b>6. Is it worth a stranger appearing?</b> Below 40 it is skipped. 40 is exactly one unanswered part that we can genuinely answer, and nothing else.</p>
       <p>Out of 58 threads collected, 24 got this far, 17 were worth answering. <b>Skip is meant to be the common answer</b> — anything that finds an opportunity in every thread has not found one.</p>
-    </div>
+    </details>
 
-    <div class="g-sec" data-g="accounts">
-      <h3>Accounts — who would be posting</h3>
+    <details class="g-sec" data-g="accounts">
+      <summary><h3>Accounts — who would be posting</h3></summary>
       <p>Only accounts that have actually been measured appear here. A browser sign-in sitting on this machine is not proof of an account, so the two numbers are shown separately rather than smoothed into one.</p>
       <p>Karma under 10 is the state Reddit's filters are built to catch. Comments can be removed or held back quietly — still visible to you while signed in, invisible to everybody else.</p>
     
@@ -1414,10 +1646,10 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
         <li>An account below 10 karma is warming: 2–4 comments a day maximum, no links, no product names.</li>
         <li>If an account is suspended, stop. A replacement from the same machine is ban evasion.</li>
       </ul>
-</div>
+    </details>
 
-    <div class="g-sec" data-g="today">
-      <h3>Growing — why nothing is happening yet</h3>
+    <details class="g-sec" data-g="today">
+      <summary><h3>Growing — why nothing is happening yet</h3></summary>
       <p>Both accounts are new. Getting them to where a reply survives is roughly six weeks of comments written by a person, two to four a day, no links and no product names.</p>
       <p><b>redbot cannot speed this up.</b> Karma comes from other people finding comments useful. It can find threads, write, keep the pace slow and record what gets taken down — that is all.</p>
 
@@ -1453,13 +1685,13 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
         <li><b>Voting at all through this tool</b> — there is no code for it, and there will not be.</li>
       </ul>
       <p><b>redbot cannot do this part.</b> These comments are written by you, in your own browser, and never pass through this tool — which is why it cannot count them for you. It can find threads, draft, fact-check, keep the pace slow, and record what gets taken down. Karma comes from other people finding your comments useful, and nothing here changes that.</p>
-    </div>
+    </details>
 
-    <div class="g-sec" data-g="outcomes">
-      <h3>Results — empty on purpose</h3>
+    <details class="g-sec" data-g="outcomes">
+      <summary><h3>Results — empty on purpose</h3></summary>
       <p>Karma on a comment, replies to it, whether a moderator removed it: all of it only exists after something is sent. Nothing has been sent, so there is nothing here.</p>
       <p>That is an empty screen, not a screen full of zeroes. The difference matters — a zero would mean measured and none, and nothing here has been measured.</p>
-    </div>
+    </details>
 
   </div>
 </aside>
@@ -1493,6 +1725,11 @@ button.mini.q[aria-expanded="true"]{color:var(--ink);border-color:var(--ember)}
 <aside class="guide" id="settings" hidden aria-label="Settings">
   <div class="guide-h">
     <h2>Settings</h2>
+    <!-- The theme toggle: configuration, so it lives here rather than spending a slot in the
+         bar. Same id, so the one handler and the one test address it wherever it sits. -->
+    <button class="mini ic" id="theme" title="Switch theme" aria-label="Switch between light and dark theme">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.8a6.2 6.2 0 0 1 0 12.4Z" fill="currentColor"/></svg>
+    </button>
     <button class="mini x" id="settingsX">close</button>
   </div>
   <div class="guide-b">
@@ -1533,8 +1770,9 @@ const panel=(title,n)=>{
   p.append(h);
   return p;
 };
-/** A label and its figure, inside an account row. `v` is trusted HTML — callers escape. */
-const kvRow=(k,v)=>el('div','kv',`<span>${esc(k)}</span><b>${v}</b>`);
+/** A label and its figure, inside an account row. `v` is trusted HTML — callers escape.
+    `tag` (default div) lets a row live inside a <button>, where only phrasing content is valid. */
+const kvRow=(k,v,tag)=>el(tag||'div','kv',`<span>${esc(k)}</span><b>${v}</b>`);
 /** A label and its figure, as a full-width strip. */
 const barRow=(k,v,tone)=>el('div','runbar',
   `<span>${esc(k)}</span><b${tone?` style="color:var(--${tone})"`:''}>${v}</b>`);
@@ -1543,13 +1781,16 @@ const evRow=(text,src,tone)=>el('div','ev',
   `<span class="ed${tone?' '+tone:''}"></span><p>${text}`+
   (src?`<span class="s">${esc(src)}</span>`:'')+`</p>`);
 /** A meter that is only drawn when there is a real measurement to draw. */
-const meter=(pct,tone)=>{
-  const m=el('div','meter'), i=el('i');
+const meter=(pct,tone,tag)=>{
+  const m=el(tag||'div','meter'), i=el('i');
   i.style.width=Math.max(0,Math.min(100,pct))+'%';
   i.style.background=`var(--${tone})`;
   m.append(i); return m;
 };
 let S=null, CUR='today', SEL=null, OPS=null;
+/* Today's account filter: null plans the day for everyone, a handle narrows the checklist to
+   that account. Page state like SEL — deliberately not persisted; a fresh open plans for all. */
+let TODAY_ACCT=null;
 async function loadOperators(){ OPS=await fetch('/api/operators').then(r=>r.json()).catch(()=>({operators:[],selected:null})); }
 
 /**
@@ -1633,7 +1874,10 @@ function paintToast(){
   if(!t.textContent)t.classList.remove('show');
 }
 
-const toast=m=>{
+/* `ms` is optional: 1.9s suits a two-word confirmation, and stays the default. A caller whose
+   message is a LIST — the pulse chip naming every problem — passes longer, because a toast
+   that vanishes mid-read teaches people to stop reading toasts. */
+const toast=(m,ms)=>{
   const t=$('#toast');
   /* A finished-message must never steal the screen from work still in progress. It is shown
      when the last busy toast clears, or dropped if more work is still running. */
@@ -1641,7 +1885,7 @@ const toast=m=>{
   clearTimeout(TOAST_TIMER);
   t.classList.remove('busy');t.removeAttribute('aria-busy');
   t.textContent=m;t.classList.add('show');
-  TOAST_TIMER=setTimeout(()=>{t.classList.remove('show');t.textContent=''},1900);
+  TOAST_TIMER=setTimeout(()=>{t.classList.remove('show');t.textContent=''},ms||1900);
 };
 
 /**
@@ -1847,11 +2091,10 @@ function review(){
   const wf=(d.workflow&&d.workflow.status)||'none';
   const wfRow=el('div');wfRow.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem';
   const mark=(label,value,hint)=>{
-    const bt=el('button','mini');
+    /* `.on` marks the saved state — colour carries "this is where it is", not urgency. */
+    const bt=el('button','mini lg'+(wf===value?' on':''));
     bt.textContent=label;
     bt.title=hint;
-    bt.style.cssText='padding:.45rem .85rem;font-size:.8rem'+
-      (wf===value?';border-color:var(--jade);color:var(--jade)':'');
     bt.onclick=async()=>{
       const r=await fetch('/api/status',{method:'POST',headers:{'content-type':'application/json'},
         body:JSON.stringify({draftId:d.id,status:wf===value?'none':value})}).then(x=>x.json());
@@ -1880,9 +2123,9 @@ function review(){
    * that leaves a reason behind. It is not styled as the obvious next click, because on
    * every reply so far the right answer has been no.
    */
-  const sendBtn=el('button','mini');
+  /* `.danger`, never `.act`: ember is the one colour that does not invite the click. */
+  const sendBtn=el('button','mini lg danger');
   sendBtn.textContent='Send it…';
-  sendBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem;border-color:var(--ember);color:var(--ember)';
   sendBtn.onclick=()=>{
     const panel=el('div','sendbox');
     panel.innerHTML=
@@ -1908,7 +2151,7 @@ function review(){
       return 'Sent';
     /* No Stop on a send. Submitting and confirming are two steps, and stopping between them
        leaves a comment on Reddit nothing knows about. The server refuses this too. */
-    },{stoppable:false}));
+    },{stoppable:false}),'danger');
     cw.append(conf,why,goBtn);panel.append(cw);
     sendBtn.replaceWith(panel);conf.focus();
   };
@@ -1954,10 +2197,10 @@ const runNow=async body=>{
   return r;
 };
 
-function actionButton(label,handler){
-  const bt=el('button','mini');
+function actionButton(label,handler,cls){
+  /* Jade by default — these all DO something. The send flow passes 'danger' instead. */
+  const bt=el('button','mini lg '+(cls||'act'));
   bt.textContent=label;
-  bt.style.cssText='padding:.5rem .95rem;font-size:.8rem';
   bt.onclick=()=>handler(bt);
   return bt;
 }
@@ -2238,8 +2481,7 @@ function collecting(root){
   val.setAttribute('aria-label','Subreddit name or search phrase');
   val.style.cssText='flex:1;min-width:220px;font:inherit;font-size:.85rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
   kind.onchange=()=>{val.placeholder=kind.value==='search'?'wordpress site slow after update':'WordPress'};
-  const addBtn=el('button','mini');addBtn.textContent='Add it';
-  addBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+  const addBtn=el('button','mini lg act');addBtn.textContent='Add it';
   addBtn.onclick=async()=>{
     if(!val.value.trim()){toast('Type a name first');return}
     const held=busy(`Adding ${val.value.trim()}…`);
@@ -2572,7 +2814,6 @@ function pager(list,onChange){
     b.textContent=text;
     b.setAttribute('aria-label',aria);
     b.disabled=!!disabled;
-    b.style.cssText='padding:.3rem .7rem;font-size:.75rem'+(disabled?';opacity:.35;cursor:not-allowed':'');
     if(!disabled)b.onclick=async()=>{
       st.offset=Math.max(0,st.offset+delta*st.limit);
       await onChange();
@@ -2659,10 +2900,9 @@ function paintSetUpHere(node){
   const {bar,account}=node;
   if(bar.dataset.editing==='1')return;
   bar.textContent='';
-  const b=el('button','mini');
+  const b=el('button','mini act');
   b.textContent='Set up on this machine';
   b.setAttribute('aria-label',`Set up ${account.handle} on this machine`);
-  b.style.cssText='padding:.35rem .7rem;font-size:.75rem';
   b.onclick=async()=>{
     /* Allocates a folder and bind-tests its way to a free port before writing the binding. */
     const held=busy(`Setting ${account.handle} up on this machine…`);
@@ -2686,11 +2926,11 @@ function paintPortBar(node,s){
   const {bar,account}=node;
   if(bar.dataset.editing==='1')return;          // a port is being typed — leave the form alone
   bar.textContent='';
-  const mini=(text,label,onClick,danger)=>{
-    const b=el('button','mini');
+  const mini=(text,label,onClick,cls)=>{
+    /* `cls` is the semantic colour: 'act' starts or repoints something, 'danger' stops it. */
+    const b=el('button','mini'+(cls?' '+cls:''));
     b.textContent=text;
     b.setAttribute('aria-label',label);
-    b.style.cssText='padding:.35rem .7rem;font-size:.75rem'+(danger?';border-color:var(--ember);color:var(--ember)':'');
     b.onclick=onClick;
     return b;
   };
@@ -2731,7 +2971,7 @@ function paintPortBar(node,s){
         await load();
         held.done('Using that profile');
       }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
-    }));
+    },'act'));
   }
 
   /* Both of these spawn or terminate a real process and then re-read who owns the port —
@@ -2746,7 +2986,7 @@ function paintPortBar(node,s){
         await loadPorts();
         held.done('Chrome is opening');
       }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
-    }));
+    },'act'));
   }
   /**
    * The way back from an off-screen window.
@@ -2765,7 +3005,7 @@ function paintPortBar(node,s){
         if(!r.ok){say(r.error||'could not move the window',true);held.fail(r.error);return}
         held.done('On screen');
       }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
-    }));
+    },'act'));
   }
   if(s&&s.state==='running'){
     bar.append(mini('Stop browser',`Stop ${account.handle}`,async()=>{
@@ -2777,7 +3017,7 @@ function paintPortBar(node,s){
         await loadPorts();
         held.done('Browser stopped');
       }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
-    },true));
+    },'danger'));
   }
 
   bar.append(mini('Change port',`Change port for ${account.handle}`,()=>{
@@ -2809,8 +3049,8 @@ function paintPortBar(node,s){
     };
     bar.append(
       input,
-      mini('Use this port',`Use this port for ${account.handle}`,()=>done({handle:account.handle,port:Number(input.value)})),
-      mini('Pick a free one',`Pick a free port for ${account.handle}`,()=>done({handle:account.handle,auto:true})),
+      mini('Use this port',`Use this port for ${account.handle}`,()=>done({handle:account.handle,port:Number(input.value)}),'act'),
+      mini('Pick a free one',`Pick a free port for ${account.handle}`,()=>done({handle:account.handle,auto:true}),'act'),
       mini('Cancel',`Cancel changing the port for ${account.handle}`,()=>{bar.dataset.editing='0';paintPorts()})
     );
     input.focus();
@@ -2867,9 +3107,8 @@ function accountEditor(a){
   const msg=el('div','tiny');msg.style.marginTop='.4rem';
   const bar=el('div');bar.style.cssText='margin-top:.55rem;display:flex;gap:.5rem;flex-wrap:wrap';
 
-  const save=el('button','mini');
+  const save=el('button','mini act');
   save.textContent='Save changes';
-  save.style.cssText='padding:.45rem .85rem;font-size:.78rem';
   save.onclick=async()=>{
     const body={
       handle:a.handle,
@@ -2897,7 +3136,6 @@ function accountEditor(a){
 
   const cancel=el('button','mini');
   cancel.textContent='Cancel';
-  cancel.style.cssText='padding:.45rem .85rem;font-size:.78rem';
   cancel.onclick=()=>{EDITING=null;accounts()};
 
   /**
@@ -2937,14 +3175,14 @@ function accountEditor(a){
       rbar.textContent='';
       rmsg.innerHTML=`<span style="color:var(--ember)">${esc(r.error||'')}</span>`+
         (a.profileDir?` The sign-in folder <code>${esc(a.profileDir)}</code> is kept either way.`:'');
-      const anyway=el('button','mini');
+      /* Amber, not ember: the first press already said what this would cost, so this one is
+         "past the warning" rather than the plain remove it started as. */
+      const anyway=el('button','mini warn');
       anyway.textContent='Remove anyway';
       anyway.setAttribute('aria-label',`Remove ${a.handle} anyway`);
-      anyway.style.cssText='padding:.45rem .85rem;font-size:.78rem;border-color:var(--ember);color:var(--ember)';
       anyway.onclick=()=>removeReq(true);
       const keep=el('button','mini');
       keep.textContent='Keep it';
-      keep.style.cssText='padding:.45rem .85rem;font-size:.78rem';
       keep.onclick=()=>{EDITING=null;accounts()};
       rbar.append(anyway,keep);
       return;
@@ -2952,23 +3190,20 @@ function accountEditor(a){
     rmsg.innerHTML=`<span style="color:var(--ember)">${esc(r.error||'could not remove')}</span>`;
   };
 
-  const rm=el('button','mini');
+  const rm=el('button','mini danger');
   rm.textContent='Remove account';
   rm.setAttribute('aria-label',`Remove ${a.handle}`);
-  rm.style.cssText='padding:.45rem .85rem;font-size:.78rem;border-color:var(--ember);color:var(--ember)';
   rm.onclick=()=>{
     rbar.textContent='';
     rmsg.innerHTML='This removes the record only. The sign-in folder '+
       (a.profileDir?`<code>${esc(a.profileDir)}</code> `:'')+
       'stays on disk, so the Reddit session is not lost and you can add the account back.';
-    const yes=el('button','mini');
+    const yes=el('button','mini danger');
     yes.textContent=`Yes, remove ${a.handle}`;
     yes.setAttribute('aria-label',`Confirm removing ${a.handle}`);
-    yes.style.cssText='padding:.45rem .85rem;font-size:.78rem;border-color:var(--ember);color:var(--ember)';
     yes.onclick=()=>removeReq(false);
     const no=el('button','mini');
     no.textContent='Keep it';
-    no.style.cssText='padding:.45rem .85rem;font-size:.78rem';
     no.onclick=()=>{rbar.textContent='';rmsg.textContent='';rbar.append(rm)};
     rbar.textContent='';rbar.append(yes,no);
   };
@@ -3181,7 +3416,6 @@ function accounts(){
       const ed=el('button','mini');
       ed.textContent=EDITING===a.handle?'Close':'Edit';
       ed.setAttribute('aria-label',`Edit ${a.handle}`);
-      ed.style.cssText='padding:.4rem .8rem;font-size:.78rem';
       ed.onclick=()=>{EDITING=EDITING===a.handle?null:a.handle;accounts()};
       bar.append(ed);
       c.append(bar);
@@ -3253,8 +3487,7 @@ function addAccount(root){
   let made=null;
 
   const button=(text,onClick,disabled)=>{
-    const bt=el('button','mini');bt.textContent=text;bt.disabled=!!disabled;
-    bt.style.cssText='padding:.5rem .9rem;font-size:.8rem;'+(disabled?'opacity:.4;cursor:not-allowed':'');
+    const bt=el('button','mini lg act');bt.textContent=text;bt.disabled=!!disabled;
     if(!disabled)bt.onclick=onClick;
     return bt;
   };
@@ -3355,41 +3588,53 @@ function today(){
   thead.append(howBtn);
   r.append(thead);
 
+  /* An account that was removed or renamed since the filter was set: plan for everyone
+     rather than filtering down to nobody. */
+  if(TODAY_ACCT&&!S.accounts.some(a=>a.handle===TODAY_ACCT))TODAY_ACCT=null;
+
   /* ================= the three zones ================= */
   const grid=el('div','grid3');
 
   /* ---- left: where each account stands ---- */
+  /* Every row is a real button: pressing one narrows the day's checklist to that account,
+     pressing it again widens back to everyone. aria-pressed carries the state, the jade
+     spine shows it, and the middle panel's header names it. */
   const rail=panel('Accounts',S.accounts.length);
   S.accounts.forEach(a=>{
     const st=STAGE(a.karma);
-    const row=el('div','acct');
+    const on=TODAY_ACCT===a.handle;
+    const row=el('button','acct'+(on?' on':''));
+    row.type='button';
+    row.setAttribute('aria-pressed',on?'true':'false');
+    row.title=on?'Show every account’s day':`Show only ${a.handle}’s day`;
+    row.onclick=()=>{TODAY_ACCT=on?null:a.handle;today()};
     /* An unmeasured account is its own state — never dressed up as stage 1 with a zero. */
     const tone=a.karma==null?'q':st.n===1?'hold':st.n===2?'warm':'ready';
-    row.append(el('div','h',
+    row.append(el('span','h',
       `<span class="nm">${esc(a.handle)}</span>`+
       `<span class="st ${tone}">${esc(a.karma==null?'never measured':st.label)}</span>`));
     if(st&&st.target){
       const pct=Math.round((a.karma/st.target)*100);
-      row.append(meter(pct,pct>=100?'jade':pct>=50?'amber':'ember'));
-      row.append(kvRow(st.weeks,`${a.karma} / ${st.target} karma`));
+      row.append(meter(pct,pct>=100?'jade':pct>=50?'amber':'ember','span'));
+      row.append(kvRow(st.weeks,`${a.karma} / ${st.target} karma`,'span'));
     } else if(st){
-      row.append(meter(100,'jade'));
-      row.append(kvRow(st.weeks,`${a.karma} karma`));
+      row.append(meter(100,'jade','span'));
+      row.append(kvRow(st.weeks,`${a.karma} karma`,'span'));
     } else {
-      row.append(kvRow('karma','<span style="color:var(--ink-3)">never measured</span>'));
+      row.append(kvRow('karma','<span style="color:var(--ink-3)">never measured</span>','span'));
     }
-    row.append(kvRow('a day',esc(st?st.daily+' comments':'—')));
-    row.append(kvRow('quiet',esc(a.quietHours?`${a.quietHours[0]}:00–${a.quietHours[1]}:00`:'not set')));
+    row.append(kvRow('a day',esc(st?st.daily+' comments':'—'),'span'));
+    row.append(kvRow('quiet',esc(a.quietHours?`${a.quietHours[0]}:00–${a.quietHours[1]}:00`:'not set'),'span'));
     rail.append(row);
   });
   if(!S.accounts.length)rail.append(el('div','prose',
     '<b>No account measured yet.</b> Check an account’s karma first — without that there is nothing to plan against.'));
   grid.append(rail);
 
-  /* ---- centre: what to actually do, per account ---- */
+  /* ---- centre: what to actually do, per the selected account (or everyone) ---- */
   const mid=el('div');
-  const work=panel('What to do today','per account');
-  S.accounts.forEach(a=>{
+  const work=panel('What to do today',TODAY_ACCT||'per account');
+  (TODAY_ACCT?S.accounts.filter(a=>a.handle===TODAY_ACCT):S.accounts).forEach(a=>{
     const st=STAGE(a.karma);
     const days=a.karmaMeasuredAt?Math.floor((Date.now()-new Date(a.karmaMeasuredAt))/86400000):null;
     const job=el('div','job'+(st?(st.n===1?' look':' ok'):' stop'));
@@ -3428,7 +3673,10 @@ function today(){
        * reads as the page having jumped.
        */
       const todo=(txt,note,cta)=>{
-        const inner=`<span class="box">[ ]</span><span>${txt}${note?` <em>— ${esc(note)}</em>`:''}</span>`;
+        /* A drawn checkbox, not the old mono "[ ]" — a glyph pretending to be a control is the
+           exact ambiguity this row had. aria-hidden because it is decoration; the row's text is
+           the accessible content. */
+        const inner=`<span class="box" aria-hidden="true"></span><span>${txt}${note?` <em>— ${esc(note)}</em>`:''}</span>`;
         if(!cta){ b.append(el('div','todo',inner)); return; }
         const n=el('button','todo',inner+`<span class="go">${esc(cta.go)} →</span>`);
         n.type='button';
@@ -3471,11 +3719,24 @@ function today(){
     kb.append(karmaBtn);
     b.append(kb);
     job.append(b);
-    job.append(el('div','jr',`<span class="score"${st?'':' style="color:var(--ink-3)"'}>${st?esc(String(a.karma)):'—'}</span>`));
+    /* The number carries its own caption. Un-captioned it was the one figure on the screen you
+       had to already understand: a bare "212" floating in its own column. */
+    job.append(el('div','jr',
+      `<span class="score"${st?'':' style="color:var(--ink-3)"'}>${st?esc(String(a.karma)):'—'}</span>`+
+      `<span class="score-l">karma</span>`));
     work.append(job);
   });
   if(!S.accounts.length)work.append(el('div','prose',
     '<b>Nothing to plan.</b> Add an account on the Accounts screen, then check its karma.'));
+  /* The way back when the checklist is narrowed — the rail toggle alone is not discoverable. */
+  if(TODAY_ACCT){
+    const allRow=el('div');
+    allRow.style.cssText='padding:.7rem .95rem;border-top:1px solid var(--edge)';
+    const allBtn=el('button','mini','Show every account');
+    allBtn.onclick=()=>{TODAY_ACCT=null;today()};
+    allRow.append(allBtn);
+    work.append(allRow);
+  }
   mid.append(work);
   grid.append(mid);
 
@@ -3581,7 +3842,7 @@ function outcomes(){
     empty.innerHTML='<b>No reply has been published.</b> Votes, replies and removals only exist '+
       'after something is sent, so there is nothing to show yet. ';
     const more=el('button','mini','why this is empty, not zero');
-    more.style.cssText='padding:.3rem .7rem;font-size:.75rem;vertical-align:baseline';
+    more.style.verticalAlign='baseline';
     more.onclick=()=>guide(true,'outcomes');
     empty.append(more);
     pub.append(empty);
@@ -3822,6 +4083,16 @@ let UPDSTATE=null;      // the last state we were told about
 let updCardBody=null;   // the Setup card's body, while the Setup screen is on screen
 let updBusy=false;      // a click is in flight; both buttons go inert
 
+/* The dot on the update button. Fed from wherever "newer" becomes known — the boot check,
+   a manual check, or the desktop bridge — and NOT cleared by dismissing the top bar. */
+function updateDot(on){
+  const d=$('#updateBtn .dot'); if(!d)return;
+  d.hidden=!on;
+  $('#updateBtn').title='Check for a newer redbot'+(on?' — a newer release is available':'');
+}
+const updateDotFromState=()=>updateDot(
+  !!(UPDSTATE&&(UPDSTATE.newer||UPDSTATE.phase==='ready'||UPDSTATE.phase==='downloading')));
+
 const fmtMB=n=>(Number(n)||0)/1048576>=0.05?((Number(n)||0)/1048576).toFixed(1)+' MB':'';
 
 /**
@@ -3834,6 +4105,7 @@ const fmtMB=n=>(Number(n)||0)/1048576>=0.05?((Number(n)||0)/1048576).toFixed(1)+
 async function refreshUpdates(force){
   if(UPDATES){
     UPDSTATE=force?await UPDATES.check():await UPDATES.snapshot();
+    updateDotFromState();
     paintUpdates();
     return UPDSTATE;
   }
@@ -3845,6 +4117,7 @@ async function refreshUpdates(force){
       supported:false,release:r.release||null,percent:0,reason:null}
     :{phase:'error',current:(r&&r.current)||'',latest:null,newer:false,
       supported:false,release:null,percent:0,reason:(r&&r.reason)||'the update check could not run'};
+  updateDotFromState();
   paintUpdates();
   return UPDSTATE;
 }
@@ -3898,7 +4171,7 @@ function paintUpdates(){
 
   /* ---- check ---- */
   const busyNow=updBusy||s.phase==='checking'||s.phase==='downloading'||s.phase==='installing';
-  const chk=el('button','mini');
+  const chk=el('button','mini act');
   chk.textContent=s.phase==='checking'?'Checking…':'Check for updates';
   chk.disabled=busyNow;
   chk.onclick=async()=>{
@@ -3920,15 +4193,13 @@ function paintUpdates(){
    * cause an update to be downloaded or installed.
    */
   if(UPDATES&&(s.newer||s.phase==='ready')){
-    const go2=el('button','mini');
+    const go2=el('button','mini act');
     /* The label tracks the phase. A button reading "Apply update" while the download it started is
        running says nothing about what is happening, and is the one control the operator is watching. */
     go2.textContent=s.phase==='installing'?'Installing…'
       :s.phase==='downloading'?'Downloading…'
       :s.phase==='ready'?'Install and restart'
       :'Apply update';
-    go2.style.cssText='border-color:color-mix(in srgb,var(--jade) 45%,transparent);'
-      +'background:color-mix(in srgb,var(--jade) 14%,transparent);color:var(--ink)';
     go2.disabled=busyNow;
     go2.onclick=async()=>{
       updBusy=true;paintUpdates();
@@ -3949,7 +4220,6 @@ function paintUpdates(){
   if(!UPDATES&&s.release&&s.release.url){
     const a=el('a','mini','Release notes');
     a.href=s.release.url;a.target='_blank';a.rel='noreferrer';
-    a.style.cssText='text-decoration:none;display:inline-block';
     row.append(a);
   }
   ub.append(row);
@@ -3963,7 +4233,7 @@ function paintUpdates(){
    once, for the life of the page, so a download that starts on Setup keeps reporting even if the
    operator walks to another screen and comes back. */
 if(UPDATES){
-  UPDATES.onStatus(s=>{UPDSTATE=s;paintUpdates()});
+  UPDATES.onStatus(s=>{UPDSTATE=s;updateDotFromState();paintUpdates()});
 }
 
 /* ==================== the setup wizard ====================
@@ -4009,9 +4279,8 @@ function copyBox(text,label){
   const box=el('div','cpy');
   const pre=el('code');
   pre.textContent=text;                       /* textContent, never innerHTML: this is data */
-  const btn=el('button','mini');
+  const btn=el('button','mini lg');
   btn.textContent='copy';
-  btn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
   btn.setAttribute('aria-label','Copy '+(label||'to clipboard'));
   btn.onclick=async()=>{
     try{
@@ -4086,11 +4355,11 @@ const ctlRow=(pad)=>{
   return d;
 };
 
-/** The screen's standard action button. */
-const actBtn=(label,fn)=>{
-  const x=el('button','mini');
+/** The screen's standard action button. Jade by default — everything made with this DOES
+    something; the two Remove buttons pass 'danger' instead. */
+const actBtn=(label,fn,cls)=>{
+  const x=el('button','mini lg '+(cls||'act'));
   x.textContent=label;
-  x.style.cssText='padding:.5rem .95rem;font-size:.8rem';
   if(fn)x.onclick=fn;
   return x;
 };
@@ -4297,7 +4566,6 @@ function setup(){
           if(!d.ok&&d.fix&&d.fix.url){
             const a=el('a','mini','Get it');
             a.href=d.fix.url;a.target='_blank';a.rel='noreferrer';
-            a.style.cssText='text-decoration:none;padding:.4rem .8rem;font-size:.78rem;white-space:nowrap';
             row.append(a);
           }
           b.append(row);
@@ -4447,7 +4715,7 @@ function setup(){
                 body:JSON.stringify({})}).then(x=>x.json());
               if(!r.ok){toast(r.error||'could not remove');return}
               toast('Removed');await again();
-            }));
+            },'danger'));
           }
           b.append(keyRow);
           b.append(el('div','tiny','The key is sealed with AES-256-GCM before it reaches the database, and is never shown again — only the last four characters.'));
@@ -4583,7 +4851,7 @@ function setup(){
               body:JSON.stringify({kind})}).then(x=>x.json());
             if(!r.ok){toast(r.error||'could not remove');return}
             toast('Removed');await again();
-          }));
+          },'danger'));
         }
         b.append(row);
         b.append(el('div','tiny',
@@ -4751,7 +5019,6 @@ function setup(){
       const row=setupRow(state,r.label,r.detail,r.fix?r.fix.hint:'');
       if(r.fix&&r.fix.screen&&r.fix.screen!=='setup'){
         const go2=el('button','mini','Go to '+r.fix.screen);
-        go2.style.cssText='padding:.4rem .8rem;font-size:.78rem;white-space:nowrap';
         /* Closing first is load-bearing now that this lives in a panel: routing underneath it
            would change the screen behind the scrim and leave the person looking at Settings. */
         go2.onclick=()=>{settings(false);go(r.fix.screen)};
@@ -4910,8 +5177,7 @@ function setup(){
   const lgb=lg.body;
   lgb.append(el('div','tiny','Every action redbot runs writes here as it goes, including one started before this window was opened.'));
   const lgRow=el('div');lgRow.style.marginTop='.7rem';
-  const lgBtn=el('button','mini','Open the run log');
-  lgBtn.style.cssText='padding:.5rem .95rem;font-size:.8rem';
+  const lgBtn=el('button','mini lg','Open the run log');
   /* Closing first, for the same reason the requirement rows do: routing underneath the panel
      would change the screen behind the scrim and leave somebody looking at Settings. */
   lgBtn.onclick=()=>{settings(false);go('logs')};
@@ -4945,10 +5211,12 @@ function guide(open,section){
   g.hidden=!open; s.hidden=!open;
   btn.setAttribute('aria-expanded',String(open));
   if(!open){btn.focus();return}
-  document.querySelectorAll('.g-sec').forEach(n=>n.classList.remove('on'));
+  /* One section open at a time on arrival: the one for the screen the person came from, or
+     the "in one line" opener when there is no telling. Their own later clicks are their own. */
+  document.querySelectorAll('.g-sec').forEach(n=>{n.classList.remove('on');n.open=false});
   const target=section&&document.querySelector(`.g-sec[data-g="${section}"]`);
-  if(target){target.classList.add('on');target.scrollIntoView({block:'start',behavior:'instant'})}
-  else $('.guide-b').scrollTop=0;
+  if(target){target.classList.add('on');target.open=true;target.scrollIntoView({block:'start',behavior:'instant'})}
+  else{const first=document.querySelector('.g-sec');if(first)first.open=true;$('.guide-b').scrollTop=0}
   $('#guideX').focus();
   try{localStorage.setItem('redbot.seenGuide','1')}catch{}
 }
@@ -5035,7 +5303,9 @@ function settings(open){
 $('#updateBtn').onclick=async()=>{
   const b=$('#updateBtn');
   if(b.disabled)return;
-  b.disabled=true; b.textContent='checking…';
+  /* The label span, never the button: a textContent write on the button itself would take
+     the newer-release dot with it. */
+  b.disabled=true; $('#updLbl').textContent='checking…';
   try{
     const st=await refreshUpdates(true);
     await updateCheck(true);
@@ -5047,7 +5317,7 @@ $('#updateBtn').onclick=async()=>{
       toast(`You are on the latest${st&&st.current?` (${st.current})`:''}.`);
     }
   }catch(e){ toast(String(e&&e.message||e)); }
-  finally{ b.disabled=false; b.textContent='update'; }
+  finally{ b.disabled=false; $('#updLbl').textContent='update'; }
 };
 
 $('#help').onclick=()=>guide($('#guide').hidden,CUR);
@@ -5063,6 +5333,15 @@ addEventListener('keydown',e=>{
   else if(e.key==='Escape'&&!$('#settings').hidden)settings(false);
   else if(e.key==='Escape'&&!$('#guide').hidden)guide(false);
   else if(e.key==='?'&&$('#guide').hidden&&$('#settings').hidden&&!/^(INPUT|TEXTAREA)$/.test(e.target.tagName))guide(true,CUR);
+  else if(e.key==='F5'&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&!e.altKey){
+    /* Bare F5 is answered with the app's OWN refresh — the same path as the bar button:
+       re-fetch state and repaint, keeping scroll, panels and page state, where a browser
+       reload tears the whole page down (and in the desktop app F5 otherwise means nothing —
+       the menu bar that carried Reload is gone). Ctrl+F5 is deliberately left alone: that is
+       a request to the BROWSER for a cache-bypassing reload, and it should stay one. */
+    e.preventDefault();
+    $('#reload').click();
+  }
 });
 
 $('#theme').onclick=()=>{
@@ -5098,7 +5377,15 @@ let PULSE_LAST=null;
 function setupBadge(){
   if(!SETUP||SETUP.error)return;
   const nBlock=(SETUP.blocking||[]).length, nAdv=(SETUP.advisory||[]).length;
-  $('#nSet').textContent=nBlock?String(nBlock):(nAdv?String(nAdv):'ok');
+  const b=$('#nSet');
+  /* The number still lands in the node — anything reading it keeps reading it — but what a
+     person sees is the dot: ember when something blocks, amber when something merely should
+     be looked at, nothing when nothing is owed. The title carries the count in words. */
+  b.textContent=nBlock?String(nBlock):(nAdv?String(nAdv):'ok');
+  b.classList.toggle('adv',!nBlock&&nAdv>0);
+  b.hidden=!(nBlock||nAdv);
+  $('#settingsBtn').title='Settings — accounts, model, dashboard'+
+    (nBlock?` · ${nBlock} requirement${nBlock===1?'':'s'} unmet`:(nAdv?` · ${nAdv} worth a look`:''));
 }
 
 function paintBanner(){
@@ -5169,7 +5456,10 @@ async function pulseCheck(){
 $('#pulseChip').onclick=()=>{
   const p=PULSE_LAST;
   if(!p){toast('Still checking');return}
-  toast(p.problems.length?p.problems.join(' · '):'Everything is connected');
+  /* The problems list is a real read — one line per account — so it holds for 5s where a
+     two-word all-clear keeps the short default. */
+  if(p.problems.length)toast(p.problems.join(' · '),5000);
+  else toast('Everything is connected');
 };
 
 /* The fact-checker's record, read from the run log. Written as sentences rather than a rate:
@@ -5231,11 +5521,15 @@ async function load(){
     const days=a.karmaMeasuredAt?Math.floor((Date.now()-new Date(a.karmaMeasuredAt))/86400000):null;
     return n+(st?(st.n===1?3:2):0)+((days==null||days>=7)?1:0);
   },0);
-  $('#nTod').textContent=due;
-  $('#nRev').textContent=S.pulse.waitingOnYou;
-  $('#nDisc').textContent=S.discovery.assessed;
-  $('#nAcc').textContent=S.accounts.length;
-  $('#nOut').textContent=S.outcomes.published;
+  /* The number stays in the node (the suite reads it) but a zero shows no pill — a count of
+     nothing is not information, and five pills where two mean anything is how badges stop
+     being read at all. */
+  const badge=(sel,n)=>{const b=$(sel);b.textContent=n;b.hidden=!n};
+  badge('#nTod',due);
+  badge('#nRev',S.pulse.waitingOnYou);
+  badge('#nDisc',S.discovery.assessed);
+  badge('#nAcc',S.accounts.length);
+  badge('#nOut',S.outcomes.published);
   setupBadge();
 
   /* ---------------- first boot: Setup before anything else ----------------
@@ -5335,6 +5629,9 @@ async function updateCheck(force){
   let r;
   try{ r=await fetch('/api/update'+(force?'?force=1':'')).then(x=>x.json()); }
   catch{ return; }
+  /* Before the dismissal check on purpose: hiding the BAR for a version must not hide the
+     fact that a newer version exists. */
+  updateDot(!!(r&&r.ok&&r.newer));
   if(!r||!r.ok||!r.newer||!r.release){ bar.hidden=true; return; }
 
   let dismissed=null;
