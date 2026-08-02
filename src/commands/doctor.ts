@@ -14,7 +14,7 @@
  */
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT, DATA, paths, config, claudeConfigDir, OperatorAuthError } from '../config.js';
+import { ROOT, DATA, config, claudeConfigDir, OperatorAuthError } from '../config.js';
 import { isBrowserUp } from '../browser.js';
 import { policy, limitsByProvenance } from '../policy.js';
 import { loadDrafts, loadThreads, loadGaps, loadAssessments } from '../store.js';
@@ -192,20 +192,40 @@ export async function doctor(): Promise<number> {
   if (!existsSync(DATA)) {
     add('data directory', 'WARN', `${DATA} does not exist yet — created on first write`);
   } else {
+    /**
+     * THE DOMAIN IS COUNTED FROM THE DATABASE, BECAUSE THAT IS WHERE IT LIVES.
+     *
+     * This check used to read `data/threads.json`, `gaps.json`, `assessments.json` and
+     * `drafts.json` off disk. `src/store.ts` moved the domain into the database and stopped
+     * writing those files — `saveThreads` and `saveDraft` go to SQL and nowhere else — so the
+     * check was grading a RETIRED store. Measured on this install 2026-08-03: it reported
+     * "threads 80 · drafts 14" as a PASS while the database held 20 threads and 0 drafts.
+     *
+     * That is the worst shape a health check can take. The stale files are frozen evidence, so
+     * their numbers never change and the check never goes red — it would have said PASS with an
+     * empty database, an unreadable one, or no database at all. `console-data.ts` fixed exactly
+     * this bug for the consoles ("the screens were rendering from dead files"); doctor was missed.
+     *
+     * `analysis` is deliberately not counted: `store.ts` records it as RETIRED 2026-07-23 (D-01),
+     * with no table and nothing reading or writing it. Counting a retired file here would put a
+     * number next to a subsystem that no longer exists.
+     *
+     * A database that cannot be read is a FAIL, not a zero. "0 threads" is a claim about a healthy
+     * empty install; an unreachable database is not, and the two must not print the same.
+     */
     const counts: string[] = [];
     let broken = 0;
-    for (const [label, file] of [
-      ['threads', paths.threads], ['analysis', paths.analysis], ['gaps', paths.gaps],
-      ['assessments', paths.assessments], ['drafts', paths.drafts]
-    ] as const) {
-      if (!existsSync(file)) { counts.push(`${label} 0`); continue; }
-      try {
-        const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown[];
-        counts.push(`${label} ${Array.isArray(parsed) ? parsed.length : '?'}`);
-      } catch {
-        broken++;
-        counts.push(`${label} UNREADABLE`);
-      }
+    try {
+      const [threads, gaps, assessments, drafts] = await Promise.all([
+        loadThreads(), loadGaps(), loadAssessments(), loadDrafts()
+      ]);
+      counts.push(
+        `threads ${threads.length}`, `gaps ${gaps.length}`,
+        `assessments ${assessments.length}`, `drafts ${drafts.length}`
+      );
+    } catch (e) {
+      broken++;
+      counts.push(`UNREADABLE — ${e instanceof Error ? e.message : String(e)}`);
     }
     add('data files', broken ? 'FAIL' : 'PASS', counts.join(' · '));
 

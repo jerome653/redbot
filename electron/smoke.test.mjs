@@ -111,15 +111,48 @@ describe('the desktop shell', () => {
     assert.notEqual(res, 415, 'the server refused the renderer content-type');
   });
 
-  test('the preload exposes exactly one read-only fact and no command surface', async () => {
+  test('the preload exposes one read-only fact and the update bridge, and no command surface', async () => {
+    /**
+     * This assertion used to read `deepEqual(keys, ['isDesktop'])` and had been failing since the
+     * update bridge landed — invisibly, because this file is not in `npm test`.
+     *
+     * The bridge is deliberate and `electron/preload.cjs` argues for it at length: the updater can
+     * only run in the Electron MAIN process, while the console server is a plain-Node CHILD, so
+     * `/api/run` physically cannot carry it. The old assertion predates that and was simply stale.
+     *
+     * So it is re-pinned rather than relaxed. What actually protects this app is that there is no
+     * PARAMETERISED verb — nothing here takes a command, path, URL or version — and the exact
+     * member list is spelled out below so adding a `runCommand` bridge, or giving any existing
+     * verb an argument, still fails here.
+     */
     const shape = await page.evaluate(() => ({
       isDesktop: window.redbotDesktop?.isDesktop,
-      keys: Object.keys(window.redbotDesktop ?? {}),
+      keys: Object.keys(window.redbotDesktop ?? {}).sort(),
+      updateKeys: Object.keys(window.redbotDesktop?.updates ?? {}).sort(),
+      updateTypes: Object.entries(window.redbotDesktop?.updates ?? {})
+        .map(([k, v]) => `${k}:${typeof v}`).sort(),
       hasRequire: typeof window.require,
       hasProcess: typeof window.process
     }));
     assert.equal(shape.isDesktop, true);
-    assert.deepEqual(shape.keys, ['isDesktop'], 'the preload must not grow a second command path');
+    assert.deepEqual(shape.keys, ['isDesktop', 'updates'],
+      'the preload must not grow a second command path');
+    assert.deepEqual(shape.updateKeys, ['apply', 'check', 'onStatus', 'snapshot'],
+      'the update bridge grew a verb — every addition here is a new privileged path');
+    assert.deepEqual(shape.updateTypes,
+      ['apply:function', 'check:function', 'onStatus:function', 'snapshot:function'],
+      'the update bridge exposed something that is not one of its four verbs');
+    /**
+     * ARITY IS DELIBERATELY NOT ASSERTED, and the reason is worth recording so nobody adds it back.
+     *
+     * "no verb takes an argument" is the property that matters — a parameterised verb could choose
+     * what gets installed — but `contextBridge` rebuilds every function it passes, and the copies
+     * arrive with `length === 0` whatever the original signature was. Measured here: `onStatus`
+     * takes a callback and still reports 0. So arity through the bridge is not evidence of
+     * anything, and an assertion on it would pass identically before and after the change it
+     * claims to catch. The member list above is what this side of the boundary can actually see;
+     * the signatures are pinned where they are readable, in `electron/preload.cjs`.
+     */
     // nodeIntegration must be off: a renderer with require() could bypass PUBLIC_ACTIONS entirely.
     assert.equal(shape.hasRequire, 'undefined', 'nodeIntegration is enabled — it must not be');
     assert.equal(shape.hasProcess, 'undefined');
@@ -240,20 +273,36 @@ describe('the first-boot setup gate', () => {
     }
   });
 
-  test('a blocking requirement lands the app on Setup, not on Today or the walkthrough', async () => {
+  test('a durable blocking requirement opens Settings over the console, not the walkthrough', async () => {
+    /**
+     * Setup STOPPED BEING A TAB. It is now the Settings panel behind the gear, and this test had
+     * been asserting the old shape — failing unseen, because this file is in no npm script.
+     *
+     * The gate itself did not weaken, and that is what is re-pinned here. `index.html` opens the
+     * panel on DURABLE blockers only (`blockers.filter(b => b.id !== 'browser')`): a missing
+     * account or an unreadable database stays true until somebody acts, whereas a closed Chrome is
+     * true until the next launch and boot already opens one. Today staying visible UNDERNEATH the
+     * scrim is now correct — the panel covers it, the navigation is not thrown away.
+     */
     const s = await page.evaluate(() => fetch('/api/setup').then((r) => r.json()));
     if (!s.blocking.length) {
       // The fresh throwaway install has no account and no operator, so this should not happen.
       assert.fail('no blocking requirement on a fresh install — the gate cannot be exercised');
     }
-    // #v-setup is the Setup panel; go() hides every other #v-* panel.
+    const durable = s.blocking.filter((b) => b.id !== 'browser');
+    assert.ok(durable.length,
+      `only transient blockers on a fresh install (${s.blocking.map((b) => b.id).join(', ')}) ` +
+      '— the durable gate cannot be exercised');
+
     const shown = await page.evaluate(() => ({
-      setup: !document.querySelector('#v-setup')?.hidden,
-      today: !document.querySelector('#v-today')?.hidden,
+      panel: !document.querySelector('#settings')?.hidden,
+      scrim: !document.querySelector('#scrim')?.hidden,
+      setupRendered: (document.querySelector('#v-setup')?.textContent ?? '').trim().length > 0,
       guideOpen: !document.querySelector('#guide')?.hidden
     }));
-    assert.equal(shown.setup, true, 'first boot did not open on Setup');
-    assert.equal(shown.today, false, 'Today is still the visible screen');
+    assert.equal(shown.panel, true, 'a durable blocker did not open Settings');
+    assert.equal(shown.scrim, true, 'Settings opened without its scrim — the console stays clickable behind it');
+    assert.equal(shown.setupRendered, true, 'Settings opened on an empty checklist');
     assert.equal(shown.guideOpen, false,
       'the walkthrough is covering the checklist a person has to act on');
   });
@@ -271,11 +320,37 @@ describe('the first-boot setup gate', () => {
     }
   });
 
-  test('the gate is not a trap — every other screen is still reachable', async () => {
-    await page.click('.steps .step[data-v="logs"]');
-    const onLogs = await page.evaluate(() => !document.querySelector('#v-logs')?.hidden);
-    assert.equal(onLogs, true, 'the gate blocked navigation, which locks a person out of the fix');
-    await page.click('.steps .step[data-v="setup"]');
+  test('the gate is not a trap — Settings closes and every screen is still reachable', async () => {
+    /**
+     * Same guarantee as before, through the doors that now exist.
+     *
+     * This clicked `[data-v="logs"]` and then `[data-v="setup"]`, and both tabs are gone: Log moved
+     * INTO Settings and Setup became the panel itself. So it timed out on a selector rather than on
+     * a trapped operator — the failure looked like the thing it was meant to catch.
+     *
+     * A modal gate is a trap if it cannot be dismissed, so the escape route is what gets asserted:
+     * Escape closes it, the console underneath is live, and the gear puts it back. The panel is
+     * reopened at the end because the tests after this one read the open checklist.
+     */
+    await page.keyboard.press('Escape');
+    const closed = await page.evaluate(() => ({
+      panel: !document.querySelector('#settings')?.hidden,
+      scrim: !document.querySelector('#scrim')?.hidden
+    }));
+    assert.equal(closed.panel, false, 'Escape did not close Settings — the gate is a trap');
+    assert.equal(closed.scrim, false, 'the scrim outlived the panel, so the console stays unclickable');
+
+    /* Every remaining tab must actually change the screen. Setup is not among them by design. */
+    for (const v of ['discovery', 'review', 'outcomes', 'accounts', 'today']) {
+      await page.click(`.steps .step[data-v="${v}"]`);
+      const on = await page.evaluate(
+        (name) => !document.querySelector(`#v-${name}`)?.hidden, v);
+      assert.equal(on, true, `the gate blocked navigation to ${v}, which locks a person out of the fix`);
+    }
+
+    await page.click('#settingsBtn');
+    const reopened = await page.evaluate(() => !document.querySelector('#settings')?.hidden);
+    assert.equal(reopened, true, 'the gear did not reopen Settings');
   });
 
   test('the setup gate renders — captured, not inferred', async () => {

@@ -136,7 +136,26 @@ function wireUpdater(consolePort) {
      */
     isBusy: async () => {
       if (!consolePort) return null;
-      try {
+      /**
+       * ASKED TWICE, AND THE SECOND ASK IS NOT BELT-AND-BRACES.
+       *
+       * The console sets no `keepAliveTimeout`, so Node closes an idle connection after 5s while
+       * undici may still hold it pooled. A request that lands in that window dies with
+       * `ECONNRESET` before the server ever sees it — and this probe is exactly the shape that
+       * hits it: it runs seconds-to-hours after whatever last spoke to the console.
+       *
+       * Fail-open then reads that reset as "idle" and lets `quitAndInstall` kill the console
+       * server and every child under it. `ACTIONS.__reply` is `stoppable:false` precisely because
+       * dying between submit and confirm leaves a live comment on Reddit that redbot does not know
+       * it made — so the one probe guarding that is the one that must not confuse a recycled
+       * socket with a quiet app. Measured as a deterministic ECONNRESET in
+       * `tools/product/server.test.mjs` after an idle gap; same race, same cause.
+       *
+       * So a connection-level failure is RETRIED ONCE on a fresh socket. A console that is
+       * genuinely gone fails the retry too and still fails open, which is the behaviour the
+       * comment above describes and the reason it is safe to keep.
+       */
+      const ask = async () => {
         const res = await fetch(`http://127.0.0.1:${consolePort}/api/pulse`, {
           signal: AbortSignal.timeout(5_000)
         });
@@ -145,9 +164,23 @@ function wireUpdater(consolePort) {
         if (p && p.running) return `"${p.running}" is running`;
         if (p && p.auto && p.auto.running) return 'the unattended loop is running';
         return null;
-      } catch (e) {
-        boot_log(`updater    busy check failed, treating as idle — ${e && e.message ? e.message : e}`);
-        return null;
+      };
+      try {
+        return await ask();
+      } catch (first) {
+        /* A timeout means the console answered too slowly, not that the socket was recycled —
+           retrying that only doubles the wait before the same answer. */
+        if (first && first.name === 'TimeoutError') {
+          boot_log(`updater    busy check timed out, treating as idle — ${first.message}`);
+          return null;
+        }
+        boot_log(`updater    busy check failed (${first && first.message ? first.message : first}) — retrying once on a fresh connection`);
+        try {
+          return await ask();
+        } catch (e) {
+          boot_log(`updater    busy check failed twice, treating as idle — ${e && e.message ? e.message : e}`);
+          return null;
+        }
       }
     },
     loadAutoUpdater: () => require('electron-updater').autoUpdater,

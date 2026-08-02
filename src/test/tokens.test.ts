@@ -28,6 +28,22 @@ process.env.REDBOT_DB = join(dir, 'redbot.db');
 process.env.REDBOT_INSTALL_ID = '44444444-5555-4666-8777-888888888888';
 process.env.REDBOT_MACHINE = 'tok-test';
 process.env.REDBOT_SYNC_URL = 'https://mint.invalid';
+/**
+ * The vault key this suite seals with.
+ *
+ * `mint` stores the minted tokens through `putSecret`, so three tests here reach the vault and
+ * failed with "REDBOT_VAULT_KEY is not set" whenever the ambient environment had no key —
+ * a suite that passed or failed on the machine's configuration rather than on the code.
+ *
+ * Set here rather than in `db/sqlite/.env.test` for the same reason every other variable above
+ * is: this file owns its own environment, and a key in the shared env-file would silently seal
+ * OTHER suites' rows under a known constant. `masterKey()` re-reads the variable on every call,
+ * so setting it at module scope is enough.
+ *
+ * It is a literal test constant, not a secret: it protects a temp directory that `after()`
+ * deletes, and nothing sealed under it outlives the run.
+ */
+process.env.REDBOT_VAULT_KEY = '0'.repeat(63) + '1'; // 64 hex chars = the required 32 bytes
 
 const migrated = spawnSync(process.execPath, [RUNNER, 'up'], { encoding: 'utf8' });
 if (migrated.status !== 0) throw new Error(`migrate up failed:\n${migrated.stderr}`);

@@ -61,6 +61,54 @@ let CHROME_DATA = '';
 let pool = null;
 
 /**
+ * Everything the console child has written to stderr, kept so a failure can quote it.
+ *
+ * The child was spawned with stderr `'pipe'` and then nobody ever read it. Node does not
+ * discard an unread pipe — it fills, and more importantly the server's own crashes went
+ * straight into a buffer no assertion could see. `/api/state` failed here with a bare
+ * `fetch failed / ECONNRESET` for weeks and was recorded as "a flake under load", because the
+ * one thing that could have named the cause was being collected and thrown away.
+ *
+ * A reset connection means the SERVER decided something; this is how the test asks what.
+ */
+let childErr = '';
+/** The tail of the server's stderr, for an assertion message. Empty when it said nothing. */
+const serverSaid = () => (childErr.trim() ? `\n--- console stderr ---\n${childErr.trim().slice(-2000)}` : '');
+
+/**
+ * A GET that survives the keep-alive race, which is not the same as a GET that ignores failures.
+ *
+ * The console sets no `keepAliveTimeout`, so Node closes an idle connection at 5s while undici may
+ * still have it pooled; a request landing in that window dies with `ECONNRESET` before the server
+ * reads a byte. `/api/state` hit it deterministically — the test before it leaves a pooled socket,
+ * then `seedScopeFixture()` spends ~160 awaited SQL round-trips saying nothing over HTTP, and the
+ * socket is dead by the time the fetch goes out. It was recorded for weeks as "flaky under load";
+ * it reproduces on an idle machine, one test at a time, and the server's stderr is silent because
+ * the server was never involved.
+ *
+ * Only CONNECTION-level failures are retried, and only once, on a request with no side effects.
+ * A 4xx/5xx is an answer and is returned untouched — retrying those is how a test starts passing
+ * for the wrong reason. `electron/main.mjs` carries the same retry on the same race, for the probe
+ * that guards `quitAndInstall`.
+ */
+async function getJson(path) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await (await fetch(`http://127.0.0.1:${PORT}${path}`)).json();
+    } catch (e) {
+      const code = e?.cause?.code ?? '';
+      const retryable = code === 'ECONNRESET' || code === 'UND_ERR_SOCKET' || code === 'EPIPE';
+      if (attempt >= 1 || !retryable) {
+        throw new Error(
+          `GET ${path} did not answer after ${attempt + 1} attempt(s): ` +
+          `${e instanceof Error ? e.message : String(e)}${code ? ` (${code})` : ''}${serverSaid()}`,
+          { cause: e });
+      }
+    }
+  }
+}
+
+/**
  * Case-INSENSITIVE, deliberately.
  *
  * accounts has a case-sensitive text primary key, but `createConsoleAccount` refuses a
@@ -123,6 +171,10 @@ before(async () => {
                             which is the path worth testing anyway: it must still answer 200. */
                          REDBOT_UPDATE_REPO: 'redbot-tests/does-not-exist-9f3a' },
                   stdio: ['ignore', 'pipe', 'pipe'] });
+  /* Drain stderr from the moment the child exists, so nothing it reports is lost or blocked. */
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (d) => { childErr += d; });
+
   let banner = '';
   await new Promise((res, rej) => {
     const timer = setTimeout(() => rej(new Error(`console did not start in 15s. stdout: ${banner}`)), 15_000);
@@ -1513,7 +1565,7 @@ test('/api/state sends one page of review but counts the whole queue', async () 
   await clearScopeFixture();
   await seedScopeFixture();
   try {
-    const s = await (await fetch(`http://127.0.0.1:${PORT}/api/state`)).json();
+    const s = await getJson('/api/state');
 
     /* Bounded: 60 drafts seeded, one page sent. */
     assert.ok(s.review.length <= 25, `review must be one page, got ${s.review.length}`);
@@ -1531,7 +1583,9 @@ test('the figures still describe the whole record once the reads are scoped', as
   await clearScopeFixture();
   await seedScopeFixture();
   try {
-    const s = await (await fetch(`http://127.0.0.1:${PORT}/api/state`)).json();
+    /* Same seeding gap, same race — this one survived it only because the socket the previous
+       test killed had already been evicted from the pool. */
+    const s = await getJson('/api/state');
 
     /* published: 17 seeded, and none of those history rows are on the page of drafts. */
     assert.ok(s.pulse.published >= SEED_PUBLISHED,
