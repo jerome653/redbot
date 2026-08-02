@@ -20,6 +20,7 @@ import { evaluateGates, type GateInput } from '../gates.js';
 import type { HealthCounters, HealthVerdict } from '../health.js';
 import type { ThreadState } from '../reddit/thread-state.js';
 import type { Draft, Thread, OpportunityAssessment } from '../types.js';
+import { policy } from '../policy.js';
 
 const GOOD =
   'Check the error log first — a 502 right after a PHP upgrade is usually a fatal in a plugin ' +
@@ -104,15 +105,39 @@ test('a first-ever comment has no spacing to violate', () => {
 
 /* ---- targets ---- */
 
+/**
+ * The age ceiling is read from policy, not hardcoded here.
+ *
+ * The first version of this test asserted a literal 2h, which is how warming shipped with a
+ * rule that found zero threads on every run: measured 2026-07-27, r/WordPress `/new`'s youngest
+ * post was 6.1h old, so nothing could ever qualify. Asserting the literal would have kept the
+ * test green while the feature was inert — the shape of failure this whole session keeps
+ * finding. It now asserts the BEHAVIOUR either side of whatever the limit is.
+ */
 test('threads are chosen for being read, not for being easy', () => {
-  // under 2h with few answers — the whole point
+  const maxAge = policy.warmingMaxThreadAgeHours.value;
+  const maxAnswers = policy.warmingMaxAnswers.value;
+
+  // comfortably inside both limits — the whole point
   assert.equal(isWarmingTarget({ ageHours: 1, commentCount: 2, subreddit: 'WordPress', title: 't' }).ok, true);
 
-  // past 2h a comment is buried and earns nothing
-  assert.equal(isWarmingTarget({ ageHours: 6, commentCount: 1, subreddit: 'WordPress', title: 't' }).ok, false);
+  // just inside the age ceiling still qualifies
+  assert.equal(
+    isWarmingTarget({ ageHours: maxAge - 0.5, commentCount: 1, subreddit: 'WordPress', title: 't' }).ok,
+    true
+  );
 
-  // the eleventh voice in a crowded thread is invisible
-  assert.equal(isWarmingTarget({ ageHours: 1, commentCount: 40, subreddit: 'WordPress', title: 't' }).ok, false);
+  // past it, a comment is buried and earns nothing
+  assert.equal(
+    isWarmingTarget({ ageHours: maxAge + 1, commentCount: 1, subreddit: 'WordPress', title: 't' }).ok,
+    false
+  );
+
+  // one voice in a crowd is invisible
+  assert.equal(
+    isWarmingTarget({ ageHours: 1, commentCount: maxAnswers + 1, subreddit: 'WordPress', title: 't' }).ok,
+    false
+  );
 
   // unknown age fails closed — we cannot tell whether it would be read
   assert.equal(isWarmingTarget({ ageHours: null, commentCount: 0, subreddit: 'WordPress', title: 't' }).ok, false);
@@ -314,7 +339,22 @@ test('an unreadable last-reply timestamp fails closed — NaN never satisfied th
  * inside every gate that existed before, and still buried.
  */
 test('a thread too old to be read is refused while warming, inside the 72h publish ceiling', () => {
-  const buried = { ...GOOD_THREAD, ageMinutes: 6 * 60, ageText: '6 hr ago' };
+  /**
+   * The age is derived from policy, for the reason the sibling test above already gives.
+   *
+   * This said `6 * 60` and went red when c3998c7 merged: `isWarmingTarget`'s ceiling moved from a
+   * hardcoded 2h to `policy.warmingMaxThreadAgeHours`, measured at 8h precisely BECAUSE a 2h
+   * ceiling matched nothing — r/WordPress `/new`'s youngest post was 6.1h old. So a 6h thread is
+   * now inside the window by design, and the fixture was asserting the old constant rather than
+   * the rule.
+   *
+   * Nothing about the intent changed: a thread too old to be read must still be refused. Two
+   * hours past whatever the ceiling is stays past it when the ceiling next moves, and stays well
+   * inside the 72h publish ceiling the second assertion depends on.
+   */
+  const overBy = policy.warmingMaxThreadAgeHours.value + 2;
+  assert.ok(overBy < 72, `the warming ceiling reached ${overBy}h — this test can no longer separate it from stale-thread`);
+  const buried = { ...GOOD_THREAD, ageMinutes: overBy * 60, ageText: `${overBy} hr ago` };
   const hit = gatesHit({ thread: buried });
   assert.ok(hit.includes('warming:target'), `got ${hit.join(',') || '(nothing)'}`);
   assert.equal(hit.includes('stale-thread'), false, 'the pre-existing age gate caught it, so this proves nothing');

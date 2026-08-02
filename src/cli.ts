@@ -28,6 +28,7 @@ import { backupCmd } from './commands/backup.js';
 import { regret } from './commands/regret.js';
 import { certifyCmd } from './commands/certify.js';
 import { auto } from './commands/auto.js';
+import { warmup } from './commands/warmup.js';
 import { jobList, jobAdd, jobCancel, work } from './commands/job.js';
 import {
   healthCmd, metricsCmd, policyCmd, selectCmd, reviewCmd, reportCmd, insightsCmd
@@ -65,6 +66,9 @@ redbot — Reddit engagement assistant
                                  what each discussion is missing, then contribute-or-skip
     redbot select [--all]        rank assessed threads against the pilot criteria
     redbot draft [threadId]      draft against a gap; the model may decline
+    redbot warmup [--dry]        draft ONE short warming comment for a new account —
+                                 picks a young thread, holds the 2-4/day pace, refuses
+                                 links and product names. Saves a draft; sends nothing.
 
   Unattended — everything except the decision
     redbot auto [--once] [--every <minutes>]
@@ -137,7 +141,7 @@ export const VALUE_FLAGS = new Set([
   // job/queue flags. `account` matters most: omitting it here would make
   // `redbot job list --account docs-architect` read "docs-architect" as a positional filter
   // and then act on whatever REDBOT_ACCOUNT happened to be — the wrong queue, silently.
-  'account', 'state', 'at', 'after', 'attempts', 'note',
+  'account', 'state', 'at', 'after', 'attempts', 'note', 'sort',
   'permalink', 'direction', 'target', 'query', 'subreddit', 'title', 'body',
   'draft', 'thread', 'comment',
   // `redbot sources add --search "<query>" --why "<reason>"`. Both take a value in space form,
@@ -260,7 +264,7 @@ async function main(): Promise<number> {
       shareFrom: flagValue('share-from'),
       label: flagValue('label')
     });
-    case 'read':    return read(positional[0]);
+    case 'read':    return read(positional[0], undefined, flagValue('sort'));
     case 'search':  return search(positional[0], undefined, flagValue('commit'));
     /* Communities, not threads — `search` finds posts. Same preview/commit contract. */
     case 'subreddits': return subreddits(positional[0], flagValue('commit'));
@@ -342,6 +346,7 @@ async function main(): Promise<number> {
         ...(Number.isFinite(every) && every > 0 ? { everyMinutes: every } : {})
       });
     }
+    case 'warmup':   return warmup({ dry: flags.has('--dry') });
     case 'regret':   return regret(positional[0]);
     /**
      * Show what provisioning found, without doing anything else.
