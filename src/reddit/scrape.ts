@@ -195,6 +195,87 @@ export async function runSearch(page: Page, query: string): Promise<void> {
   await pause();
 }
 
+/**
+ * A community (subreddit) result, as the search page reports it.
+ *
+ * `weeklyVisitors` and `weeklyContributions` are what Reddit actually publishes here — NOT the
+ * subscriber count. They are named for what they are because the difference decides things: a
+ * subreddit with 800k subscribers and 300 weekly contributions is a dead room, and calling the
+ * number "members" would hide exactly the case a person is choosing between.
+ */
+export interface CommunityCandidate {
+  /** Bare name, no `r/` prefix — the shape `addSource('subreddit', …)` expects. */
+  name: string;
+  permalink: string;
+  description: string;
+  weeklyVisitors: number | null;
+  weeklyContributions: number | null;
+}
+
+/** Open the community search. Separate from `runSearch`, which searches POSTS. */
+export async function runCommunitySearch(page: Page, query: string): Promise<void> {
+  const url = `${config.redditBase}/search/?q=${encodeURIComponent(query)}&type=communities`;
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+  await pause();
+}
+
+/**
+ * Read the community results off the page. Opens nothing — the listing carries every field.
+ *
+ * MEASURED against live Reddit 2026-08-03 (20 results for "wordpress"). The two counts are read
+ * from `faceplate-number`'s `number` attribute rather than its rendered text, because the text is
+ * abbreviated ("1.4K") and cannot be turned back into 1,441.
+ *
+ * ORDER IS NOT TRUSTED to identify which count is which. The units render visitors-then-
+ * contributions today, but that is a layout fact and layouts move; the surrounding label is the
+ * only thing that says what a number MEANS. A count whose label cannot be read comes back null,
+ * because a number attributed to the wrong thing is worse than a missing one — it is the shape
+ * that makes a dead subreddit look busy.
+ */
+export async function collectCommunities(page: Page): Promise<CommunityCandidate[]> {
+  for (const s of sel.communityResult) {
+    const units = page.locator(s);
+    if (!(await units.count().catch(() => 0))) continue;
+
+    const out: CommunityCandidate[] = [];
+    const n = await units.count();
+    for (let i = 0; i < n; i++) {
+      const u = units.nth(i);
+      const href = await u.locator(sel.communityLink[0]!).first()
+        .getAttribute('href').catch(() => null);
+      const m = /^\/r\/([A-Za-z0-9_]{2,21})\/?$/.exec(href ?? '');
+      if (!m) continue;                       // a link that is not a community is not a result
+
+      const counts = u.locator(sel.communityCount[0]!);
+      let visitors: number | null = null;
+      let contributions: number | null = null;
+      const cn = await counts.count().catch(() => 0);
+      for (let c = 0; c < cn; c++) {
+        const el = counts.nth(c);
+        const raw = await el.getAttribute('number').catch(() => null);
+        const value = raw !== null && /^\d+$/.test(raw) ? Number(raw) : null;
+        if (value === null) continue;
+        /* The label lives on the parent, alongside the rendered number. */
+        const label = (await el.evaluate((e) => e.parentElement?.textContent ?? '')
+          .catch(() => '')).toLowerCase();
+        if (label.includes('visitor')) visitors = value;
+        else if (label.includes('contribution')) contributions = value;
+      }
+
+      out.push({
+        name: m[1]!,
+        permalink: `${config.redditBase}/r/${m[1]!}/`,
+        description: ((await u.locator('p').first().textContent().catch(() => '')) ?? '')
+          .replace(/\s+/g, ' ').trim().slice(0, 400),
+        weeklyVisitors: visitors,
+        weeklyContributions: contributions
+      });
+    }
+    if (out.length) return out;
+  }
+  return [];
+}
+
 /** Open one thread and pull out everything worth keeping. */
 export async function collectThread(
   page: Page,

@@ -55,6 +55,35 @@ export const sel = {
   /** Search. */
   searchResult: ['shreddit-post', 'div[data-testid="search-post-unit"]', 'article'],
 
+  /**
+   * Community search — `/search/?q=…&type=communities`.
+   *
+   * MEASURED against the live page on 2026-08-03, not guessed: 20 results for "wordpress", every
+   * one a `div[data-testid="search-community"]`, each wrapped in a `search-telemetry-tracker`.
+   * The testid is listed first because it is the only part of that markup that names what the
+   * element IS; the tracker wrapper is telemetry plumbing and would match other result kinds too.
+   *
+   * Each unit carries: an `a[href^="/r/"]`, an `h2` holding the display name, a `p` of description,
+   * and TWO `faceplate-number` elements in DOM order — weekly visitors, then weekly contributions.
+   */
+  communityResult: [
+    'div[data-testid="search-community"]',
+    'search-telemetry-tracker div[data-testid="search-community"]',
+    'faceplate-tracker[source="search"] div[data-testid="search-community"]'
+  ],
+
+  /** The community's own link inside a result — the name comes from the href, not the heading. */
+  communityLink: ['a[href^="/r/"]'],
+
+  /**
+   * The two counts on a community result.
+   *
+   * `faceplate-number` carries the raw integer in a `number` ATTRIBUTE while its text renders
+   * "111K". Reading the attribute avoids parsing an abbreviation back into a number, which is
+   * lossy in the direction that matters — "1.4K" cannot tell 1,441 from 1,449.
+   */
+  communityCount: ['faceplate-number[number]'],
+
   /** Container that holds ONLY search results — everything outside it is feed noise. */
   searchScope: [
     'div[data-testid="search-results-container"]',

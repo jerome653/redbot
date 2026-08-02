@@ -14,6 +14,7 @@ import { probeKarma } from './probe-karma.js';
 import { primeAccounts, selectedAccount } from './config.js';
 import { read } from './commands/read.js';
 import { search } from './commands/search.js';
+import { subreddits } from './commands/subreddits.js';
 import { draft } from './commands/draft.js';
 import { reply } from './commands/reply.js';
 import { history } from './commands/history.js';
@@ -55,6 +56,9 @@ redbot — Reddit engagement assistant
     redbot search "<query>"      search Reddit and PREVIEW the results — collects nothing
     redbot search --commit <n,n|all>
                                  collect only the ones you picked from that preview
+    redbot subreddits "<topic>"  find COMMUNITIES to read, and PREVIEW them — adds nothing
+    redbot subreddits --commit <n,n|all>
+                                 add only the ones you picked as sources
 
   Deciding
     redbot opportunity [--force] [--limit N]
@@ -258,6 +262,8 @@ async function main(): Promise<number> {
     });
     case 'read':    return read(positional[0]);
     case 'search':  return search(positional[0], undefined, flagValue('commit'));
+    /* Communities, not threads — `search` finds posts. Same preview/commit contract. */
+    case 'subreddits': return subreddits(positional[0], flagValue('commit'));
     case 'draft':   return draft(positional[0]);
     case 'reply':   return reply(positional[0], { quick: flags.has('--quick') });
     case 'history': return history(positional[0]);
