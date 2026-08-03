@@ -95,6 +95,35 @@ describe('the desktop shell', () => {
     assert.equal(state.status, 200, 'the renderer could not read /api/state');
   });
 
+  test('the window is talking to THIS run\'s console, not another one', async () => {
+    /**
+     * THE FAILURE THIS EXISTS TO CATCH IS A FALSE PASS, which is why it is worth an assertion.
+     *
+     * `freePort()` in electron/main.mjs binds :0, reads the port, CLOSES it, and hands the number
+     * to a child that binds a moment later. That gap is a TOCTOU window: two Electron instances
+     * starting at once can be handed the same port, and the second window then loads the FIRST
+     * one's console. Measured 2026-08-03 — two overlapping `npm run test:all` runs produced
+     * "Settings opened itself on boot", because the other run had clicked the gear on the page
+     * this one was asserting against. Three runs in isolation were 16/16.
+     *
+     * A false failure is survivable; it is loud and gets investigated. The same race in the other
+     * direction is not: a run that attaches to a healthy foreign console goes GREEN without ever
+     * exercising the app it launched. That is a suite reporting on something it did not test.
+     *
+     * The data root is the identity: every run gets its own `mkdtemp` userData, so a server
+     * reporting a different one is not this run's server.
+     */
+    const served = await page.evaluate(async () => {
+      const s = await fetch('/api/state').then((r) => r.json());
+      return s?.newAccount?.dataDir ?? null;
+    });
+    assert.ok(served, '/api/state did not report its data root — the identity check cannot run');
+    const mine = join(userDir, 'data');
+    assert.equal(served.replace(/[\\/]+$/, '').toLowerCase(), mine.replace(/[\\/]+$/, '').toLowerCase(),
+      `this window is served by a console rooted at ${served}, not this run's ${mine} — ` +
+      'another instance holds the port, so nothing below is testing this app');
+  });
+
   test('a mutating POST from the renderer passes the cross-origin guard', async () => {
     /* The guard that matters most: `originIsLocal` on POST. The renderer's Origin is
        http://127.0.0.1:<port>, which must be accepted — and a 4xx here would mean every action
