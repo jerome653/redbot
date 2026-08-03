@@ -56,7 +56,45 @@ export async function firstUsable(page: Page | Locator, candidates: readonly str
   for (const s of candidates) {
     const loc = (page as Page).locator ? (page as Page).locator(s) : (page as Locator).locator(s);
     const el = loc.first();
-    if (!(await el.isVisible({ timeout: 1200 }).catch(() => false))) continue;
+    if (!(await el.isVisible({ timeout: 1200 }).catch(() => false))) {
+      /**
+       * NOT VISIBLE IS NOT THE SAME AS NOT THERE — the Tier-0 blocker, and it was only half fixed.
+       *
+       * Playwright's `isVisible()` is false for an element with no layout box, which Reddit's
+       * composer legitimately has until it is interacted with. TIER0-BLOCKER-2026-07-27 recorded
+       * the first-ever publish dying at `[no-composer]` for exactly this, and its fix — a
+       * `firstUsable` that separates "no layout box" from "hidden" — was verified live the same
+       * day. It was verified on `tier0/composer-firstusable`, which was never merged.
+       *
+       * What DID reach the release line, as 79be049, is a different function that happens to
+       * share the name: it demands `isVisible()` first and then adds editable/enabled checks, so
+       * it is a strict SUBSET of `firstVisible` and cannot see a zero-box composer at all. Two
+       * fixes, one name, and the document still says RESOLVED — so the blocker read as closed
+       * while the shipping line never had the half that closes it.
+       *
+       * This is the missing half, and it is purely additive: every path below only runs where the
+       * old code had already given up and returned null. It cannot reject anything that used to
+       * work. An element is kept only when the browser itself says it is present and not hidden
+       * — `display`, `visibility`, the `hidden` attribute and `aria-disabled` are the four ways a
+       * page says "not for you"; a zero-size box is not one of them.
+       */
+      if ((await el.count().catch(() => 0)) === 0) continue;
+      const present = await el
+        .evaluate((node: Element) => {
+          const cs = getComputedStyle(node);
+          return (
+            cs.display !== 'none' &&
+            cs.visibility !== 'hidden' &&
+            !node.hasAttribute('hidden') &&
+            node.getAttribute('aria-disabled') !== 'true'
+          );
+        })
+        .catch(() => false);
+      if (!present) continue;
+      /* Present but unrendered: return it without the editable/enabled probes below, which need a
+         laid-out element to answer and would throw or report false on this one. */
+      return el;
+    }
 
     /* `null` means the probe could not answer (it threw) — which is not evidence against the
        element, so it is kept. Only an explicit false rules it out. */

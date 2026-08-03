@@ -13,7 +13,7 @@
  */
 import type { Page } from 'playwright';
 import { sel } from './selectors.js';
-import { firstVisible } from './scrape.js';
+import { firstVisible, firstUsable } from './scrape.js';
 
 export interface ThreadState {
   locked: boolean;
@@ -113,8 +113,21 @@ export async function probeThreadState(page: Page, username: string | null): Pro
   }
 
   /* ---- composer ---- */
-  const editor = await firstVisible(page, sel.commentEditor);
-  const trigger = editor ? null : await firstVisible(page, sel.commentBoxTrigger);
+  /**
+   * `firstUsable`, not `firstVisible` — this is the PROBE half of the Tier-0 fix.
+   *
+   * `post.ts` was moved to `firstUsable` and this was not, so the two halves of the publish path
+   * disagreed about whether a composer exists: the probe reported `composerPresent: false` on a
+   * zero-layout-box composer that `post.ts` could then have typed into perfectly well. The gate
+   * reads THIS, so the disagreement always resolved against publishing — `[no-composer]` on a
+   * page whose composer was fine, which is precisely what TIER0-BLOCKER-2026-07-27 recorded.
+   *
+   * `firstUsable` is a superset of `firstVisible` now (see scrape.ts): everything the old call
+   * found, this finds, plus the present-but-unrendered case. Nothing that used to be detected
+   * stops being detected.
+   */
+  const editor = await firstUsable(page, sel.commentEditor);
+  const trigger = editor ? null : await firstUsable(page, sel.commentBoxTrigger);
   const composerPresent = Boolean(editor || trigger);
   if (!composerPresent && !locked && !archived) {
     anomalies.push('no comment composer and no lock notice — unexpected state, refusing rather than guessing');
