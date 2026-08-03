@@ -5587,7 +5587,20 @@ async function load(){
    * The data root goes in the tooltip rather than on screen. It is the fact that settles "which
    * one am I actually looking at" and it is too long to wear, but it must be one hover away.
    */
+  /**
+   * THE WINDOW TITLE CARRIES IT TOO, and that is not belt-and-braces.
+   *
+   * Measured 2026-08-03 by opening live and dev side by side: both windows reported
+   * "redbot — operations", so the taskbar, alt-tab and the window list were identical. The
+   * in-page badge is only visible once you are already looking at the right window — which is
+   * exactly the question you are trying to answer when you have two.
+   *
+   * Live is left untouched, for the same reason it wears no badge: the signal has to be the
+   * exception or it stops being read.
+   */
   const bBadge=$('#appBuild'), bId=S.build;
+  const baseTitle='redbot — operations';
+  document.title=(bId && bId!=='live')?(baseTitle+' — '+bId):baseTitle;
   if(bId && bId!=='live'){
     bBadge.textContent=bId;
     bBadge.title=(bId==='source'?'Running from the checkout — not an installed build.':'A separate install with its own data.')

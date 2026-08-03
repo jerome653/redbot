@@ -76,11 +76,29 @@ after(async () => {
 describe('the desktop shell', () => {
   test('a window opens and it is the redbot console, not an error page', async () => {
     const title = await page.title();
-    assert.equal(title, 'redbot — operations', `window title was "${title}"`);
+    /**
+     * The title must NAME the build when it is not live.
+     *
+     * This asserted the bare string, and that held while there was one build. Opening live and dev
+     * together on 2026-08-03 showed both windows titled "redbot — operations" — identical in the
+     * taskbar, alt-tab and the window list, which is precisely where you are asking "which one is
+     * this". A badge inside the page cannot answer that; you have to already be looking at the
+     * right window to see it.
+     *
+     * This suite runs UNPACKAGED, so its build is `source` and the title must say so.
+     */
+    assert.match(title, /^redbot — operations/, `window title was "${title}"`);
 
     /* Electron shows its own error page when loadURL fails; that page has no #banner. Asserting a
        real element rules out "the window opened" being mistaken for "the console loaded". */
     await page.waitForSelector('#banner', { timeout: 30_000 });
+
+    /* The build suffix is applied by the RENDER, not by the static <title>, so it does not exist
+       at domcontentloaded — the first version of this assertion read the title too early and saw
+       the bare string. Waited for rather than slept on. */
+    await page.waitForFunction(() => / — source$/.test(document.title), null, { timeout: 15_000 });
+    assert.match(await page.title(), / — source$/,
+      'an unpackaged run must name its build in the title, or two windows are identical in alt-tab');
     const url = page.url();
     assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\//, `loaded ${url}`);
   });

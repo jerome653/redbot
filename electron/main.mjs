@@ -479,7 +479,26 @@ async function boot() {
   logFile = join(userData, 'boot.log');
   boot_log(`--- boot --- electron ${process.versions.electron} node ${process.versions.node}`);
   boot_log(`userData   ${userData}`);
-  if (!process.env.REDBOT_DATA) process.env.REDBOT_DATA = join(userData, 'data');
+  /**
+   * A SOURCE RUN USES THE CHECKOUT'S DATA, not the installed app's.
+   *
+   * `userData/data` is right for an install — the install directory is read-only and replaced by
+   * an update, so working state has to live per-user. It is wrong for `npm start`, and quietly so:
+   * an unpackaged run is still named "redbot", so it resolved to `%APPDATA%\redbot\data` — the
+   * LIVE app's store. Measured 2026-08-03: a source run booted onto the live store and reported
+   * "browsers none bound to this machine", because the accounts, the 20 collected threads and the
+   * pending draft were all in the checkout while the app was reading somewhere else. Nothing was
+   * broken; it was looking in the wrong place and said so in a way that reads like a fault.
+   *
+   * It also meant source and live shared a single-instance lock, so the two could not run at once.
+   *
+   * This is the same trap `app.setName` had for the dev build — two builds silently sharing one
+   * store — and it gets the same answer: the build that is running decides where its data lives.
+   * An explicit REDBOT_DATA still wins, which is what the smoke suite relies on.
+   */
+  if (!process.env.REDBOT_DATA) {
+    process.env.REDBOT_DATA = app.isPackaged ? join(userData, 'data') : join(ROOT, 'data');
+  }
   boot_log(`REDBOT_DATA ${process.env.REDBOT_DATA}`);
 
   /* The master key, into this process's environment so the CLI children inherit it. Never fatal
