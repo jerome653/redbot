@@ -2222,11 +2222,43 @@ function review(){
      */
     let acked=[];
     const note=el('div','tiny');note.hidden=true;note.style.cssText='margin-top:.5rem;color:var(--ember)';
+
+    /**
+     * Who this goes out as. Shown, not assumed.
+     *
+     * One account: stated in words, because "publishing as X" is exactly the fact a person
+     * needs before an irreversible click, and a dropdown with one option is furniture.
+     * Two or more: a real choice, remembered. Either way the handle is SENT — the server's
+     * refusal to guess is the safety property, and the console's job is to answer it, not to
+     * route around it. A wrong pick still fails safe: `reply` reads the live page and refuses
+     * on a mismatch rather than posting under the wrong name.
+     */
+    const sAccts=(S.accounts||[]).filter(a=>a&&a.configured&&a.handle);
+    let sendAcct=sendAcctGet(sAccts);
+    const whoRow=el('div','tiny');whoRow.style.cssText='margin-top:.5rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap';
+    if(!sAccts.length){
+      whoRow.innerHTML='<span style="color:var(--ember)">No account is set up, so this cannot be sent. Add one on the Accounts screen.</span>';
+    }else if(sAccts.length===1){
+      whoRow.innerHTML='Publishing as <b>'+esc(sendAcct)+'</b>.';
+    }else{
+      whoRow.append(document.createTextNode('Publish as'));
+      const sel=el('select');
+      sel.style.cssText='font:inherit;font-family:var(--mono);font-size:.78rem;padding:.35rem .5rem;border-radius:8px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+      sAccts.forEach(a=>{
+        const o=document.createElement('option');o.value=a.handle;o.textContent=a.handle;
+        if(a.handle===sendAcct)o.selected=true;
+        sel.append(o);
+      });
+      sel.onchange=()=>{sendAcct=sel.value;sendAcctSet(sendAcct)};
+      whoRow.append(sel);
+      whoRow.append(document.createTextNode('— it goes out under that name.'));
+    }
     const goBtn=actionButton('Confirm and send',doAction(async say=>{
       if(conf.value!=='SEND')throw new Error('Type SEND exactly to confirm');
       say('Publishing…');
       const r=await fetch('/api/publish',{method:'POST',headers:{'content-type':'application/json'},
-        body:JSON.stringify({draftId:d.id,confirm:conf.value,reason:why.value,overrule:acked})}).then(x=>x.json());
+        body:JSON.stringify({draftId:d.id,confirm:conf.value,reason:why.value,overrule:acked,
+          account:sendAcct||undefined})}).then(x=>x.json());
       if(r.output&&LAST_DETAIL)LAST_DETAIL(r.output);
       if(!r.ok){
         /* Gates found only after the approval. Name them, keep them, and let the next click
@@ -2243,7 +2275,7 @@ function review(){
     /* No Stop on a send. Submitting and confirming are two steps, and stopping between them
        leaves a comment on Reddit nothing knows about. The server refuses this too. */
     },{stoppable:false}),'danger');
-    cw.append(conf,why,goBtn);panel.append(cw);panel.append(note);
+    cw.append(conf,why,goBtn);panel.append(whoRow);panel.append(cw);panel.append(note);
     sendBtn.replaceWith(panel);conf.focus();
   };
   acts.append(sendBtn);
@@ -2478,6 +2510,28 @@ const collectAcctGet=accts=>{
   return accts.length?accts[0].handle:null;
 };
 const collectAcctSet=h=>{try{localStorage.setItem(COLLECT_ACCT_KEY,h)}catch{}};
+
+/**
+ * Which account PUBLISHES. Same shape as the collect picker, deliberately a different key.
+ *
+ * The server refuses a send that does not name one — with two accounts configured it will not
+ * guess, and it is right not to: publishing under the wrong name is the one failure a person
+ * cannot consent to on someone else's behalf. But the console never sent the field at all, so
+ * that correct refusal became a dead end with nothing on screen to fix it.
+ *
+ * A separate key from collecting because reading as one account and publishing as another is a
+ * legitimate thing to want, and inheriting the collect choice silently would make the more
+ * consequential of the two follow the less. Re-validated against configured accounts on every
+ * render, so a handle that has since been removed is never quietly re-used.
+ */
+const SEND_ACCT_KEY='redbot.sendAccount';
+const sendAcctGet=accts=>{
+  let saved=null;
+  try{saved=localStorage.getItem(SEND_ACCT_KEY)}catch{}
+  if(saved&&accts.some(a=>a.handle===saved))return saved;
+  return accts.length?accts[0].handle:null;
+};
+const sendAcctSet=h=>{try{localStorage.setItem(SEND_ACCT_KEY,h)}catch{}};
 
 function collecting(root){
   const s=S.collect;
