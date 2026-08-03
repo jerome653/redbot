@@ -5532,22 +5532,27 @@ async function load(){
   badge('#nOut',S.outcomes.published);
   setupBadge();
 
-  /* ---------------- first boot: Setup before anything else ----------------
+  /* ---------------- first boot: reported, not interrupted ----------------
    *
-   * A BLOCKING requirement means redbot cannot function, so the app opens on Setup and says which
-   * one. This replaces a signal that was wrong in three ways: it opened the WALKTHROUGH rather than
-   * Setup, it was keyed on `localStorage['redbot.seenGuide']` which `guide()` sets on any open
-   * INCLUDING a click on the ? button, and it REMEMBERED rather than re-derived — so one Help click
-   * permanently consumed the first run and a later-broken install said nothing.
+   * A BLOCKING requirement means redbot cannot function, and it is REPORTED rather than shown.
+   * This position was reached by retreat and the history is kept because each step was a real
+   * measurement, not a preference:
    *
-   * Derived every load instead. Requirements go stale constantly: a browser gets closed, a port
-   * gets taken, a key gets rotated.
+   *   - it opened the WALKTHROUGH, keyed on `localStorage['redbot.seenGuide']`, which `guide()`
+   *     sets on any open INCLUDING a click on `?` — so one Help click permanently consumed the
+   *     first run and a later-broken install said nothing at all;
+   *   - re-derived every load instead of remembered, because requirements go stale constantly:
+   *     a browser gets closed, a port gets taken, a key gets rotated;
+   *   - it opened SETUP on any unmet blocker, until the browser became blocking (2026-08-01) and
+   *     a closed Chrome covered the console on a routine launch;
+   *   - narrowed to DURABLE blockers, which was right and still not enough: a fresh install has
+   *     no account by definition, so every new operator met a settings panel as a front door.
    *
-   * The gate is deliberately NOT sticky and NOT modal — Setup is a normal screen with working
-   * navigation, because the one surface that can fix a missing account is the console itself. It
-   * redirects once per load and never traps.
+   * Nothing opens itself now. `paintBanner()` names each blocker and the gear carries an ember
+   * dot while any is unmet — both already existed, and both cost nothing until they are needed.
+   * Derived every load, as before. What is ENFORCED is untouched: an install with a durable
+   * blocker still cannot run.
    */
-  const blockers=(SETUP&&!SETUP.error)?(SETUP.blocking||[]):[];
   /**
    * "Setup is not finished" is a claim about the INSTALL, and a closed Chrome is not that.
    *
@@ -5568,23 +5573,26 @@ async function load(){
   go(CUR);
 
   /**
-   * WHEN SETTINGS OPENS ITSELF — and why "a blocking requirement" was the wrong trigger.
+   * SETTINGS NEVER OPENS ITSELF (2026-08-03). The console opens on the console.
    *
-   * It opened on any unmet blocker, and since 2026-08-01 the browser is one. A closed Chrome is
-   * the most ordinary state a machine can be in: it happens every time somebody closes a window,
-   * and every launch until they sign in. So the panel opened over the console on a routine boot,
-   * which is the interruption the walkthrough was just stopped from committing.
+   * The history here is one retreat at a time, and the end of it is worth stating plainly.
+   * Settings opened on ANY unmet blocker; when the browser became blocking on 2026-08-01 that
+   * meant it covered the screen on a routine launch, so the trigger was narrowed to DURABLE
+   * blockers only. That narrowing was right and still did not go far enough: a fresh install has
+   * no account by definition, so the first thing every new operator met was a panel over a
+   * console they had not seen yet — a settings screen as a front door.
    *
-   * The distinction that matters is not blocking-vs-advisory, it is DURABLE vs TRANSIENT. A
-   * missing account, an unreadable database, no model access — those are true until a person
-   * changes something, and Settings is where they change it. A browser that is not running is
-   * true until the next launch, and boot already opens it.
+   * NOTHING IS HIDDEN BY THIS, which is the only reason it is safe. Every blocker is still
+   * reported, in two places that were already there and cost no attention until they are needed:
+   * `paintBanner()` above names each one (the browser gets its own sentence, because "setup is
+   * not finished" is a claim about the install and a closed Chrome is not that), and the gear
+   * carries an ember dot on its shoulder for as long as anything is unmet. Setup is one click
+   * away and says the same things it always did.
    *
-   * The banner above still names every blocker including the browser, and the gear still carries
-   * the count. Nothing is hidden; it just does not take the screen.
+   * The requirement set is unchanged and so are the gates. This is about what takes the screen on
+   * boot, not about what is enforced — an install with a durable blocker still cannot run, it is
+   * simply told rather than interrupted.
    */
-  const durable=blockers.filter(b=>b.id!=='browser');
-  if(durable.length)settings(true);
 
   /* THE WALKTHROUGH NO LONGER OPENS ITSELF (2026-08-01).
    *

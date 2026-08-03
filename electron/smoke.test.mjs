@@ -273,44 +273,59 @@ describe('the first-boot setup gate', () => {
     }
   });
 
-  test('a durable blocking requirement opens Settings over the console, not the walkthrough', async () => {
+  test('nothing opens itself on boot — not Settings, not the walkthrough', async () => {
     /**
-     * Setup STOPPED BEING A TAB. It is now the Settings panel behind the gear, and this test had
-     * been asserting the old shape — failing unseen, because this file is in no npm script.
+     * 2026-08-03: Settings no longer opens on a durable blocker. The console opens on the console.
      *
-     * The gate itself did not weaken, and that is what is re-pinned here. `index.html` opens the
-     * panel on DURABLE blockers only (`blockers.filter(b => b.id !== 'browser')`): a missing
-     * account or an unreadable database stays true until somebody acts, whereas a closed Chrome is
-     * true until the next launch and boot already opens one. Today staying visible UNDERNEATH the
-     * scrim is now correct — the panel covers it, the navigation is not thrown away.
+     * The bar this has to clear is that nothing is HIDDEN by that, which is why the next test
+     * matters as much as this one: the banner must still name what is blocking. A boot that
+     * neither interrupts nor reports would not be an improvement, it would be a silent broken
+     * install — the failure mode `redbot doctor` and `paintBanner` both exist to prevent.
+     *
+     * Exercised on the hardest case deliberately: a fresh throwaway install has no account and no
+     * operator, so if anything were ever going to take the screen, it would be here.
      */
     const s = await page.evaluate(() => fetch('/api/setup').then((r) => r.json()));
     if (!s.blocking.length) {
-      // The fresh throwaway install has no account and no operator, so this should not happen.
-      assert.fail('no blocking requirement on a fresh install — the gate cannot be exercised');
+      assert.fail('no blocking requirement on a fresh install — this cannot be exercised');
     }
     const durable = s.blocking.filter((b) => b.id !== 'browser');
     assert.ok(durable.length,
       `only transient blockers on a fresh install (${s.blocking.map((b) => b.id).join(', ')}) ` +
-      '— the durable gate cannot be exercised');
+      '— the case that used to open Settings is not present, so this proves nothing');
 
     const shown = await page.evaluate(() => ({
       panel: !document.querySelector('#settings')?.hidden,
       scrim: !document.querySelector('#scrim')?.hidden,
-      setupRendered: (document.querySelector('#v-setup')?.textContent ?? '').trim().length > 0,
-      guideOpen: !document.querySelector('#guide')?.hidden
+      guideOpen: !document.querySelector('#guide')?.hidden,
+      today: !document.querySelector('#v-today')?.hidden
     }));
-    assert.equal(shown.panel, true, 'a durable blocker did not open Settings');
-    assert.equal(shown.scrim, true, 'Settings opened without its scrim — the console stays clickable behind it');
-    assert.equal(shown.setupRendered, true, 'Settings opened on an empty checklist');
-    assert.equal(shown.guideOpen, false,
-      'the walkthrough is covering the checklist a person has to act on');
+    assert.equal(shown.panel, false,
+      'Settings opened itself on boot — a durable blocker must be reported, not shown');
+    assert.equal(shown.scrim, false, 'the scrim is up with no panel behind it');
+    assert.equal(shown.guideOpen, false, 'the walkthrough opened itself');
+    assert.equal(shown.today, true, 'the app did not open on the console');
+  });
+
+  test('the gear still carries its attention dot while something is unmet', async () => {
+    /* The dot is now one of the two things standing between a blocked install and silence. If it
+       stops rendering, nothing on this screen says the install cannot run. */
+    const dot = await page.evaluate(() =>
+      Boolean(document.querySelector('#settingsBtn .g'))
+      || /\d/.test(document.querySelector('#settingsBtn')?.getAttribute('title') ?? ''));
+    assert.equal(dot, true, 'the gear reports nothing — a blocked install would look healthy');
   });
 
   test('the banner names what is blocking, and Setup renders the checklist', async () => {
+    /* The banner is read BEFORE opening anything: since Settings stopped opening itself, this is
+       the only thing on a booted screen that says the install cannot run. */
     const banner = await page.evaluate(() => document.querySelector('#banner')?.textContent ?? '');
     assert.match(banner, /Setup is not finished/, `banner said: ${banner.slice(0, 120)}`);
 
+    /* The checklist is rendered by `setup()`, which `settings(true)` calls — so it has to be
+       opened now rather than found already open. */
+    await page.click('#settingsBtn');
+    await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });
     const setupText = await page.evaluate(() => document.querySelector('#v-setup')?.textContent ?? '');
     assert.match(setupText, /redbot cannot run yet/, 'the checklist heading is missing');
     // Each unmet blocking row must carry its fix hint, or the screen is a diagnosis not a setup.
@@ -331,7 +346,18 @@ describe('the first-boot setup gate', () => {
      * A modal gate is a trap if it cannot be dismissed, so the escape route is what gets asserted:
      * Escape closes it, the console underneath is live, and the gear puts it back. The panel is
      * reopened at the end because the tests after this one read the open checklist.
+     *
+     * Opened here first: since 2026-08-03 nothing opens it on boot. The gear TOGGLES
+     * (`settings($('#settings').hidden)`), so a blind click is not "open" — if the previous test
+     * left the panel up, clicking closes it, which is how this test first failed on a 30s wait for
+     * a panel it had just dismissed. Asked and only then clicked, so it does not depend on the
+     * order the tests happen to run in. Being open is the precondition; the point is that it lets
+     * go.
      */
+    if (await page.evaluate(() => document.querySelector('#settings')?.hidden)) {
+      await page.click('#settingsBtn');
+    }
+    await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });
     await page.keyboard.press('Escape');
     const closed = await page.evaluate(() => ({
       panel: !document.querySelector('#settings')?.hidden,
