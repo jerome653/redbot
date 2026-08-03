@@ -2264,6 +2264,77 @@ test('the Threads table is not collapsed to a hairline on a wide screen', async 
   } finally { await context.close(); }
 });
 
+test('a full Threads screen scrolls inside its tables rather than growing without limit', async () => {
+  /**
+   * The complement to the hairline test above. That one pins the table's box against being
+   * squeezed to nothing; this pins it against the opposite failure, which shipped just as long.
+   *
+   * Measured before the cap, with 25 collected rows and 40 dropped: 6105px of screen inside an
+   * 820px pane at 1600x1000, and 20114px on a phone. `.grid3` stretches its three panels to the
+   * tallest of them, so the funnel and the drop breakdown were each pulled to 2591px to match a
+   * table nobody could see the end of — roughly 2200px of each was empty.
+   *
+   * Asserts GEOMETRY, not a class name, on purpose: how the cap is implemented is exactly what a
+   * redesign is allowed to change. That the screen stays bounded, and that bounding it does not
+   * cost a single row, is not.
+   */
+  const base = makeState(NOW).discovery;
+  const heavy = makeState(NOW, {
+    discovery: {
+      ...base,
+      total: 4812, offset: 0, limit: 25,
+      items: Array.from({ length: 25 }, (_, i) => ({
+        threadId: `t${i}`, title: `Thread number ${i} — a title long enough to wrap its column`,
+        permalink: `https://www.reddit.com/r/WordPress/comments/${i}/x/`,
+        verdict: 'contribute', score: 99 - i,
+        thesis: { whatNew: `what row ${i} would add that nobody on the thread has said` },
+        reasons: ['seeded'], subreddit: 'WordPress', comments: 3 + i,
+        ageText: `${1 + i} hr ago`, draftId: null, draftStatus: null
+      })),
+      dropped: Array.from({ length: 40 }, (_, i) => ({
+        threadId: `d${i}`, title: `Dropped thread ${i} — refused before any model call`,
+        permalink: `https://www.reddit.com/r/WordPress/comments/d${i}/x/`,
+        subreddit: 'WordPress', kind: 'too-old',
+        detail: `why row ${i} stopped here, in the prefilter's own words`,
+        ageText: `${2 + i} hr ago`, commentCount: i
+      })),
+      /* The page this fixture actually supplies. `droppedLimit` must match `dropped.length` or
+         the screen's own pager would caption 40 rendered rows "showing 1-25". */
+      droppedTotal: 3612, droppedOffset: 0, droppedLimit: 40
+    }
+  });
+
+  const { context, page } = await open({ state: heavy, viewport: { width: 1600, height: 1000 } });
+  try {
+    await tab(page, 'discovery');
+    const m = await page.evaluate(() => {
+      const sec = document.querySelector('#v-discovery');
+      return {
+        screenH: sec.scrollHeight,
+        rows: sec.querySelectorAll('tbody tr').length,
+        tables: [...sec.querySelectorAll('table')].map((t) => {
+          const box = t.closest('div');
+          return {
+            boxH: Math.round(box.getBoundingClientRect().height),
+            scrolls: box.scrollHeight > box.clientHeight + 1
+          };
+        })
+      };
+    });
+
+    /* Every row is still THERE. A screen that stayed short by rendering fewer rows would pass a
+       height assertion on its own and fail the operator, which is the whole point of the list. */
+    assert.equal(m.rows, 65, `expected 25 collected + 40 dropped rows, rendered ${m.rows}`);
+    assert.ok(m.screenH < 2600,
+      `Threads grew to ${m.screenH}px of scroll — its tables are not holding their own height`);
+    m.tables.forEach((t, i) => {
+      assert.ok(t.scrolls,
+        `table ${i} (${t.boxH}px) is not scrolling — its rows are stretching the screen instead`);
+      assert.ok(t.boxH > 100, `table ${i} collapsed to ${t.boxH}px`);
+    });
+  } finally { await context.close(); }
+});
+
 test('no caption drops below the readability floor on a phone', async () => {
   /**
    * Measured 2026-07-24: 22 elements rendered between 10.08px and 10.96px at phone widths —
@@ -2303,5 +2374,224 @@ test('light theme renders every screen without a console error', async () => {
       await shot(page, `light-${v}`);
     }
     assert.deepEqual(errors, [], 'the light theme must render as cleanly as the dark one');
+  } finally { await context.close(); }
+});
+
+/**
+ * THE TWO LISTS ON THREADS CARRY THEIR OWN PAGER.
+ *
+ * "Collected threads" has always had one. "Collected, not assessed" had a caption — "showing the
+ * 25 most recent of 3612" — which stated the limit and offered no way past it: the other 3587 were
+ * in the database, counted in the heading above them, and unreachable from the screen.
+ *
+ * The failure this pins is the cheap way to add the second control: pointing it at the first one's
+ * position. Then Older on the refusals silently pages the assessed list above it, and the reader
+ * loses the row they were looking at to a click on a different table.
+ *
+ * Driven through the pagers' accessible names rather than their classes, and asserted on the
+ * REQUEST each click makes — which is the only way to tell a real second page from a slice of one
+ * that had already been fetched.
+ */
+test('each Threads list pages on its own — the refusals and the assessed do not share a cursor', async () => {
+  const base = makeState(NOW).discovery;
+  const heavy = makeState(NOW, {
+    discovery: {
+      ...base,
+      total: 4812, offset: 0, limit: 25,
+      items: Array.from({ length: 25 }, (_, i) => ({
+        threadId: `t${i}`, title: `Assessed thread ${i}`,
+        permalink: `https://www.reddit.com/r/WordPress/comments/t${i}/x/`,
+        verdict: 'contribute', score: 99 - i, thesis: { whatNew: `row ${i}` },
+        reasons: ['seeded'], subreddit: 'WordPress', comments: i,
+        ageText: `${1 + i} hr ago`, draftId: null, draftStatus: null
+      })),
+      dropped: Array.from({ length: 25 }, (_, i) => ({
+        threadId: `d${i}`, title: `Refused thread ${i}`,
+        permalink: `https://www.reddit.com/r/WordPress/comments/d${i}/x/`,
+        subreddit: 'WordPress', kind: 'too-old', detail: `why ${i} stopped`,
+        ageText: `${2 + i} hr ago`, commentCount: i
+      })),
+      droppedTotal: 3612, droppedOffset: 0, droppedLimit: 25
+    }
+  });
+
+  const { context, page, calls } = await open({ state: heavy, viewport: { width: 1600, height: 1000 } });
+  try {
+    await tab(page, 'discovery');
+
+    /* Serve each list its OWN rows, so a shared cursor shows up as the wrong titles appearing
+       in the wrong table rather than as two identical-looking pages. Registered after open(),
+       which is what puts it ahead of the default /api/page handler. */
+    await page.route('**/api/page**', async (route) => {
+      const q = Object.fromEntries(new URL(route.request().url()).searchParams);
+      /* This handler SHADOWS the one open() installed, so the recording has to happen here too
+         — `calls` is the same array, and without this the click looks like it asked for nothing. */
+      calls.push({ path: '/api/page', query: q, body: {} });
+      const offset = Number(q.offset) || 0, limit = Number(q.limit) || 25;
+      const dropped = q.list === 'dropped';
+      return route.fulfill({
+        status: 200, contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify({
+          list: q.list, total: dropped ? 3612 : 4812, offset, limit,
+          rows: Array.from({ length: limit }, (_, i) => (dropped
+            ? { threadId: `d${offset + i}`, title: `Refused thread ${offset + i}`,
+                permalink: `/r/WordPress/comments/d${offset + i}`, subreddit: 'WordPress',
+                kind: 'too-old', detail: `why ${offset + i} stopped`,
+                ageText: '3 hr ago', commentCount: i }
+            : { threadId: `t${offset + i}`, title: `Assessed thread ${offset + i}`,
+                permalink: `/r/WordPress/comments/t${offset + i}`, verdict: 'contribute',
+                score: 90 - i, thesis: { whatNew: `row ${offset + i}` }, reasons: ['seeded'],
+                subreddit: 'WordPress', comments: 7, ageText: '2 h ago',
+                draftId: null, draftStatus: null }))
+        })
+      });
+    });
+
+    /* Both controls must exist. Before this change there was exactly one Older on the screen. */
+    const olderDropped = page.getByRole('button', { name: 'Next page of dropped' });
+    const olderThreads = page.getByRole('button', { name: 'Next page of threads' });
+    assert.equal(await olderDropped.count(), 1, 'the refusals table has no pager of its own');
+    assert.equal(await olderThreads.count(), 1, 'the assessed table lost its pager');
+
+    const pageCalls = () => calls.filter((c) => c.path === '/api/page');
+    const before = pageCalls().length;
+
+    await olderDropped.click();
+    await page.waitForFunction(
+      (n) => document.body.textContent.includes('Refused thread 25') || n, null, { timeout: 5000 }
+    ).catch(() => {});
+
+    const asked = pageCalls().slice(before);
+    assert.ok(asked.length >= 1, 'Older on the refusals asked the server for nothing');
+    assert.equal(asked[0].query.list, 'dropped',
+      `Older on the refusals asked for "${asked[0].query.list}" — the two lists share a cursor`);
+    assert.equal(asked[0].query.offset, '25', 'the refusals did not advance by their own page size');
+
+    /* The assessed list must be exactly where it was left: same first row, same caption. */
+    const after = await page.evaluate(() => {
+      const sec = document.querySelector('#v-discovery');
+      const tables = sec.querySelectorAll('table');
+      /* The TITLE LINK, not the row's textContent: a row concatenates its cells with no
+         separator ("Refused thread 25" + "3 hr ago" reads as "Refused thread 253 hr ago"),
+         which makes every boundary assertion on the whole row a trap. */
+      const firstRow = (t) => t?.querySelector('tbody tr a')?.textContent || '';
+      return {
+        assessedFirst: firstRow(tables[0]),
+        refusedFirst: firstRow(tables[1]),
+        captions: [...sec.querySelectorAll('[aria-label$="page range"]')].map((e) => e.textContent)
+      };
+    });
+    assert.equal(after.assessedFirst, 'Assessed thread 0',
+      `paging the refusals moved the assessed list to "${after.assessedFirst}"`);
+    assert.equal(after.refusedFirst, 'Refused thread 25',
+      `the refusals did not advance — first row is "${after.refusedFirst}"`);
+    assert.ok(after.captions.some((c) => /1–25 of 4,812/.test(c)),
+      `the assessed caption moved: ${JSON.stringify(after.captions)}`);
+    assert.ok(after.captions.some((c) => /26–50 of 3,612/.test(c)),
+      `the refusals caption did not advance: ${JSON.stringify(after.captions)}`);
+  } finally { await context.close(); }
+});
+
+/**
+ * PULLING TAKES ONLY WHAT WAS TICKED.
+ *
+ * The shared account list is written by whoever else pushes to it, so "Pull accounts" used to mean
+ * "create every account on it here" — one Apply button and no way to say that one of them is not
+ * this machine's to run. Two people sharing a list could not each keep their own accounts.
+ *
+ * Asserted on the REQUEST the dialog makes, because that is the only thing that decides what gets
+ * written. A dialog that renders switches and then posts the whole list would look identical.
+ */
+test('Pull accounts asks for the ticked accounts and no others', async () => {
+  const { context, page, calls } = await open({ viewport: { width: 1400, height: 1000 } });
+  try {
+    const PLAN = {
+      ok: true, listVersion: 4, actionable: 3,
+      plan: [
+        { handle: 'Alpha_Acct', action: 'create' },
+        { handle: 'Beta_Acct', action: 'update', changed: ['role'] },
+        { handle: 'Delta_Acct', action: 'create' },
+        { handle: 'Gamma_Acct', action: 'unchanged' }
+      ],
+      withdrawn: ['Old_Acct']
+    };
+    /**
+     * The "Dashboard sync" fold only exists once sync is configured, and the shared fixture has
+     * none — so this supplies it, in the shape server.mjs builds: available, an endpoint, and both
+     * tokens present. Without it there is no Pull accounts button to press at all.
+     */
+    await page.route('**/api/setup*', async (route) => route.fulfill({
+      status: 200, contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify({
+        ...SETUP,
+        sync: {
+          available: true, url: 'https://dash.example', urlFromEnv: false,
+          installId: '6d785e58-f4e0-4380-8713-3ff60c392f69',
+          pushToken: { present: true, from: 'vault', hint: 'a1b2' },
+          shareToken: { present: true, from: 'vault', hint: 'c3d4' }
+        }
+      })
+    }));
+
+    /* Registered after open(), which is what puts it ahead of the default handler — and it has to
+       record into `calls` itself, because shadowing that handler also shadows its recorder. */
+    await page.route('**/api/sync/accounts/**', async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      let body = {};
+      try { body = JSON.parse(route.request().postData() || '{}'); } catch { /* not json */ }
+      calls.push({ path, body });
+      const json = (b) => route.fulfill({
+        status: 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify(b)
+      });
+      if (path.endsWith('/plan')) return json(PLAN);
+      /* Answer the way the server does for the selection it was sent. */
+      const picked = Array.isArray(body.handles) ? body.handles : [];
+      return json({ ok: true, applied: picked.length, selected: picked.length,
+                    actionable: 3, remaining: 3 - picked.length, withdrawn: PLAN.withdrawn });
+    });
+
+    /* open() has already navigated, and /api/setup is fetched on load — so the routes above were
+       registered too late to shape the Settings panel that was built. Reload through them. */
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(
+      () => document.querySelector('#nRev')?.textContent === '3', null, { timeout: 15000 });
+
+    await tab(page, 'setup');
+    const fold = page.locator('#v-setup details.fold').filter({ hasText: 'Dashboard sync' }).first();
+    if (!(await fold.evaluate((n) => n.open))) await fold.locator('summary').first().click();
+
+    await fold.getByRole('button', { name: 'Pull accounts' }).click();
+    await page.waitForSelector('#dialog:not([hidden])', { timeout: 5000 });
+
+    /* Only the three that would CHANGE get a switch; the unchanged one is context. */
+    const switches = page.locator('#dialogBody .src-row .sw');
+    assert.equal(await switches.count(), 3,
+      'every account that would change must be individually selectable, and only those');
+
+    const pull = page.getByRole('button', { name: 'Pull selected' });
+    assert.equal(await pull.isDisabled(), true,
+      'nothing is ticked yet — pulling must not be offered as a one-click default');
+
+    await page.getByRole('button', { name: 'Pull Alpha_Acct onto this machine' }).click();
+    await page.getByRole('button', { name: 'Pull Delta_Acct onto this machine' }).click();
+    assert.equal(await pull.isDisabled(), false, 'two accounts are ticked and pulling is still refused');
+
+    const before = calls.filter((c) => c.path.endsWith('/apply')).length;
+    await pull.click();
+    await page.waitForFunction(
+      () => !!document.querySelector('#dialogBody .note'), null, { timeout: 5000 });
+
+    const applied = calls.filter((c) => c.path.endsWith('/apply')).slice(before);
+    assert.equal(applied.length, 1, 'the dialog did not ask the server to apply anything');
+    const sent = applied[0].body.handles;
+    assert.deepEqual([...sent].sort(), ['Alpha_Acct', 'Delta_Acct'],
+      `the dialog asked for ${JSON.stringify(sent)} — an untouched account was included`);
+    assert.ok(!sent.includes('Beta_Acct'), 'an account nobody ticked was requested');
+    assert.ok(!sent.includes('Gamma_Acct'), 'an unchanged account was requested');
+
+    /* The receipt names what was left behind, so a partial pull cannot read as a whole one. */
+    const receipt = await page.locator('#dialogBody').textContent();
+    assert.match(receipt, /2 account\(s\) pulled/);
+    assert.match(receipt, /1 account\(s\) on the shared list were left/);
   } finally { await context.close(); }
 });

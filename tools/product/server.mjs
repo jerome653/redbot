@@ -724,6 +724,11 @@ async function buildState(opts = {}) {
        */
       dropped: droppedPage.rows,
       droppedTotal: droppedPage.total,
+      /* The position of THIS page, sent for the same reason `offset`/`limit` are sent for
+         `items` above: the screen seeds its own pager from the page that already arrived, so
+         it neither guesses the server's page size nor spends a second round trip learning it. */
+      droppedOffset: droppedPage.offset,
+      droppedLimit: droppedPage.limit,
       /**
        * WHY the threads that never reached a model call were dropped.
        *
@@ -2103,10 +2108,55 @@ const server = createServer((req, res) => {
         if (!actionable.length) {
           return send(200, JSON.stringify({ ok: true, applied: 0, note: 'nothing to apply' }));
         }
-        const done = await pushAccountsApi.applyAccounts(r.incoming, r.plan);
-        if (r.etag) pushStateApi.writePushState({ ...state, accountsEtag: r.etag });
+
+        /**
+         * ONLY WHAT WAS CHOSEN, AND THE CHOICE IS CHECKED HERE.
+         *
+         * The screen offers one switch per account, but a list of handles arriving from a browser
+         * is a request, not an instruction. The selection is intersected with the plan THIS
+         * request just computed, so the set that can possibly be written is bounded by what the
+         * shared list actually holds right now: a handle that is not in the list, or is in it and
+         * unchanged, or was invented by the caller, matches nothing and is reported back as
+         * skipped rather than acted on.
+         *
+         * Fail closed. `handles` absent or empty applies NOTHING — the old behaviour was to apply
+         * every actionable account on an empty body, and that is the exact click this feature
+         * exists to stop somebody making by accident.
+         */
+        const { chosen, skipped } = pushAccountsApi.selectPlan(r.plan, body.handles);
+        if (!chosen.length && !skipped.length) {
+          return send(200, JSON.stringify({
+            ok: true, applied: 0, selected: 0, actionable: actionable.length,
+            note: 'no accounts were selected — nothing was applied'
+          }));
+        }
+
+        if (!chosen.length) {
+          return send(200, JSON.stringify({
+            ok: true, applied: 0, selected: 0, skipped, actionable: actionable.length,
+            note: 'nothing that was selected is still in the shared list to apply'
+          }));
+        }
+
+        const done = await pushAccountsApi.applyAccounts(r.incoming, chosen);
+
+        /**
+         * THE ETAG IS ONLY STORED WHEN THE WHOLE LIST WAS TAKEN.
+         *
+         * It is the background path's "I am caught up" marker, and a partial pull is the opposite
+         * of caught up. Writing it after applying 2 of 7 would make the next scheduled fetch a
+         * 304, and the five accounts that were deliberately left behind would never arrive — the
+         * person would have to notice the absence themselves. Left unwritten, the next pull sees
+         * them again, which is what someone who ticked two of seven expects.
+         */
+        const complete = chosen.length === actionable.length && !done.errors.length;
+        if (r.etag && complete) pushStateApi.writePushState({ ...state, accountsEtag: r.etag });
+
         return send(200, JSON.stringify({
           ok: !done.errors.length, applied: done.applied,
+          selected: chosen.length, actionable: actionable.length,
+          remaining: actionable.length - chosen.length,
+          ...(skipped.length ? { skipped } : {}),
           ...(done.errors.length ? { errors: done.errors } : {}),
           withdrawn: r.withdrawn
         }));
@@ -2493,6 +2543,16 @@ const server = createServer((req, res) => {
     const want = String(url.searchParams.get('list') || '');
     const lists = {
       threads: pagesApi?.threads,
+      /**
+       * `dropped` is its OWN list, paged independently of `threads`.
+       *
+       * Both live on the Threads screen and they answer different questions — what redbot chose
+       * to look at, and what it refused before spending anything. Sharing one position would
+       * mean paging into the refusals moved the list above them, which is why they page apart.
+       * `pageDroppedThreads` has always cut a real LIMIT/OFFSET page; only this map withheld it,
+       * so the screen showed the newest 25 and offered no way to reach the 26th.
+       */
+      dropped: pagesApi?.dropped,
       outcomes: pagesApi?.outcomes,
       observations: pagesApi?.observations
     };

@@ -21,6 +21,9 @@ import { mkdtempSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+/* Type-only, so it is erased at compile time and cannot import the module before the environment
+   below is set — which is the reason every VALUE in this file arrives through `await import`. */
+import type { PullPlanEntry } from '../push/accounts.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const RUNNER = join(ROOT, 'db', 'sqlite', 'migrate.mjs');
@@ -38,7 +41,8 @@ if (migrated.status !== 0) throw new Error(`migrate up failed:\n${migrated.stder
 
 const { getPool, closePool } = await import('../db.js');
 const {
-  portableAccounts, listFingerprint, pushAccounts, pullAccounts, applyAccounts, PORTABLE_FIELDS
+  portableAccounts, listFingerprint, pushAccounts, pullAccounts, applyAccounts, selectPlan,
+  PORTABLE_FIELDS
 } = await import('../push/accounts.js');
 const { PushClient } = await import('../push/client.js');
 const { readPushState } = await import('../push/state.js');
@@ -416,5 +420,76 @@ describe('applying a pulled list', () => {
     );
     assert.notEqual(String(row.rows[0]!.profile_dir), 'chrome-profile-zz',
       'an existing folder must never be adopted by a new account');
+  });
+});
+
+/**
+ * Choosing WHICH accounts come across.
+ *
+ * The shared list belongs to everyone pushing to it, and a pull used to take all of it. Two people
+ * sharing one list could not each keep their own accounts on their own machine — the first pull
+ * created every account on both computers.
+ *
+ * These pin the property that makes the console's tick-boxes safe: the selection can only ever
+ * NARROW the plan. Every entry `selectPlan` returns came out of the plan it was given, so no
+ * caller — a stale dialog, a hand-written request, a bug — can introduce an account by naming one.
+ */
+describe('choosing which accounts to pull', () => {
+  const PLAN: PullPlanEntry[] = [
+    { handle: 'Alpha_Acct', action: 'create' },
+    { handle: 'Beta_Acct', action: 'update', changed: ['role'] },
+    { handle: 'Gamma_Acct', action: 'unchanged' },
+    { handle: 'Delta_Acct', action: 'create' }
+  ];
+
+  test('only the ticked accounts are chosen', () => {
+    const r = selectPlan(PLAN, ['Alpha_Acct', 'Delta_Acct']);
+    assert.deepEqual(r.chosen.map((p) => p.handle), ['Alpha_Acct', 'Delta_Acct']);
+    assert.deepEqual(r.skipped, []);
+    /* The count is of the whole plan, not the pick — the console needs it to say "2 of 3". */
+    assert.equal(r.actionable, 3);
+  });
+
+  test('an account that was not ticked is never chosen', () => {
+    const r = selectPlan(PLAN, ['Alpha_Acct']);
+    assert.deepEqual(r.chosen.map((p) => p.handle), ['Alpha_Acct']);
+    assert.ok(!r.chosen.some((p) => p.handle === 'Beta_Acct'),
+      'an untouched account came across anyway — the tick-boxes decide nothing');
+  });
+
+  test('no selection pulls NOTHING, rather than everything', () => {
+    for (const empty of [undefined, null, [], '', 'Alpha_Acct', {}]) {
+      const r = selectPlan(PLAN, empty as unknown);
+      assert.deepEqual(r.chosen, [],
+        `a selection of ${JSON.stringify(empty)} pulled ${r.chosen.length} account(s) — it must fail closed`);
+    }
+  });
+
+  test('a handle nobody offered cannot be introduced by asking for it', () => {
+    const r = selectPlan(PLAN, ['Alpha_Acct', 'Not_On_The_List']);
+    assert.deepEqual(r.chosen.map((p) => p.handle), ['Alpha_Acct']);
+    assert.deepEqual(r.skipped, ['not_on_the_list'],
+      'a handle outside the plan must be reported back, not silently dropped');
+    /* Every chosen entry is one the plan produced — the property the console depends on. */
+    for (const c of r.chosen) assert.ok(PLAN.includes(c), 'selectPlan returned an entry the plan never held');
+  });
+
+  test('an account that already matches cannot be pulled, even if it is ticked', () => {
+    const r = selectPlan(PLAN, ['Gamma_Acct']);
+    assert.deepEqual(r.chosen, [], 'an unchanged account was queued for a pointless write');
+    assert.deepEqual(r.skipped, ['gamma_acct']);
+  });
+
+  test('a tick that differs only in case still matches its account', () => {
+    /* SQLite compares handle byte-for-byte, so without folding this the account silently
+       would not come across — the same trap pullAccounts documents. */
+    const r = selectPlan(PLAN, ['alpha_acct', '  BETA_ACCT  ']);
+    assert.deepEqual(r.chosen.map((p) => p.handle), ['Alpha_Acct', 'Beta_Acct']);
+    assert.deepEqual(r.skipped, []);
+  });
+
+  test('the same account ticked twice is pulled once', () => {
+    const r = selectPlan(PLAN, ['Alpha_Acct', 'alpha_acct', 'ALPHA_ACCT']);
+    assert.equal(r.chosen.length, 1, 'a duplicated tick would apply the same account twice');
   });
 });
