@@ -269,6 +269,50 @@ export async function pullAccounts(
 }
 
 /**
+ * Narrow a plan to the accounts somebody actually chose to take.
+ *
+ * THE CHOICE IS A REQUEST, NOT AN INSTRUCTION. The shared list is written by whoever else pushes
+ * to it, so pulling used to mean taking every account on it — which is wrong the moment two people
+ * share a list and each runs their own accounts on their own computer. The console now sends the
+ * handles that were ticked, and this bounds them by the plan that was just computed: a handle that
+ * is not on the list, or is on it and already matches, or was never on it at all, matches nothing
+ * here and is returned as `skipped` rather than acted on.
+ *
+ * That bound is the reason this is a function and not a filter written at the call site. `chosen`
+ * is what `applyAccounts` will write, and it can only ever contain entries this plan produced —
+ * a caller cannot introduce a handle by asking for it.
+ *
+ * Case-insensitive for the reason `pullAccounts` documents above: SQLite compares `accounts.handle`
+ * byte-for-byte, so a tick on `Quirky_Owl_8028` must still match a plan entry spelled
+ * `quirky_owl_8028` or the account silently would not come across.
+ *
+ * An empty or absent selection selects NOTHING. Failing closed here is deliberate: the caller that
+ * forgets to send a selection must pull no accounts, never all of them.
+ */
+export function selectPlan(
+  plan: PullPlanEntry[], handles: unknown
+): { chosen: PullPlanEntry[]; skipped: string[]; actionable: number } {
+  const key = (h: unknown) => String(h ?? '').trim().toLowerCase();
+  const actionable = plan.filter((p) => p.action === 'create' || p.action === 'update');
+  const byKey = new Map(actionable.map((p) => [key(p.handle), p]));
+
+  /* De-duplicated: a list naming the same account twice must not apply it twice, for the same
+     reason `pullAccounts` refuses a duplicated incoming handle. */
+  const wanted = Array.isArray(handles)
+    ? [...new Set(handles.map(key).filter(Boolean))]
+    : [];
+
+  const chosen: PullPlanEntry[] = [];
+  const skipped: string[] = [];
+  for (const w of wanted) {
+    const hit = byKey.get(w);
+    if (hit) chosen.push(hit);
+    else skipped.push(w);
+  }
+  return { chosen, skipped, actionable: actionable.length };
+}
+
+/**
  * Apply a plan produced by `pullAccounts`.
  *
  * Goes through `createConsoleAccount` / `updateConsoleAccount` rather than writing rows, so an

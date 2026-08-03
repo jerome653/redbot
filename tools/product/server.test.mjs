@@ -1662,6 +1662,63 @@ test('/api/update is cached, so opening screens cannot hammer GitHub', async () 
   assert.equal(forced.cached, false, 'force=1 is the only way to spend a request on demand');
 });
 
+/**
+ * `dropped` is a list /api/page will cut, and it pages APART from `threads`.
+ *
+ * Both tables live on the Threads screen, and the refusals used to have no pager at all: the
+ * console rendered the newest 25 under the caption "showing the 25 most recent of N" and offered
+ * no way to reach the 26th. The rows were in the database and counted in the heading the whole
+ * time — `pageDroppedThreads` has always cut a real LIMIT/OFFSET page — but this endpoint's
+ * allow-list withheld the name, so the request came back 400.
+ *
+ * Asserts the CONTRACT the screen's pager depends on: the list is served, it honours offset and
+ * limit, and it reports a total that is the whole list rather than the page.
+ */
+test('/api/page serves `dropped` as its own list, honouring offset and limit', async () => {
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/page?list=dropped&offset=0&limit=5`);
+  assert.equal(r.status, 200,
+    `/api/page?list=dropped answered ${r.status} — the refusals table has no pager without it`);
+
+  const page = await r.json();
+  assert.equal(page.list, 'dropped', 'the answer does not name the list it cut');
+  assert.ok(Array.isArray(page.rows), 'no rows array — the pager cannot render from this');
+  assert.equal(page.offset, 0);
+  assert.equal(page.limit, 5, 'the requested page size was not honoured');
+  assert.ok(page.rows.length <= 5, `asked for 5 rows and got ${page.rows.length}`);
+  assert.equal(typeof page.total, 'number', 'no total — "1-5 of N" cannot be written without it');
+  assert.ok(page.total >= page.rows.length,
+    `total ${page.total} is smaller than the page it returned (${page.rows.length}) — the total is the whole list, not this page`);
+
+  /* An offset the list cannot reach must still ANSWER, with an empty page rather than an error:
+     the pager disables its own buttons from `total`, and a throw here would blank the screen. */
+  const far = await (await fetch(`http://127.0.0.1:${PORT}/api/page?list=dropped&offset=999999&limit=5`)).json();
+  assert.equal(far.offset, 999999);
+  assert.deepEqual(far.rows, [], 'an unreachable offset returned rows');
+});
+
+/**
+ * The two lists on the Threads screen are separate positions, not one shared cursor.
+ *
+ * Pinned at the endpoint because it is where sharing would actually happen: if `dropped` were
+ * ever aliased onto `threads` (the quick way to add a second pager), asking for the two at
+ * different offsets would return the same rows, and paging the refusals would silently move the
+ * assessed list above them.
+ */
+test('paging `dropped` and `threads` are independent requests', async () => {
+  const [dropped, threads] = await Promise.all([
+    getJson('/api/page?list=dropped&offset=0&limit=3'),
+    getJson('/api/page?list=threads&offset=0&limit=3')
+  ]);
+  assert.equal(dropped.list, 'dropped');
+  assert.equal(threads.list, 'threads');
+  /* A thread that has been assessed cannot also be one that was never assessed — the two lists
+     are defined by opposite halves of the same NOT EXISTS, so no id may appear in both. */
+  const dIds = new Set(dropped.rows.map((x) => x.threadId));
+  const overlap = threads.rows.map((x) => x.threadId).filter((id) => dIds.has(id));
+  assert.deepEqual(overlap, [],
+    `${overlap.length} thread(s) appear in both lists — "assessed" and "never assessed" have blurred`);
+});
+
 /* ------------------------------------------------------------------ *
  * KEEP THIS BLOCK LAST. The fresh-clone test below kills the shared console child to
  * spawn its own, so every test after it hits ECONNREFUSED.

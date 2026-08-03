@@ -758,6 +758,39 @@ h2.sec{font-size:1.32rem;letter-spacing:-.025em;margin-bottom:.3rem}
   -webkit-backdrop-filter:blur(22px) saturate(135%);backdrop-filter:blur(22px) saturate(135%);
   box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
 }
+/**
+ * A LONG TABLE SCROLLS IN ITS OWN BOX RATHER THAN STRETCHING THE SCREEN.
+ *
+ * Measured on Threads with 25 collected rows and 40 dropped: the sheet rendered 6105px inside an
+ * 820px viewport, and 12701px of dropped table inside 844px on a phone. `.grid3` is
+ * `align-items:stretch` (deliberate, and documented where it is set) so the funnel and the drop
+ * breakdown were both pulled to 2591px to match a table nobody could see the end of — ~2200px of
+ * each was empty. The stretch is not the defect; an unbounded table is.
+ *
+ * `flex:none` is INHERITED from `.wrap` above and must stay. These boxes are already scroll
+ * containers, so a max-height caps them without re-opening the automatic-minimum-size-0 collapse
+ * that `.wrap`, `.collect` and `.panel` each document: flex-shrink is 0, so nothing can squeeze
+ * one below its cap the way the 2px-tall table was squeezed.
+ *
+ * `min()` rather than a flat pixel figure — on a short laptop the viewport decides, and on a tall
+ * monitor the cap still stops one table from owning the whole screen.
+ *
+ * Opt-in by class, NOT on `.wrap` itself: Results uses the same table pane, and capping every
+ * table in the console is a bigger decision than this one.
+ */
+.wrap.scrolls{max-height:min(52vh,520px);overflow-y:auto}
+/**
+ * The column headings stay put while the rows move under them.
+ *
+ * They are the only thing saying what a row's five cells MEAN, and this console hides its
+ * scrollbars everywhere (see the rule at the top of this file), so a heading that scrolls away
+ * leaves a wall of numbers with nothing naming them and no bar to hint the box even moved.
+ *
+ * `background-color` UNDER the existing gradient, because `--hdr-a` and `--hdr-b` are both
+ * semi-transparent: with no opaque base the rows read straight through the heading as they pass
+ * beneath it. `--bg` composites to within ~3/255 of the pane tint the heading already sat on.
+ */
+.wrap.scrolls thead th{position:sticky;top:0;z-index:2;background-color:var(--bg)}
 /* The header strip reads as the pane's own ledge, matching every other panel head. */
 thead th{background:linear-gradient(180deg,var(--hdr-a),var(--hdr-b))}
 table{width:100%;border-collapse:collapse;font-size:.865rem}
@@ -2589,6 +2622,7 @@ function discovery(){
   /* The first page arrives inside /api/state so the screen paints without a second round trip;
      after that PAGE_STATE owns the position and `d.items` is whatever page was last fetched. */
   seedPage('threads',d.total,d.offset,d.limit);
+  seedPage('dropped',d.droppedTotal,d.droppedOffset,d.droppedLimit);
   /**
    * THE HEADING ROW CARRIES THE ONE CONTROL THIS SCREEN HAS.
    *
@@ -2671,7 +2705,9 @@ function discovery(){
 
   /* ---- centre: what came back ---- */
   const list=panel('Collected threads','sorted by score');
-  const w=el('div','wrap');
+  /* `scrolls`: a page is 25 rows and the row height is set by whichever title wraps hardest, so
+     this box is unbounded by nature. The pager below it is a sibling and stays put. */
+  const w=el('div','wrap scrolls');
   w.style.cssText='border:0;border-radius:0;box-shadow:none;background:none;-webkit-backdrop-filter:none;backdrop-filter:none';
   const tb=el('table');
   tb.innerHTML='<thead><tr><th class="n">Score</th><th>Thread</th><th>Call</th><th>What it would add</th><th>Reply</th></tr></thead>';
@@ -2755,7 +2791,9 @@ function discovery(){
     seen.append(el('div','collect-h',
       `<h3>Collected, not assessed</h3><span class="hint">${d.droppedTotal} thread${d.droppedTotal===1?'':'s'} — what came back, and why it stopped here</span>`));
     const sb=el('div','collect-b');
-    const w=el('div','wrap');
+    /* The taller of the two by far — 40 rows of title-plus-reason measured 12701px on a phone.
+       The "showing N of M" line below is a sibling and stays visible. */
+    const w=el('div','wrap scrolls');
     w.style.cssText='border:0;border-radius:0;box-shadow:none;background:none;-webkit-backdrop-filter:none;backdrop-filter:none';
     const t=el('table');
     t.innerHTML='<thead><tr><th>Thread</th><th>Where</th><th>Refused by</th><th>Why</th></tr></thead>';
@@ -2770,9 +2808,18 @@ function discovery(){
       tb.append(tr);
     });
     t.append(tb);w.append(t);sb.append(w);
-    if(d.droppedTotal>d.dropped.length){
-      sb.append(el('div','tiny',`Showing the ${d.dropped.length} most recent of ${d.droppedTotal}.`));
-    }
+    /**
+     * ITS OWN PAGER, not a caption.
+     *
+     * "Showing the 40 most recent of 3612" stated the limit and offered no way past it: the
+     * other 3572 were in the database, counted in the heading, and unreachable. This is the
+     * same control the list above uses, on its own `PAGE_STATE` entry — so Older here moves
+     * the refusals and leaves "Collected threads" exactly where the reader left it.
+     */
+    sb.append(pager('dropped',async()=>{
+      const rows=await fetchPage('dropped');
+      if(rows){ d.dropped=rows; discovery(); }
+    }));
     seen.append(sb);
     r.append(seen);
   }
@@ -2799,6 +2846,10 @@ let EDITING=null;
  */
 const PAGE_STATE = {
   threads:      { offset: 0, limit: 25, total: 0 },
+  /* Its own position, deliberately NOT shared with `threads`. The two tables sit on one screen
+     and describe different things — what was assessed, and what was refused before any model
+     call — so paging into the refusals must not drag the list above them to page 3. */
+  dropped:      { offset: 0, limit: 25, total: 0 },
   observations: { offset: 0, limit: 25, total: 0 },
   review:       { offset: 0, limit: 25, total: 0 }
 };
@@ -5114,21 +5165,141 @@ function setup(){
      * machine's data reaches accounts a person set up by hand. */
     const pullOut=el('div','tiny');
     pullOut.style.cssText='padding:.2rem 0';
-    let lastPlan=null;
 
-    const renderPlan=(r)=>{
-      if(!r.ok){pullOut.innerHTML='<span class="tag no">could not read</span> '+esc(r.error||'');return}
-      const rows=(r.plan||[]).map(p=>{
-        const cls=p.action==='create'?'ok':p.action==='update'?'no':'';
-        const extra=p.changed&&p.changed.length?' ('+esc(p.changed.join(', '))+')':'';
-        return '<div><span class="tag '+cls+'">'+esc(p.action)+'</span> '+esc(p.handle)+extra+'</div>';
-      }).join('');
-      const w=(r.withdrawn||[]).length
-        ? '<div style="padding-top:.4rem"><span class="tag no">not in the list</span> '+
-          esc(r.withdrawn.join(', '))+' — nothing is removed; use Accounts to delete one.</div>'
-        : '';
-      pullOut.innerHTML=(rows||'<div>the shared list is empty</div>')+w+
-        '<div style="padding-top:.4rem">'+(r.actionable?r.actionable+' account(s) would change.':'nothing to apply.')+'</div>';
+    /**
+     * The receipt, shown INSIDE the dialog rather than in the panel behind it.
+     *
+     * `openDialog` closes Settings, and `again()` rebuilds it — so a summary written into the
+     * panel would be painted onto a hidden node and then thrown away. It belongs where the choice
+     * was made anyway: the person who ticked three of seven wants to read what happened to those
+     * three without hunting for it.
+     */
+    const pullReceipt=(body,a)=>{
+      body.textContent='';
+      body.append(el('div','note'+(a.ok?'':' stop'),a.ok
+        ? '<b>'+esc(String(a.applied||0))+' account(s) pulled onto this machine.</b> '+
+          'Each still needs “Set it up” here and a Reddit sign-in by hand.'
+        : 'Some of it did not land: '+esc((a.errors&&a.errors[0])||a.error||'refused')));
+      if(a.remaining)body.append(el('div','tiny',
+        esc(String(a.remaining))+' account(s) on the shared list were left where they are. '+
+        'Press Pull accounts again to take any of them.'));
+      /* Named rather than swallowed: a handle that was ticked and did not apply is the one thing
+         the person cannot see for themselves from the account list afterwards. */
+      if((a.skipped||[]).length)body.append(el('div','tiny',
+        'Ticked, but no longer in the shared list, so nothing was written: '+esc(a.skipped.join(', '))));
+      if((a.withdrawn||[]).length)body.append(el('div','tiny',
+        'On this machine but not on the shared list: '+esc(a.withdrawn.join(', '))+
+        ' — pulling never removes an account; delete one on Accounts if you mean to.'));
+      const f=ctlRow('.8rem 0 0');
+      f.append(actBtn('Done',async()=>{ closeDialog(); await again(); settings(true); }));
+      body.append(f);
+    };
+
+    /**
+     * WHICH ACCOUNTS — CHOSEN ONE AT A TIME.
+     *
+     * The shared list is written by whoever else pushes to it, so "pull" used to mean "take every
+     * account they have": one Apply button, the whole actionable plan, and no way to say that one
+     * of them is not this machine's to run. Two people sharing a list could not each keep their
+     * own accounts on their own computer.
+     *
+     * The switches here are the request; they are NOT the authority. The server intersects them
+     * with the plan it computes on that same call, so what can be written is bounded by what the
+     * list actually holds — see /api/sync/accounts/apply.
+     */
+    const chooseAccounts=(r)=>{
+      const plan=r.plan||[];
+      const actionable=plan.filter(p=>p.action==='create'||p.action==='update');
+      const unchanged=plan.filter(p=>p.action==='unchanged');
+      const picked=new Set();
+
+      openDialog('Pull accounts',
+        actionable.length?actionable.length+' available':'nothing to pull',(body)=>{
+        if(!actionable.length){
+          body.append(el('div','note',plan.length
+            ? 'Every account on the shared list already matches this machine — there is nothing to copy.'
+            : 'The shared list is empty. Nobody has pushed an account to it yet.'));
+          return;
+        }
+
+        body.append(el('div','tiny',
+          'These are on the shared list, put there by whoever else uses it. Tick the ones to copy '+
+          'onto <b>this</b> machine — the rest are left alone. Nothing is ever deleted by pulling.'));
+
+        const count=el('div','tiny');
+        const go=actBtn('Pull selected',async()=>{
+          if(!picked.size){toast('Tick at least one account');return}
+          go.disabled=true;
+          toast('Pulling '+picked.size+' account(s)…');
+          try{
+            const a=await fetch('/api/sync/accounts/apply',{method:'POST',
+              headers:{'content-type':'application/json'},
+              body:JSON.stringify({handles:[...picked]})}).then(x=>x.json());
+            toast(a.ok?(a.applied+' account(s) pulled'):((a.errors&&a.errors[0])||a.error||'could not pull'));
+            pullReceipt(body,a);
+          }catch{ go.disabled=false; toast('could not pull'); }
+        });
+        const sync=()=>{
+          count.textContent=picked.size?picked.size+' of '+actionable.length+' selected':'none selected';
+          go.disabled=!picked.size;
+        };
+
+        body.append(el('div','srcgrp','on the shared list, not yet on this machine'));
+        actionable.forEach(p=>{
+          const row=el('div','src-row');
+          const sw=el('button','sw');
+          sw.type='button';
+          sw.setAttribute('aria-pressed','false');
+          sw.setAttribute('aria-label','Pull '+p.handle+' onto this machine');
+          sw.onclick=()=>{
+            const now=sw.getAttribute('aria-pressed')!=='true';
+            sw.setAttribute('aria-pressed',String(now));
+            if(now)picked.add(p.handle);else picked.delete(p.handle);
+            sync();
+          };
+          row.append(sw);
+          const mid=el('div');
+          mid.append(el('div','src-t',esc(p.handle)));
+          mid.append(el('div','src-w',p.action==='create'
+            ? 'not on this machine yet — it would be created here'
+            : 'already here; '+esc((p.changed||[]).join(', ')||'something')+' would be overwritten'));
+          row.append(mid);
+          row.append(el('div','src-n',p.action==='create'?'new':'update'));
+          body.append(row);
+        });
+
+        /* Below here is CONTEXT and deliberately carries no switch: there is nothing to decide
+           about an account that already matches, and withdrawal is never automatic. */
+        if(unchanged.length){
+          body.append(el('div','srcgrp','already the same here'));
+          body.append(el('div','tiny',esc(unchanged.map(p=>p.handle).join(', '))));
+        }
+        if((r.withdrawn||[]).length){
+          body.append(el('div','srcgrp','here, but not on the shared list'));
+          body.append(el('div','tiny',esc(r.withdrawn.join(', '))+
+            ' — pulling never removes an account; delete one on Accounts if you mean to.'));
+        }
+
+        const all=el('button','mini');all.type='button';all.textContent='All';
+        all.onclick=()=>{
+          body.querySelectorAll('.src-row .sw').forEach((s,i)=>{
+            s.setAttribute('aria-pressed','true');picked.add(actionable[i].handle);
+          });
+          sync();
+        };
+        const none=el('button','mini');none.type='button';none.textContent='None';
+        none.onclick=()=>{
+          body.querySelectorAll('.src-row .sw').forEach(s=>s.setAttribute('aria-pressed','false'));
+          picked.clear();sync();
+        };
+
+        const foot=ctlRow('.8rem 0 0');
+        foot.append(go,all,none,count);
+        body.append(foot);
+        /* Nothing is ticked to begin with. The whole point of the dialog is that taking somebody
+           else's account is a decision, and a pre-ticked list makes it a default. */
+        sync();
+      });
     };
 
     const obtns=ctlRow('.2rem 0 .6rem');
@@ -5139,27 +5310,14 @@ function setup(){
            and origin guards are. */
         const r=await fetch('/api/sync/accounts/plan',{method:'POST',
           headers:{'content-type':'application/json'},body:JSON.stringify({})}).then(x=>x.json());
-        lastPlan=r; renderPlan(r);
-        if(r.ok&&r.actionable)toast(r.actionable+' account(s) would change — press Apply');
-        else if(r.ok)toast('nothing to apply');
-        else toast(r.error||'could not read the list');
+        if(!r.ok){
+          pullOut.innerHTML='<span class="tag no">could not read</span> '+esc(r.error||'');
+          toast(r.error||'could not read the list');
+          return;
+        }
+        pullOut.innerHTML='';
+        chooseAccounts(r);
       }catch{ pullOut.innerHTML='<span class="tag no">could not read</span>'; }
-    }));
-    obtns.append(actBtn('Apply',async()=>{
-      if(!lastPlan||!lastPlan.ok){toast('Press "Pull accounts" first');return}
-      if(!lastPlan.actionable){toast('nothing to apply');return}
-      toast('Applying…');
-      try{
-        const r=await fetch('/api/sync/accounts/apply',{method:'POST',
-          headers:{'content-type':'application/json'},body:JSON.stringify({})}).then(x=>x.json());
-        if(!r.ok){toast((r.errors&&r.errors[0])||r.error||'could not apply');}
-        else{toast(r.applied+' account(s) applied')}
-        pullOut.innerHTML='<span class="tag '+(r.ok?'ok':'no')+'">'+
-          (r.ok?'applied '+r.applied:'failed')+'</span> '+
-          '<span class="tiny">each still needs “Set it up” here and a Reddit sign-in by hand.</span>';
-        lastPlan=null;
-        await again();
-      }catch{ toast('could not apply'); }
     }));
     obtns.append(actBtn('Check now',()=>checkHealth(true)));
     obtns.append(actBtn('Push now',async()=>{
