@@ -2775,7 +2775,38 @@ function discovery(){
       `<div class="cm">${esc([i.subreddit?'r/'+i.subreddit:'',i.comments!=null?i.comments+' comments':'',i.ageText||''].filter(Boolean).join(' · '))}</div></td>`+
       `<td><span class="tag ${i.verdict==='contribute'?'ok':'no'}">${i.verdict==='contribute'?'answer it':'leave it'}</span></td>`+
       `<td>${esc(String((i.thesis&&i.thesis.whatNew)||(i.reasons[0]||'')).slice(0,160))}</td>`+
-      `<td>${i.draftId?`<span class="tag ${i.draftStatus==='pending'?'stop':''}">${esc(i.draftStatus==='pending'?'waiting':i.draftStatus)}</span>`:'<span class="cm">—</span>'}</td>`;
+      `<td>${i.draftId?`<span class="tag ${i.draftStatus==='pending'?'stop':''}">${esc(i.draftStatus==='pending'?'waiting':i.draftStatus)}</span>`:''}</td>`;
+
+    /**
+     * PICK THIS ONE. The per-thread choice, added because the screen-level button decides FOR you.
+     *
+     * The first version passed no threadId and let `draft` choose the best unwritten candidate.
+     * The reasoning was that a paged list can be stale and disagree with the engine — which is
+     * true, and still not a good enough reason to take the decision away. It is the operator's
+     * account and the operator's judgement; the engine's score is on the row next to the button,
+     * so the disagreement is visible rather than hidden. Choosing FOR someone and calling it
+     * safety is how a tool ends up feeling like a lock.
+     *
+     * Only on rows that have no draft yet. A thread already written is shown as `waiting`, and
+     * offering to write it a second time would invite a duplicate reply to one thread — which is
+     * the `duplicate` gate's whole subject.
+     */
+    if(!i.draftId){
+      const cell=tr.querySelector('td:last-child');
+      const pick=el('button','mini','Write this');
+      pick.title=i.verdict==='contribute'
+        ? `Draft a reply to this thread (scored ${i.score})`
+        : `redbot scored this "leave it" (${i.score}) — writing anyway is your call`;
+      if(i.verdict!=='contribute')pick.classList.add('warn');
+      pick.onclick=doAction(async say=>{
+        say(`Writing against “${String(i.title||'').slice(0,60)}”…`);
+        const r=await runNow({key:'write',threadId:i.threadId});
+        if(!r.ok)throw new Error(r.error||'writing did not work');
+        return 'Done — it is on the Review screen, waiting for you.';
+      });
+      cell.textContent='';
+      cell.append(pick);
+    }
     body.append(tr);
   });
   if(!d.items.length)body.innerHTML='<tr><td colspan="5" class="cm">nothing scored yet</td></tr>';
