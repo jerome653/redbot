@@ -252,6 +252,12 @@ td a:hover{color:var(--ember);text-decoration:underline}
    /api/state arrives, and stays empty if the server could not read its own package.json:
    no version is honest, "unknown" would be a claim. */
 .ver{color:var(--ink-3);font-weight:400;font-size:.72rem;letter-spacing:.04em;opacity:.75}
+/* The build badge. Loud on purpose: it exists so two identical windows cannot be confused, and a
+   subtle version of it would fail at exactly the moment it is needed. Amber, not ember — this is
+   an identity, not a warning, and ember already means "stop" everywhere else in this console. */
+.build{margin-left:.5rem;padding:.1rem .42rem;border-radius:999px;font-size:.64rem;font-weight:700;
+  letter-spacing:.08em;text-transform:uppercase;color:#1b1200;background:var(--amber,#e0a340);
+  border:1px solid rgba(0,0,0,.18)}
 /* One row that scrolls, not a block that wraps: at 390px the wrapping strip cost three
    rows of chrome before any content. The bar itself is hidden-scrollbar like every other
    pane, so the strip slides under a finger with nothing to look at. */
@@ -1499,7 +1505,7 @@ button.acct.on{
       <circle cx="20.6" cy="13.3" r="2.05" fill="var(--ember)"/>
       <path d="M10.4 23.4v3.4M16 23.4v4.2M21.6 23.4v3.4" stroke="var(--ember)" stroke-width="2.2" stroke-linecap="round"/>
       <path d="M6.4 29.4h19.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".45"/>
-    </svg><span class="lg-a">red</span><span class="lg-b">bot</span><span class="ver" id="appVer"></span></span>
+    </svg><span class="lg-a">red</span><span class="lg-b">bot</span><span class="ver" id="appVer"></span><span class="build" id="appBuild" hidden></span></span>
 
   <!-- ROW ONE: identity left, state and controls right.
        ROW TWO: the tabs, on their own line.
@@ -5570,6 +5576,24 @@ async function load(){
   /* The version, from the server rather than from a constant here — see APP_VERSION in
      server.mjs. Absent renders as nothing at all: no version is honest, "unknown" is a claim. */
   $('#appVer').textContent=S.version?('v'+S.version):'';
+  /**
+   * The build badge, shown for everything EXCEPT the live installed app.
+   *
+   * Live wears no badge deliberately: a marker on every window is furniture and stops being read,
+   * so the signal has to be the exception. `source` means this console is being served from a
+   * checkout by `npm start`; anything else is the product name of a side-by-side install, which
+   * has its OWN database — Electron derives userData from that name.
+   *
+   * The data root goes in the tooltip rather than on screen. It is the fact that settles "which
+   * one am I actually looking at" and it is too long to wear, but it must be one hover away.
+   */
+  const bBadge=$('#appBuild'), bId=S.build;
+  if(bId && bId!=='live'){
+    bBadge.textContent=bId;
+    bBadge.title=(bId==='source'?'Running from the checkout — not an installed build.':'A separate install with its own data.')
+      +(S.dataRoot?(' · data: '+S.dataRoot):'');
+    bBadge.hidden=false;
+  } else bBadge.hidden=true;
   go(CUR);
 
   /**

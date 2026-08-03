@@ -102,7 +102,18 @@ function boot_log(line) {
  * put redbot's database and Chrome profile bindings in a communal folder. `productName` in
  * package.json covers the packaged build; this covers `npm start` too.
  */
-app.setName('redbot');
+/**
+ * DO NOT hardcode this when packaged — `userData` is derived from it.
+ *
+ * A build published as `redbot dev` (a separate `appId`, its own install directory and shortcut)
+ * would have its name overwritten here and land on `%APPDATA%edbot` — the LIVE app's data.
+ * Two apps, one database, and the only symptom would be dev work appearing in the live console.
+ * That is the failure this whole side-by-side split exists to prevent, so the packaged name wins.
+ *
+ * Unpackaged still needs the fallback: `npm start` without a name gets `%APPDATA%\Electron`, a
+ * directory shared with every other unnamed Electron app on the machine.
+ */
+if (!app.isPackaged) app.setName('redbot');
 
 let serverChild = null;
 let win = null;
@@ -184,7 +195,25 @@ function wireUpdater(consolePort) {
       }
     },
     loadAutoUpdater: () => require('electron-updater').autoUpdater,
-    isPackaged: app.isPackaged,
+    /**
+     * ONLY THE LIVE BUILD IS AN UPDATE TARGET, expressed through the mechanism that already
+     * exists rather than a new one.
+     *
+     * `createUpdater` treats a non-packaged build as unsupported: it answers `snapshot()` and
+     * refuses to reach the feed, and electron/updater.test.mjs pins that. A side-by-side variant
+     * needs exactly that behaviour for a different reason — the feed is baked in at build time and
+     * names ONE repo, so `redbot dev` would find the live release and offer an "update" that
+     * installs a DIFFERENT APPLICATION beside it: different appId, different userData, its own
+     * database. The button would appear to work.
+     *
+     * Reported as not-an-update-target rather than skipping `wireUpdater`, because the renderer
+     * calls `updates.snapshot()` the moment the Setup card renders. An unregistered IPC channel
+     * rejects, and that lands as a console error on a screen whose whole job is saying what is
+     * wrong. The bridge must always answer; it just answers "not for this build".
+     *
+     * A variant is updated by building it again, which is the point of having one.
+     */
+    isPackaged: app.isPackaged && app.getName() === 'redbot',
     currentVersion: app.getVersion(),
     log: boot_log,
     /* Dev runs refuse to update unless asked, because a dev build installing a release build over
@@ -250,7 +279,25 @@ function startServer(port, env) {
         // valid cwd. The server resolves its own paths from import.meta.url, so the cwd only has
         // to exist.
         cwd: PACKAGED ? app.getPath('userData') : ROOT,
-        env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+        /**
+         * WHICH BUILD THIS IS, handed to the console so a person can tell two windows apart.
+         *
+         * There are three cases and they are genuinely different, so none is inferred from
+         * another. `app.isPackaged` separates a checkout run from an install — that is the case a
+         * productName cannot see, because running from source reports the same name as live.
+         * Among installs, `app.getName()` IS the identity: electron-builder derives the install
+         * directory, the shortcut and `userData` from productName, so a build called anything
+         * other than "redbot" is a genuinely separate app with its own data, not a relabelled one.
+         *
+         * Named rather than flagged: `REDBOT_BUILD=staging` reports "staging" without anyone
+         * teaching this code what staging is.
+         */
+        env: {
+          ...env,
+          ELECTRON_RUN_AS_NODE: '1',
+          REDBOT_BUILD: !app.isPackaged ? 'source'
+            : (app.getName() === 'redbot' ? 'live' : app.getName().replace(/^redbot[\s-]*/i, '') || app.getName())
+        },
         stdio: ['ignore', 'pipe', 'pipe']
       }
     );
@@ -492,6 +539,17 @@ async function boot() {
 
   /* Registered BEFORE the page loads: the Setup screen asks for a snapshot as soon as it renders,
      and a handler attached after loadURL would miss that first call and leave the card blank. */
+  /**
+   * ONLY THE LIVE BUILD UPDATES ITSELF.
+   *
+   * The feed is baked in at build time and names one repo, so a side-by-side variant like
+   * `redbot dev` would check it, find the live release, and offer an "update" that installs a
+   * DIFFERENT APPLICATION next to it — different appId, different userData, its own database.
+   * The button would appear to work and would quietly produce the second install this split
+   * exists to make legible.
+   *
+   * A variant is updated by building it again, which is the point of having one.
+   */
   wireUpdater(port);
 
   await win.loadURL(`http://127.0.0.1:${port}/`);

@@ -69,6 +69,19 @@ const APP_VERSION = (() => {
  * Unset in normal operation — the console a person opens still reads and writes data/.
  */
 const DATA = process.env.REDBOT_DATA ? join(process.env.REDBOT_DATA) : join(ROOT, 'data');
+/**
+ * Which build this is — `live`, `source`, or a variant name like `dev`.
+ *
+ * Set by electron/main.mjs from `app.isPackaged` and `app.getName()`. Absent when the console is
+ * run on its own (`node tools/product/server.mjs`), which is neither an install nor the desktop
+ * shell, and is reported as nothing rather than guessed at.
+ *
+ * This exists because two windows that look identical are two windows you can act in by mistake.
+ * The data behind them is genuinely separate — Electron derives `userData` from the product name,
+ * so a variant build has its own database — and a person editing the wrong one has no way to tell
+ * until the change does not appear where they expected it.
+ */
+const APP_BUILD = process.env.REDBOT_BUILD || null;
 
 /**
  * A working directory that EXISTS ON DISK, for every spawn below.
@@ -626,6 +639,9 @@ async function buildState(opts = {}) {
      * not per request — it cannot change while the process lives.
      */
     version: APP_VERSION,
+    build: APP_BUILD,
+    /* The data root this console actually reads and writes — the thing a variant changes. */
+    dataRoot: DATA,
     collect,
 
     pulse: {

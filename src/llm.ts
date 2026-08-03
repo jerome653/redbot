@@ -11,7 +11,8 @@
  * Neither ever writes a credential to disk.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
+import { delimiter as pathDelimiter, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { config, anthropicKey, claudeConfigDir, operatorRecord } from './config.js';
@@ -72,12 +73,85 @@ function completeViaCli(opts: CompleteOpts): Promise<string> {
    *
    * Fix: execute in an empty scratch directory so there is no project context to inherit.
    */
+/**
+ * A CLI that can be spawned WITHOUT a shell — the difference is a security boundary, not a tidy-up.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT WENT WRONG. `spawn(..., { shell: true })` on Windows runs the command through `cmd.exe`,
+ * and `claude` on this machine resolves to a BATCH FILE (a PATH shim at
+ * `~/.local/shims/claude.cmd`). The prompt is delivered on stdin — and when a batch file exits
+ * before draining its input, cmd.exe reads what is left in that pipe AS COMMANDS.
+ *
+ * That is not a theory. Recorded in this install's history on 2026-08-01, three gap analyses
+ * failed together with:
+ *
+ *     claude CLI exited 1: 'n' is not recognized as an internal or external command
+ *     Error: Input must be provided either through stdin or as a prompt argument when using -p
+ *
+ * Both halves of one cause: a line of PROMPT TEXT beginning with "n" was executed as a shell
+ * command, and the CLI itself got nothing. Prompt text is model output about Reddit threads —
+ * arbitrary text reaching a command interpreter. Node warns about the same class on every call:
+ * "Passing args to a child process with shell option true can lead to security vulnerabilities,
+ * as the arguments are not escaped, only concatenated."
+ *
+ * WHY IT LOOKS INTERMITTENT. It needs the batch layer to lose the race, so most runs are fine —
+ * 11 of 14 analyses succeeded that day and a run today succeeded too. A defect that usually works
+ * is not a smaller defect; it is a harder one to catch.
+ *
+ * THE FIX is to remove `cmd.exe` from the path entirely by spawning a real executable. Node
+ * REFUSES to spawn `.cmd`/`.bat` without a shell (the CVE-2024-27980 mitigation), which is why
+ * the shell was there — so the executable has to be found rather than assumed.
+ *
+ * BILLING IS PRESERVED, and that was checked before writing this. The shim exists to redirect
+ * BARE launches to a specific account; its first three lines are `if defined CLAUDE_CONFIG_DIR
+ * goto run`, and `:run` is `"%USERPROFILE%\.localin\claude.exe" %*`. Every call from here
+ * sets CLAUDE_CONFIG_DIR (see the spawn env below), so for redbot the shim has always been a
+ * pass-through to that exe. Spawning it directly runs the same binary with the same environment.
+ *
+ * Falls back to the old behaviour when no real executable can be found, because a working call
+ * with a known flaw beats no call at all — and says so, once, rather than degrading silently.
+ * ---------------------------------------------------------------------------
+ */
+let resolvedCli: { file: string; shell: boolean } | null = null;
+let warnedShellFallback = false;
+
+function resolveCli(bin: string): { file: string; shell: boolean } {
+  if (resolvedCli) return resolvedCli;
+  if (process.platform !== 'win32') return (resolvedCli = { file: bin, shell: false });
+
+  /* An absolute path is taken at face value; only a bare name needs looking up. */
+  const candidates: string[] = [];
+  if (isAbsolute(bin)) candidates.push(bin);
+  else {
+    for (const dir of (process.env.PATH ?? '').split(pathDelimiter).filter(Boolean)) {
+      /* `.exe` ONLY. A `.cmd` or `.bat` is the thing that needs cmd.exe, which is the bug. */
+      candidates.push(pathJoin(dir, bin + '.exe'));
+    }
+  }
+  for (const c of candidates) {
+    if (c.toLowerCase().endsWith('.exe') && existsSync(c)) {
+      return (resolvedCli = { file: c, shell: false });
+    }
+  }
+
+  if (!warnedShellFallback) {
+    warnedShellFallback = true;
+    say.warn(
+      `No "${bin}.exe" on PATH — falling back to a shell spawn. The prompt is piped to a batch ` +
+      'file through cmd.exe, which has been observed executing prompt text as commands ' +
+      '(2026-08-01). Install the CLI so a real executable is on PATH to close this.'
+    );
+  }
+  return (resolvedCli = { file: bin, shell: true });
+}
+
   const scratch = pathJoin(tmpdir(), 'redbot-llm-scratch');
   mkdirSync(scratch, { recursive: true });
 
   return new Promise((resolve, reject) => {
+    const cli = resolveCli(config.llm.cliBin);
     const child = spawn(
-      config.llm.cliBin,
+      cli.file,
       [
         '-p',
         '--model', model,
@@ -89,7 +163,9 @@ function completeViaCli(opts: CompleteOpts): Promise<string> {
       ],
       {
         stdio: ['pipe', 'pipe', 'pipe'],
-        shell: process.platform === 'win32',
+        /* False whenever a real executable was found — see resolveCli. Only a machine with no
+           `claude.exe` on PATH still pays the cmd.exe cost, and it is warned about once. */
+        shell: cli.shell,
         cwd: scratch,
         env: { ...process.env, CLAUDE_CONFIG_DIR: configDir }
       }
