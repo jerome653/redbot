@@ -2612,6 +2612,37 @@ function discovery(){
   srcBtn.title=nOn?(nOn+' source'+(nOn===1?'':'s')+' switched on'):'no sources switched on — nothing would be collected';
   srcBtn.onclick=()=>openDialog('Where redbot looks',nOn+' source'+(nOn===1?'':'s')+' switched on',collecting);
   head.append(srcBtn);
+
+  /**
+   * WRITE — the step this console could not reach.
+   *
+   * `write` (`redbot draft`) has always been in PUBLIC_ACTIONS and reachable over /api/run, and
+   * nothing in this page ever called it. Collecting runs find-threads, then `score`, and stops.
+   * So the pipeline ended at scored-but-never-drafted and Review stayed empty however many
+   * threads came back — measured on this install 2026-08-03: 20 threads, 11 assessments, ONE
+   * verdict of `contribute`, zero drafts, and no `draft` event anywhere in history.
+   *
+   * This screen already REPORTED the gap in its own subhead ("… written") while offering no way
+   * to close it, which is the shape worth naming: a figure nobody could move.
+   *
+   * No threadId is passed. `draft` picks the best unwritten candidate itself, from the same
+   * assessments this screen is showing — handing it the top row of a paged list would look
+   * precise and quietly disagree with the engine whenever that page was stale.
+   *
+   * Hidden rather than disabled when there is nothing to write: a permanently greyed button is
+   * furniture, and "nothing is worth answering yet" is already said by the funnel below it.
+   */
+  const toWrite=Math.max(0,(d.contribute||0)-(d.drafted||0));
+  if(toWrite>0){
+    const wBtn=actionButton(toWrite===1?'Write the reply':'Write a reply',doAction(async(say)=>{
+      say('Writing against the gap the thread leaves open…');
+      const w=await runNow({key:'write'});
+      if(!w.ok)throw new Error(w.error||'writing did not work');
+      return 'Done — it is on the Review screen, waiting for you.';
+    }));
+    wBtn.title=`${toWrite} thread${toWrite===1?'':'s'} scored worth answering and not yet written`;
+    head.append(wBtn);
+  }
   r.append(head);
 
   /* The funnel and what came back go first; the collect controls sit under them. Reading the
