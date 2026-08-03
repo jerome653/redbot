@@ -966,6 +966,20 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
    finishes rather than where the body begins. */
 .sec-row{display:flex;align-items:flex-start;gap:1rem;flex-wrap:wrap}
 .sec-row>div:first-child{flex:1;min-width:0}
+/**
+ * EVERY control in a section heading shares one baseline and one size.
+ *
+ * The row aligns to `flex-start` because its first child is a heading-plus-subhead block that
+ * must start at the top. `srcbtn` had quietly compensated with its own `align-self:center`, so
+ * for a long time there was one button and it looked right. Adding two more (Write a reply, New
+ * post) put them at the top of the row while the first sat centred, at three different font
+ * sizes — visible immediately as a stagger.
+ *
+ * Fixed on the CONTAINER rather than on each button, so the next control added to any section
+ * heading inherits the alignment instead of having to remember it. Patching the two new buttons
+ * would have left the same trap for whoever adds the fourth.
+ */
+.sec-row>button{align-self:center;flex:none;font-size:.8rem;padding:.5rem 1rem}
 /* The one control on Threads that changes what redbot DOES, rather than reporting what it did. */
 button.srcbtn{
   border-color:var(--ember);color:var(--ember);
