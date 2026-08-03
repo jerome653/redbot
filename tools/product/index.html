@@ -2666,6 +2666,62 @@ function discovery(){
    * Hidden rather than disabled when there is nothing to write: a permanently greyed button is
    * furniture, and "nothing is worth answering yet" is already said by the funnel below it.
    */
+  /**
+   * NEW POST — the second write path, and the one with no draft behind it.
+   *
+   * Kept on this screen because Threads is where the subreddits are, and deliberately NOT beside
+   * "Write a reply": writing answers a thread that already exists and has been scored, while a
+   * post is a thing you decide to start. They read as the same kind of act if they sit together,
+   * and they are not.
+   *
+   * The title and body are typed by a person. `draft` is not offered here on purpose — a model
+   * inventing reasons to start a thread is how an assistant becomes a spammer, and warming exists
+   * precisely because a new account posting threads is the loudest automated signal there is.
+   *
+   * `danger` styling, like Send on Review: this reaches Reddit. Everything else on this screen
+   * either reports or prepares.
+   */
+  const postBtn=el('button','mini danger','New post');
+  postBtn.title='Create a post in one of your subreddits — your words, typed SEND to send';
+  postBtn.onclick=()=>openDialog('New post','goes to Reddit under your account',(b)=>{
+    const subs=((S.collect&&S.collect.subreddits)||[]).filter(x=>x.enabled!==false).map(x=>x.name);
+    b.append(el('div','note','This posts to Reddit as '+esc((S.accounts&&S.accounts[0]&&S.accounts[0].handle)||'this account')+'. It is not drafted for you and it is not fact-checked — a post is your words.'));
+
+    const subWrap=el('div','fld'); subWrap.append(el('label','','Subreddit'));
+    const subIn=el('input'); subIn.type='text'; subIn.placeholder=subs[0]||'WordPress';
+    if(subs.length)subIn.value=subs[0];
+    subWrap.append(subIn); b.append(subWrap);
+    if(subs.length>1)b.append(el('div','tiny','Your sources: '+esc(subs.join(', '))));
+
+    const tWrap=el('div','fld'); tWrap.append(el('label','','Title'));
+    const tIn=el('input'); tIn.type='text'; tIn.placeholder='What are you asking or telling them?';
+    tWrap.append(tIn); b.append(tWrap);
+
+    const bWrap=el('div','fld'); bWrap.append(el('label','','Body (optional)'));
+    const bIn=el('textarea'); bIn.rows=7;
+    bWrap.append(bIn); b.append(bWrap);
+
+    const cWrap=el('div','fld'); cWrap.append(el('label','','Type SEND to confirm'));
+    const cIn=el('input'); cIn.type='text'; cIn.placeholder='SEND';
+    cWrap.append(cIn); b.append(cWrap);
+
+    b.append(actionButton('Post it',doAction(async(say)=>{
+      /* Checked here as well as on the server, so the refusal is immediate and readable — the
+         server still refuses independently, because a client check is not a guard. */
+      if(cIn.value.trim()!=='SEND')throw new Error('Type SEND exactly to confirm.');
+      if(!subIn.value.trim())throw new Error('Which subreddit?');
+      if(!tIn.value.trim())throw new Error('A post needs a title.');
+      say('Posting to r/'+subIn.value.trim()+'…');
+      const r=await fetch('/api/publish-post',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({subreddit:subIn.value.trim(),title:tIn.value.trim(),body:bIn.value,
+                             confirm:cIn.value.trim(),account:(S.accounts&&S.accounts[0]&&S.accounts[0].handle)||undefined})})
+        .then(x=>x.json());
+      if(!r.ok)throw new Error(r.error||'the post did not go through');
+      return 'Posted.';
+    },{stoppable:false}),'danger'));
+  });
+  head.append(postBtn);
+
   const toWrite=Math.max(0,(d.contribute||0)-(d.drafted||0));
   if(toWrite>0){
     const wBtn=actionButton(toWrite===1?'Write the reply':'Write a reply',doAction(async(say)=>{

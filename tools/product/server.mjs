@@ -865,6 +865,18 @@ const ACTIONS = {
    * Reddit that redbot does not know it made: it will not be measured, not checked for removal,
    * and may be written again. Waiting out a publish is the lesser harm, every time.
    */
+  /**
+   * Creating a post. Publish-class, so it is underscored and NOT in PUBLIC_ACTIONS — the only
+   * caller is publishPost() below, which will not proceed without a typed SEND.
+   *
+   * `stoppable: false` for the same reason as __reply, and more so: a post is submitted and then
+   * CONFIRMED by reading the page redbot lands on. Killing between those two leaves a live post
+   * on somebody's subreddit that redbot does not know it made — and unlike a comment, a
+   * duplicate post is something a moderator has to clean up.
+   */
+  '__post':         { args: (o) => ['post', String(o.subreddit || ''), '--title', String(o.title || ''),
+                                    ...(o.body ? ['--body', String(o.body)] : [])],
+                      label: 'create the post', needsBrowser: true, stoppable: false },
   '__reply':        { args: (o) => ['reply', String(o.draftId || '')],           label: 'send the reply',       needsBrowser: true, stoppable: false }
 };
 const PUBLIC_ACTIONS = Object.keys(ACTIONS).filter((k) => !k.startsWith('__'));
@@ -1775,6 +1787,57 @@ function setStatus(draftId, status, note) {
 }
 
 /* ---- publishing: the one action that reaches the outside world ---- */
+/**
+ * Creating a post, from the console.
+ *
+ * Mirrors publish() deliberately rather than sharing with it: the two guard DIFFERENT things. A
+ * reply is bound to a draft that already passed the gates and Argus; a post is text a person just
+ * typed, aimed at a subreddit, with no draft record behind it. Folding them together would mean
+ * one set of checks pretending to cover both.
+ *
+ * WHAT IS ENFORCED HERE, and everything else is enforced by the CLI it spawns:
+ *   - the exact word SEND, or it is a refusal. Never "starts with", never case-insensitive;
+ *   - a subreddit that looks like a subreddit and a non-empty title, before anything is written;
+ *   - the same pre-flight `whyReplyCannotStart` asks, so an approval token is not written for a
+ *     run that cannot begin — the defect publish() already carries a comment about;
+ *   - the decision is recorded separately from the capability, because a person approving is
+ *     history even when the send then fails.
+ */
+async function publishPost(body) {
+  const subreddit = String(body.subreddit || '').replace(/^\/?r\//i, '').trim();
+  const title = String(body.title || '').trim();
+  const text = String(body.body || '');
+
+  if (!/^[A-Za-z0-9_]{2,21}$/.test(subreddit)) {
+    return { ok: false, error: `"${body.subreddit ?? ''}" is not a subreddit name` };
+  }
+  if (!title) return { ok: false, error: 'a post needs a title' };
+
+  /* fail closed: anything other than the exact word is a refusal, never an approval */
+  if (body.confirm !== 'SEND') return { ok: false, error: 'not confirmed — type SEND exactly' };
+
+  const blocked = whyReplyCannotStart(body.account);
+  if (blocked) return { ok: false, error: blocked };
+
+  const id = `post_${Date.now().toString(36)}`;
+  appendFileSync(join(DATA, 'decisions.jsonl'),
+    JSON.stringify({ ts: new Date().toISOString(), decision: 'approved', kind: 'post',
+                     subreddit, title, reason: body.reason || '', via: 'console' }) + String.fromCharCode(10), 'utf8');
+
+  const dir = join(DATA, 'approvals');
+  mkdirSync(dir, { recursive: true });
+  const tokenPath = join(dir, `${id}.json`);
+  writeFileSync(tokenPath, JSON.stringify(
+    { draftId: id, decision: 'approved', note: body.reason || '', at: new Date().toISOString() }, null, 2), 'utf8');
+
+  return runAction('__post', { subreddit, title, body: text, account: body.account })
+    .then((r) => {
+      /* The run never started, so the authorisation must not outlive the attempt. */
+      if (!r.ok) { try { if (existsSync(tokenPath)) rmSync(tokenPath, { force: true }); } catch { /* best effort */ } }
+      return r;
+    });
+}
+
 async function publish(body) {
   const { confirm, reason } = body || {};
   const draftId = String((body && body.draftId) || '');
@@ -2417,6 +2480,10 @@ const server = createServer((req, res) => {
         } catch (e) {
           return send(400, JSON.stringify({ ok: false, error: String(e && e.message || e) }));
         }
+      }
+      if (url.pathname === '/api/publish-post') {
+        const r = await publishPost(body);
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
       if (url.pathname === '/api/publish') {
         const r = await publish(body);

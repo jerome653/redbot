@@ -1,5 +1,5 @@
 /**
- * Publishing a comment. The only write path in redbot.
+ * Publishing to Reddit — a comment, and a post. The only write paths in redbot.
  *
  * Every call is logged before the submit and after the result, so a submitted-with-no-result
  * entry in history means "unknown outcome — go look by hand", never "retry automatically".
@@ -120,3 +120,128 @@ export async function publishComment(page: Page, permalink: string, body: string
 }
 
 export const redditBase = config.redditBase;
+
+/* ------------------------------------------------------------------ *
+ * Creating a post — the SECOND write path
+ * ------------------------------------------------------------------ */
+
+export interface SubmitResult {
+  ok: boolean;
+  error?: string;
+  /** The new post's permalink, read off the page redbot landed on. Absent when unconfirmed. */
+  postPermalink?: string;
+  /** Where the browser ended up, whatever happened. */
+  url?: string;
+}
+
+/**
+ * Publish a new post to a subreddit.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS SHAPED EXACTLY LIKE `publishComment` AND NOT MORE CONVENIENTLY.
+ *
+ * A post is a bigger public statement than a comment — it is attributable, it sits at the top of
+ * a subreddit, and it cannot be quietly edited away. So it gets the SAME contract, not a lighter
+ * one: fill, submit, and then CONFIRM by reading redbot's own result off the page. The confirm is
+ * the part that matters. `submitted-with-no-result` in history means "unknown outcome — go look
+ * by hand", never "retry automatically", because a retry on a post that actually landed is a
+ * duplicate on somebody's subreddit and cannot be taken back.
+ *
+ * CONFIRMATION IS BY NAVIGATION, WHICH IS WHAT REDDIT ACTUALLY DOES. On a successful submit the
+ * composer navigates to the new post's permalink (`/r/<sub>/comments/<id>/<slug>/`). That URL is
+ * the evidence, and the title is checked against it so a redirect to some other page cannot be
+ * mistaken for success. A submit that leaves the browser on the submit page is reported as
+ * unconfirmed rather than as a failure — it may have landed.
+ *
+ * FLAIR IS NOT GUESSED. Many subreddits refuse a submission without one, and picking a flair on
+ * a person's behalf is choosing how their post is categorised in a room they have to live in.
+ * When submit stays disabled the flair requirement is the most likely reason, and that is what
+ * the error says — it does not silently click the first option.
+ * ---------------------------------------------------------------------------
+ */
+export async function publishPost(
+  page: Page,
+  subreddit: string,
+  title: string,
+  body: string
+): Promise<SubmitResult> {
+  const clean = String(subreddit || '').replace(/^\/?r\//i, '').trim();
+  if (!/^[A-Za-z0-9_]{2,21}$/.test(clean)) {
+    return { ok: false, error: `"${subreddit}" is not a subreddit name` };
+  }
+  if (!title.trim()) return { ok: false, error: 'a post needs a title' };
+
+  try {
+    const submitUrl = `${config.redditBase}/r/${clean}/submit/?type=TEXT`;
+    await page.goto(submitUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await pause();
+
+    const titleField = await firstUsable(page, sel.postTitleField);
+    if (!titleField) {
+      return { ok: false, error: `no title field on ${submitUrl} — signed out, or r/${clean} does not accept text posts?`, url: page.url() };
+    }
+    await titleField.click();
+    await sleep(300);
+    await typeHuman(page, title);
+    await pause();
+
+    /* The body is optional on Reddit; a title-only post is legitimate. Absent field is only an
+       error when there is a body to put in it. */
+    const bodyField = await firstUsable(page, sel.postBodyField);
+    if (body.trim()) {
+      if (!bodyField) {
+        return { ok: false, error: 'no body field on the submit page, and this post has a body', url: page.url() };
+      }
+      await bodyField.click();
+      await sleep(300);
+      await typeHuman(page, body);
+      await pause();
+    }
+
+    const submit = await firstUsable(page, sel.postSubmitButton);
+    if (!submit) {
+      /* Most often the flair requirement. Named as a likely cause rather than asserted as one. */
+      const hasFlair = Boolean(await firstVisible(page, sel.flairButton));
+      return {
+        ok: false,
+        url: page.url(),
+        error: hasFlair
+          ? `the Post button is not available — r/${clean} shows a Flair control, and many subreddits refuse a submission without one. Choose a flair in the browser, then send again.`
+          : 'the Post button was not found, or is still disabled'
+      };
+    }
+
+    const before = page.url();
+    await submit.click();
+
+    /**
+     * Confirm by NAVIGATION plus title, and give it several looks before giving up.
+     *
+     * `/comments/` in the path is what separates a landed post from a submit page that simply
+     * re-rendered. The title check is what separates it from a redirect to somewhere else
+     * entirely — a rule page, a sign-in wall, the subreddit front page.
+     */
+    const wanted = title.trim().toLowerCase().slice(0, 60);
+    let landed: string | null = null;
+    for (let attempt = 0; attempt < 6 && !landed; attempt++) {
+      await sleep(2000);
+      const now = page.url();
+      if (now !== before && /\/comments\//.test(now)) {
+        const heading = (await page.locator(sel.postTitle[0]!).first().textContent().catch(() => '')) ?? '';
+        if (heading.trim().toLowerCase().includes(wanted.slice(0, 30))) landed = now;
+      }
+    }
+
+    if (!landed) {
+      return {
+        ok: false,
+        url: page.url(),
+        error: 'submitted, but no post page appeared afterwards — the outcome is UNKNOWN. Check the account on Reddit by hand before sending again; a retry could duplicate a post that landed.'
+      };
+    }
+
+    return { ok: true, url: landed, postPermalink: landed };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}

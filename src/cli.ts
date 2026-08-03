@@ -15,6 +15,7 @@ import { primeAccounts, selectedAccount } from './config.js';
 import { read } from './commands/read.js';
 import { search } from './commands/search.js';
 import { subreddits } from './commands/subreddits.js';
+import { post } from './commands/post.js';
 import { draft } from './commands/draft.js';
 import { reply } from './commands/reply.js';
 import { history } from './commands/history.js';
@@ -93,6 +94,8 @@ redbot — Reddit engagement assistant
                                  -> CERTIFIED | ESCALATE | REJECT
 
   Publishing — needs a real terminal
+    redbot post <subreddit> --title "<t>" [--body "<b>"]
+                                 create a post — your words, gates, typed SEND
     redbot reply [draftId] [--quick]
                                  gates, human approval, then publish
 
@@ -268,6 +271,8 @@ async function main(): Promise<number> {
     case 'search':  return search(positional[0], undefined, flagValue('commit'));
     /* Communities, not threads — `search` finds posts. Same preview/commit contract. */
     case 'subreddits': return subreddits(positional[0], flagValue('commit'));
+    /* The second write path. Title and body come from the person — see commands/post.ts. */
+    case 'post':    return post(positional[0], { title: flagValue('title'), body: flagValue('body') });
     case 'draft':   return draft(positional[0]);
     case 'reply':   return reply(positional[0], { quick: flags.has('--quick') });
     case 'history': return history(positional[0]);
