@@ -1925,7 +1925,24 @@ async function publish(body) {
         try { if (existsSync(tokenPath)) rmSync(tokenPath, { force: true }); }
         catch { /* a token we cannot remove is reported, not hidden */ }
       }
-      return { ...r, recorded: true };
+      /**
+       * Gates the child found only after the approval, passed back so the console can offer to
+       * publish over them.
+       *
+       * `reply` refuses a console approval that has not acknowledged them and tells the person to
+       * send again — which the console could not do, because it did not know what to acknowledge.
+       * It re-sent the same body, hit the same refusal, and the send button appeared dead.
+       *
+       * Read from the child's own output rather than recomputed here: these are live-page facts
+       * that only exist once the thread has been probed, and this process has not probed it. A
+       * second opinion formed from a different set of facts is exactly the acknowledgement that
+       * would be worthless.
+       */
+      const m = /^::gates (.+)$/m.exec(String(r.output || ''));
+      const advisories = m
+        ? m[1].split(',').map((g) => g.trim()).filter((g) => /^[A-Za-z0-9_-]{1,64}$/.test(g))
+        : [];
+      return { ...r, recorded: true, ...(advisories.length ? { advisories } : {}) };
     });
 }
 

@@ -291,6 +291,19 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
         say.fail('Approved in the console, but these were found only after that approval:');
         for (const b of unseen) say.fail(`  [${b.gate}] ${b.reason}`);
         say.step('Nothing was posted. Send again to publish over them, now that they are on screen.');
+        /**
+         * The same list again, in a form the console can read.
+         *
+         * "Send again" was an instruction the console could not follow: it re-posted the identical
+         * body, `unseen` was non-empty again, and every send refused forever — the button looked
+         * dead because the handshake had no second half. The console needs the gate NAMES to put
+         * in `overrule`, and parsing them back out of the prose above would break the first time
+         * someone reworded a message. So they are printed once more behind a fixed marker.
+         *
+         * Names only. The reasons are above, on screen, where the person reads them — this line
+         * exists to be acknowledged, not to inform.
+         */
+        say.info(`::gates ${unseen.map((b) => b.gate).join(',')}`);
         await record('gate.block', `console approval lacked acknowledgement for ${target.id}`, {
           draftId: target.id,
           gates: unseen.map((b) => b.gate),
