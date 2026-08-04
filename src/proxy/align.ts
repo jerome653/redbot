@@ -18,6 +18,12 @@
  *   CDP Emulation.setTimezoneOverride                WORKS — Manila -> New York, +8 -> -4
  *   ...and it survives navigation                    YES
  *   ...on a tab redbot did not create                NO — reports Asia/Manila
+ *
+ *   CDP Emulation.setLocaleOverride                  MOVES Intl ONLY — navigator.language does
+ *                                                    NOT follow it (2026-08-04, Chrome 150.0.7871.187:
+ *                                                    de-DE/fr-FR/en-GB each left navigator.language
+ *                                                    at en-US while Intl followed every time)
+ *   CDP Network.setUserAgentOverride acceptLanguage  MOVES navigator.language and .languages
  *   context.on('page') hook, human types a URL       PROTECTED
  *   context.on('page') hook, window.open (0 latency) PROTECTED — the feared race did not occur
  *

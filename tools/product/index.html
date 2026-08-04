@@ -3291,6 +3291,23 @@ function exitLine(handle,portStatus){
   const live=(PORTS.relays||[]).find(x=>x&&x.handle&&x.handle.toLowerCase()===handle.toLowerCase());
   const place=where?` · ${esc(where)}`:'';
 
+  /**
+   * THE RESIDUAL, on the screen instead of only in a source comment.
+   *
+   * src/proxy/align.ts states it and nothing ever showed it to the person it affects. Worded to
+   * what was actually MEASURED, which is narrower than "tabs outside redbot are unprotected":
+   * while redbot is attached, a new tab IS covered — the context hook caught both a typed URL and
+   * a zero-latency window.open. What is not covered is a document created after redbot lets go,
+   * which is what a browser left running past the app's own lifetime becomes. Then the timezone
+   * reverts to this computer's and no fence is installed on the new document.
+   *
+   * Stated on the two states where a person believes they are protected. It would be noise on
+   * "no proxy" and misleading on "exit changed", where the advice is not to use the window at all.
+   */
+  const residual=`<div style="margin-top:.25rem;opacity:.7">Covered only while redbot is attached. `+
+    `If this browser is left open after redbot quits, tabs opened in it afterwards lose the `+
+    `timezone match and can read this computer’s real address over WebRTC — close it with the app.</div>`;
+
   if(live&&live.exitIp&&live.matchedPin===false){
     /* No country beside this address, deliberately. `region`/`country` describe the address that
        was VETTED; printing them next to the one that answered instead would assert a location
@@ -3309,7 +3326,7 @@ function exitLine(handle,portStatus){
       ` · relay <code>${esc(String(live.port))}</code>`+
       ` · ${esc(String(live.requests))} request${live.requests===1?'':'s'}`+
       (live.lastError?`<div style="margin-top:.2rem;color:var(--ember)">Last failure through it: ${esc(live.lastError)}</div>`:'')+
-      label);
+      label+residual);
   }
 
   /* Running browser, no relay: it was started before this console was, or the console restarted
@@ -3324,7 +3341,7 @@ function exitLine(handle,portStatus){
 
   return wrap(`<span class="tag ok">exit ready</span> `+
     `<code>${esc(p.pinnedExitIp)}</code>${place}`+
-    `<span style="opacity:.75"> · will carry the browser when it starts</span>`+label);
+    `<span style="opacity:.75"> · will carry the browser when it starts</span>`+label+residual);
 }
 
 /** The one button an account shared from another machine can offer: give it a browser here. */

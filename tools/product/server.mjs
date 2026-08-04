@@ -119,7 +119,7 @@ let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccou
     portStatusImpl = null, stopBrowserImpl = null, setUpHereImpl = null, adoptProfileImpl = null,
     boundHandlesImpl = null, machineImpl = null, pagesApi = null, summaryApi = null,
     selectAccountImpl = null, selectedHandleImpl = null,
-    dbStatus = null, sourcesApi = null, requirementsApi = null, configApi = null,
+    dbStatus = null, dbPing = null, sourcesApi = null, requirementsApi = null, configApi = null,
     updateApi = null, pushApi = null, pushStateApi = null, pushSchedulerApi = null,
     pushClientApi = null, pushAccountsApi = null, dependenciesApi = null, profilesApi = null,
     proxiesApi = null, relayApi = null, alignApi = null, exitApi = null;
@@ -256,6 +256,9 @@ try {
     DEFAULT_PAGE: pages.DEFAULT_PAGE
   };
   dbStatus = db.dbUnavailableReason;
+  /* Separate from `dbStatus` because they answer different questions: "is there a file" and
+     "is its schema the one this build expects". The Setup screen needs both — see setupStatus. */
+  dbPing = db.ping;
   sourcesApi = src;
   vaultApi = cred;
   /**
@@ -1469,6 +1472,23 @@ async function setupStatus() {
   const dbReason = dbStatus ? dbStatus() : 'the compiled build is missing';
   const vaultReason = vaultApi ? vaultApi.vaultUnavailableReason() : 'the compiled build is missing';
 
+  /**
+   * Whether the schema is CURRENT, which is not what `dbReason` answers.
+   *
+   * `dbUnavailableReason()` is `existsSync(dbFile())` and nothing more, so this field used to go
+   * green on a database whose migrations had failed — the exact state the 2.0.0 proxy release
+   * shipped into, where `account_proxies` did not exist and every screen said the database was
+   * fine. `ping()` now knows what pending means; this is where the Setup screen learns it.
+   *
+   * Kept OUT of the secrets gate below on purpose. Secrets live in `credentials` (migration 0011),
+   * so a database that is merely behind can still open them — and the Setup screen is the screen a
+   * person uses to fix things. Blanking it out would remove the tools at the moment they are needed.
+   */
+  let dbHealth = null;
+  if (!dbReason && dbPing) {
+    try { dbHealth = await dbPing(); } catch { dbHealth = null; }
+  }
+
   let fingerprint = null;
   if (!vaultReason) {
     try { fingerprint = vaultApi.keyFingerprint(); } catch { fingerprint = null; }
@@ -1520,7 +1540,12 @@ async function setupStatus() {
        means. The UI decides what to DO about it; it does not decide what it IS. */
     blocking: requirements.filter((r) => r.tier === 'blocking' && !r.ok),
     advisory: requirements.filter((r) => r.tier === 'advisory' && !r.ok),
-    database: { ok: !dbReason, reason: dbReason },
+    database: {
+      ok: !dbReason && (dbHealth ? dbHealth.ok : true),
+      reason: dbReason || (dbHealth && !dbHealth.ok ? dbHealth.detail : null),
+      /* Named rather than merely counted, so the screen can say WHICH migration is missing. */
+      pendingMigrations: (dbHealth && dbHealth.pendingMigrations) || []
+    },
     vault: { ok: !vaultReason, reason: vaultReason, keyId: fingerprint },
     secrets, secretsError, apiKeyName,
     /* Whether a key is on file at all — the one fact the "which provider" choice turns on. */
@@ -1877,8 +1902,21 @@ async function coverProxiedBrowser(endpoint, account, exit) {
       endpoint,
       handle: account.handle,
       timezone: account.timezone,
-      /* English for the exit's country. `--lang` is MEASURED to be ignored, so this is the only
-         route to it, and it rides along with the timezone rather than growing its own call. */
+      /**
+       * English for the exit's country — for FORMATTING, which is all this actually buys.
+       *
+       * The previous note here said `--lang` is ignored "so this is the only route to it", meaning
+       * navigator.language. That was wrong, and measuring it settled the question: on Chrome
+       * 150.0.7871.187, `Emulation.setLocaleOverride` moves `Intl` and NOT the language a page
+       * reads. Overriding to de-DE, fr-FR and en-GB each left `navigator.language` at en-US while
+       * `Intl.NumberFormat().resolvedOptions().locale` followed the override every time.
+       *
+       * So this is kept for what it does — dates, numbers and collation agreeing with the exit's
+       * region rather than the operator's — and it is NOT the language alignment D-5 asks for.
+       * `Network.setUserAgentOverride({ acceptLanguage })` is what moves navigator.language;
+       * measured to work, deliberately not wired up here, because it is a separate decision from
+       * the timezone this call rides along with.
+       */
       locale: exit.proxy.country ? `en-${exit.proxy.country}` : null,
       openUrl: 'https://www.reddit.com/login'
     });
