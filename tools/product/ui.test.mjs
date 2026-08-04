@@ -1048,6 +1048,95 @@ test('a running account offers Stop, a stopped one offers Start', async () => {
   } finally { await context.close(); }
 });
 
+/**
+ * The exit line — which address an account leaves from.
+ *
+ * Every state is asserted rather than just the happy one, because the whole value of this line is
+ * that its states are DIFFERENT. A card that printed "exit 198.51.100.20" whenever a row existed
+ * would read as protection over a browser using the operator's own connection, which is the
+ * wrong reassurance the feature exists to remove.
+ *
+ * `proxies` is the RECORD (what was vetted); `relays` is the LIVE FACT (what is carrying traffic
+ * now). The two are fed separately here so a mix-up between them fails.
+ */
+test('the exit line says what is actually carrying the browser, state by state', async () => {
+  const base = { at: PORTS.at, suggestion: 9299, machine: 'test-laptop', boundHere: null };
+  const port = (handle, p, extra = {}) => ({
+    handle, port: p, state: 'free', ours: false, profileOnDisk: true,
+    detail: `Nothing is listening on ${p}.`, ...extra
+  });
+  const exit = (handle, over = {}) => ({
+    handle, enabled: true, host: '198.51.100.9', port: 12323, label: 'IPRoyal ISP · 30d',
+    pinnedExitIp: '198.51.100.20', country: 'US', region: 'New York',
+    asn: 'AS64500', rdns: null, vettedAt: '2026-08-03T10:00:00.000Z', relayPort: 9400, ...over
+  });
+
+  const ports = {
+    ...base,
+    ports: [port('none-acct', 9222), port('unvetted-acct', 9223), port('ready-acct', 9224),
+            port('live-acct', 9225), port('drift-acct', 9226),
+            port('stranded-acct', 9227, { state: 'running', ours: true, pid: 999 })],
+    proxies: [
+      exit('unvetted-acct', { pinnedExitIp: null, relayPort: null }),
+      exit('ready-acct'),
+      exit('live-acct'),
+      exit('drift-acct'),
+      exit('stranded-acct')
+    ],
+    relays: [
+      { handle: 'live-acct', port: 9400, running: true, requests: 12, lastError: null,
+        exitIp: '198.51.100.20', matchedPin: true, checkedAt: PORTS.at, startedAt: PORTS.at },
+      { handle: 'drift-acct', port: 9401, running: true, requests: 3, lastError: null,
+        exitIp: '203.0.113.99', matchedPin: false, checkedAt: PORTS.at, startedAt: PORTS.at }
+    ]
+  };
+  /* Every handle above must exist as an account, or no card is drawn to hold the line. */
+  const state = makeState(NOW);
+  state.accounts = ports.ports.map((p) => ({
+    handle: p.handle, configured: true, role: 'support engineer', speaks: '',
+    knows: [], subreddits: ['WordPress'], timezone: 'America/New_York',
+    quietHours: [0, 8], dailyCeiling: 1, note: null,
+    profileDir: `chrome-profile-${p.handle}`, debugPort: p.port,
+    profileExists: true, profileState: 'used',
+    karma: 10, karmaMeasuredAt: null, karmaVector: 'comment', karmaNote: null,
+    observations: 0, published: 0, stage: 'established'
+  }));
+
+  const { context, page } = await open({ ports, state });
+  try {
+    await tab(page, 'accounts');
+    await page.waitForFunction(() => document.querySelectorAll('#v-accounts .exit-line').length >= 5,
+                               null, { timeout: 10_000 });
+
+    /* Read each line off ITS OWN card. A single querySelector would assert five states against
+       whichever card happened to be first, and would pass while every line was identical. */
+    const byHandle = await page.$$eval('#v-accounts .card', (cards) => {
+      const out = {};
+      for (const c of cards) {
+        const h = c.querySelector('.chead b')?.textContent?.trim();
+        const l = c.querySelector('.exit-line');
+        if (h && l) out[h] = l.innerText.replace(/\s+/g, ' ').trim();
+      }
+      return out;
+    });
+
+    assert.match(byHandle['none-acct'] ?? '', /no proxy/i,
+                 'an account with no exit must say so — silence would read as protected');
+    assert.match(byHandle['unvetted-acct'] ?? '', /not verified/i,
+                 'a configured but unchecked exit must never read like a working one');
+    assert.match(byHandle['ready-acct'] ?? '', /exit ready.*198\.51\.100\.20.*New York, US/i,
+                 'a vetted exit with no relay up is a plan, and shows the address and country');
+    assert.match(byHandle['live-acct'] ?? '', /exit live.*198\.51\.100\.20.*New York, US.*9400/i,
+                 'a live relay shows the address, the country and the port carrying it');
+    assert.match(byHandle['drift-acct'] ?? '', /exit changed.*203\.0\.113\.99/i,
+                 'a drifted exit names the address that answered');
+    assert.ok(!/New York/.test(byHandle['drift-acct'] ?? ''),
+              'the vetted country must NOT be printed beside an address nothing has checked');
+    assert.match(byHandle['stranded-acct'] ?? '', /exit down/i,
+                 'a running browser with no relay is broken, and the card has to say which half');
+  } finally { await context.close(); }
+});
+
 test('an account whose browser is not running offers to start it', async () => {
   /* Same screen, one state changed — the fixture is the only difference. */
   const ports = {

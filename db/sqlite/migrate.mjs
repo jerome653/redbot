@@ -140,6 +140,52 @@ function ensureLedger(db) {
  * Migration files
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Checksums
+ *
+ * THE HASH IS OVER THE SQL, NOT OVER THE BYTES — and that distinction cost a release.
+ *
+ * This used to hash the file exactly as read. A migration checked out on Windows with
+ * `core.autocrlf=true` carries CRLF; the same commit packed into an asar on a machine that
+ * checks out LF carries LF. Identical SQL, different bytes, different hash — so every applied
+ * migration read as drifted and the runner refused to go on. Measured on 0001_init.up.sql:
+ *
+ *     CRLF  4,649 bytes  aa2d529d31222113
+ *     LF    4,577 bytes  3495e98e3a607ea1     `diff` after `tr -d '\r'`: empty
+ *
+ * The refusal was correct behaviour applied to a false premise. Canonicalising line endings
+ * before hashing removes the premise: the checksum now describes what the migration SAYS.
+ *
+ * Line endings only. Not whitespace, not comments, not case — anything broader would start
+ * excusing edits that genuinely change the schema, which is the thing the check exists to catch.
+ * ------------------------------------------------------------------ */
+
+const canonicalBody = (body) => body.replace(/\r\n/g, '\n');
+const hash16 = (s) => createHash('sha256').update(s).digest('hex').slice(0, 16);
+
+/** The checksum this runner writes and compares. */
+export function checksumOf(body) {
+  return hash16(canonicalBody(body));
+}
+
+/**
+ * Every value an EARLIER, honest run could have recorded for this same content.
+ *
+ * Three exact hashes and nothing fuzzy: the file as it sits on disk, its all-LF form, and its
+ * all-CRLF form. A ledger row matching one of these was written by a runner that saw the same
+ * SQL through a different checkout, so it can be re-stamped. A row matching none of them is the
+ * real "somebody edited an applied migration" case and must still refuse.
+ *
+ * BOTH DIRECTIONS, deliberately. The first sighting was a CRLF ledger under an LF build, but the
+ * reverse is just as reachable — this repository's blobs are LF, so a `core.autocrlf=true`
+ * checkout hands CRLF files to a database whose ledger was written from LF. A one-way heal would
+ * fix the install that reported the bug and break the machine that fixed it.
+ */
+function legacyChecksums(body) {
+  const lf = canonicalBody(body);
+  return new Set([hash16(body), hash16(lf), hash16(lf.replace(/\n/g, '\r\n'))]);
+}
+
 function onDisk() {
   if (!existsSync(MIGRATIONS_DIR)) die(`No migrations directory at ${MIGRATIONS_DIR}`);
   const ups = new Map();
@@ -160,7 +206,7 @@ function onDisk() {
       upFile: f,
       downFile: `${version}_${name}.down.sql`,
       body,
-      checksum: createHash('sha256').update(body).digest('hex').slice(0, 16)
+      checksum: checksumOf(body)
     });
   }
   if (!ups.size) die('No migrations found.');
@@ -178,17 +224,62 @@ function applied(db) {
 /**
  * A file that changed after it was applied means the database and the repository
  * disagree about what the schema IS. Editing an applied migration is the mistake;
- * the fix is a new migration, so this refuses rather than silently continuing.
+ * the fix is a new migration, so that case still refuses rather than silently continuing.
+ *
+ * But there are TWO ways for a checksum to stop matching, and only one of them is that mistake:
+ *
+ *   healable  the ledger holds a hash of this exact SQL in a different line-ending form. The
+ *             schema and the repository agree; only the bytes a checkout produced differ.
+ *   genuine   the ledger holds a hash of something else. The database and the repository
+ *             disagree about what the schema IS, which is what this check is for.
+ *
+ * Splitting them is the whole fix. Collapsing them is the bug.
  */
-function assertNoDrift(files, done) {
-  const drifted = files.filter((f) => done.has(f.version) && done.get(f.version).checksum !== f.checksum);
-  if (!drifted.length) return;
+function classifyDrift(files, done) {
+  const healable = [], genuine = [];
+  for (const f of files) {
+    if (!done.has(f.version)) continue;
+    const was = done.get(f.version).checksum;
+    if (was === f.checksum) continue;
+    (legacyChecksums(f.body).has(was) ? healable : genuine).push({ file: f, was });
+  }
+  return { healable, genuine };
+}
+
+/** The refusal, unchanged in spirit and now reached only by real drift. */
+function dieOnGenuineDrift(genuine) {
+  if (!genuine.length) return;
   die(
     'Applied migrations have changed on disk:\n\n' +
-    drifted.map((f) => `  ${f.version}_${f.name}  ledger ${done.get(f.version).checksum} != file ${f.checksum}`).join('\n') +
+    genuine.map(({ file: f, was }) => `  ${f.version}_${f.name}  ledger ${was} != file ${f.checksum}`).join('\n') +
     '\n\n  An applied migration is history and cannot be edited. Write a new migration instead.\n' +
+    '  (This is NOT a line-ending difference — the SQL itself differs from what was applied.)\n' +
     `  (If this database is disposable, delete it: ${dbFile()})`
   );
+}
+
+/**
+ * Re-stamp rows whose recorded hash describes this same SQL in other line endings.
+ *
+ * Loud on purpose. A silent heal would hide the fact that a checkout is producing different bytes
+ * from the one that built the ledger — which is worth knowing even though it is now survivable.
+ * One transaction, so a database cannot end up half re-stamped.
+ */
+function healLedger(db, healable) {
+  if (!healable.length) return;
+  try {
+    db.exec('BEGIN');
+    const stamp = db.prepare('UPDATE schema_migrations SET checksum = $2 WHERE version = $1');
+    for (const { file: f } of healable) stamp.run({ 1: f.version, 2: f.checksum });
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch { /* nothing open */ }
+    db.close();
+    die(`The ledger could not be re-stamped:\n\n  ${e.message}`);
+  }
+  for (const { file: f, was } of healable) {
+    console.log(`  re-stamped  ${f.version}_${f.name}  ledger ${was} -> ${f.checksum}  (line endings only)`);
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -199,7 +290,11 @@ function cmdStatus() {
   const files = onDisk();
   const db = open();
   const done = db ? (ensureLedger(db), applied(db)) : new Map();
-  if (db) assertNoDrift(files, done);
+  /* `status` NEVER writes — the header promises it does not bring a database into existence as a
+     side effect of being asked a question, and re-stamping is the same kind of surprise. So the
+     healable rows are reported here and left alone; `up` is what heals them. */
+  const drift = db ? classifyDrift(files, done) : { healable: [], genuine: [] };
+  if (db) dieOnGenuineDrift(drift.genuine);
 
   console.log(`\n  database  ${dbFile()}${db ? '' : '   (does not exist yet)'}`);
   console.log('\n  version  state      name');
@@ -214,6 +309,13 @@ function cmdStatus() {
   if (orphans.length) {
     console.log(`\n  WARNING  applied but missing from disk: ${orphans.join(', ')}`);
   }
+  if (drift.healable.length) {
+    console.log(
+      `\n  NOTE  ${drift.healable.length} applied migration(s) differ from the ledger in line endings only:\n` +
+      drift.healable.map(({ file: f, was }) => `          ${f.version}_${f.name}  ${was} -> ${f.checksum}`).join('\n') +
+      '\n        The SQL is identical. `up` re-stamps these; nothing has been changed by `status`.'
+    );
+  }
   console.log(`\n  ${files.length - pending} applied · ${pending} pending\n`);
   db?.close();
   return pending;
@@ -224,7 +326,12 @@ function cmdUp() {
   ensureLedger(db);
   const files = onDisk();
   const done = applied(db);
-  assertNoDrift(files, done);
+  /* Refuse real drift BEFORE healing anything, and heal BEFORE applying anything pending: a
+     database that is going to be refused must not be written to on the way to the refusal. */
+  const { healable, genuine } = classifyDrift(files, done);
+  dieOnGenuineDrift(genuine);
+  if (healable.length) console.log('');
+  healLedger(db, healable);
 
   const pending = files.filter((f) => !done.has(f.version));
   if (!pending.length) {
@@ -326,9 +433,13 @@ function cmdNew(name) {
 }
 
 /**
- * Every table the 14 migrations claim to build. Hard-coded rather than derived from the SQL,
+ * Every table the 16 migrations claim to build. Hard-coded rather than derived from the SQL,
  * because a list derived from the migrations could only ever agree with them — the point is to
  * state independently what the schema is supposed to contain.
+ *
+ * KEEP THIS IN STEP WITH THE MIGRATIONS. It was left at 14 when 0015 and 0016 landed, so
+ * `verify` — the one command whose entire job is to notice a missing table — passed on a database
+ * with no `account_proxies` in it at all, which is exactly the state the 2.0.0 blocker produced.
  */
 const EXPECTED_TABLES = [
   'accounts', 'threads', 'thread_comments', 'gap_analyses', 'gaps',
@@ -337,7 +448,8 @@ const EXPECTED_TABLES = [
   'certification_reasons', 'certification_invalidations',
   'certification_resolution_signals', 'jobs', 'history', 'observations',
   'reviews', 'regret', 'interactions', 'trace', 'confirmations',
-  'credentials', 'sources', 'account_machines', 'thread_prefilter'
+  'credentials', 'sources', 'account_machines', 'thread_prefilter',
+  'account_proxies', 'account_exit_ips'
 ];
 
 /** Assert the live schema actually contains what the migrations claim to build. */

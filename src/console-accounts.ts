@@ -25,7 +25,9 @@ import {
   bindAccountToMachine, boundHandles
 } from './db/accounts.js';
 import type { AccountDependents } from './db/accounts.js';
-import { portIsFree, statusForAccounts } from './ports.js';
+import {
+  portIsFree, statusForAccounts, firstFreePortInRange, DEBUG_PORT_FIRST, DEBUG_PORT_LAST
+} from './ports.js';
 import { machineId } from './machine.js';
 import { allocateProfileDir, profileState, resolveProfileDir } from './profiles.js';
 import { isAbsolute, dirname, basename } from 'node:path';
@@ -37,26 +39,23 @@ export { portIsFree };
 /** Reddit usernames are 3–20 of these. Same rule the console's form states to the person. */
 const HANDLE_RE = /^[A-Za-z0-9_-]{3,20}$/;
 
-/** Where debug ports start. 9222 is Chrome's conventional default and is often already taken. */
-const FIRST_DEBUG_PORT = 9222;
-const LAST_DEBUG_PORT = 9299;
+/**
+ * Where debug ports start. 9222 is Chrome's conventional default and is often already taken.
+ *
+ * The bounds moved to src/ports.ts when relay allocation needed the same scan over a different
+ * range; they are re-exported under the old names so nothing that read them here has to change.
+ */
+const FIRST_DEBUG_PORT = DEBUG_PORT_FIRST;
+const LAST_DEBUG_PORT = DEBUG_PORT_LAST;
 
 /**
- * The first port that is both unclaimed by redbot and actually bindable.
+ * The first debugging port that is both unclaimed by redbot and actually bindable.
  *
- * Scans rather than increments: a machine with something on 9222 and 9223 should hand out
- * 9224, not fail, and not silently hand out a port another program owns.
+ * The scan itself now lives in src/ports.ts beside `portIsFree`, so the relay allocator and this
+ * one cannot drift apart on what "free" means. The behaviour is unchanged.
  */
 async function firstFreePort(taken: number[]): Promise<number> {
-  const claimed = new Set(taken);
-  for (let p = FIRST_DEBUG_PORT; p <= LAST_DEBUG_PORT; p++) {
-    if (claimed.has(p)) continue;
-    if (await portIsFree(p)) return p;
-  }
-  throw new Error(
-    `No free debugging port between ${FIRST_DEBUG_PORT} and ${LAST_DEBUG_PORT}. ` +
-    'Close some browsers, or free a port in that range.'
-  );
+  return firstFreePortInRange(taken, FIRST_DEBUG_PORT, LAST_DEBUG_PORT, 'debugging port');
 }
 
 export interface CreateResult {

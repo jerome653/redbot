@@ -49,7 +49,7 @@
  * or puts a stored value in an error message.
  */
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -584,6 +584,34 @@ export interface DbPing {
   detail: string;
   serverVersion?: string;
   migrationsApplied?: number;
+  /** Versions that exist on disk and are not in the ledger. Empty when the schema is current. */
+  pendingMigrations?: string[];
+}
+
+/**
+ * Which migrations this build ships, read once.
+ *
+ * Cached because `ping()` is called on every `/api/setup`, which the console reads on every screen
+ * change — and the answer cannot change without restarting the process, since the files are inside
+ * the asar. Cheap next to the sqlite queries `ping()` already makes, but not free enough to repeat.
+ *
+ * Returns null when the directory cannot be read at all. That is deliberately NOT reported as a
+ * problem with the database: a build with no migrations directory is a broken build, and claiming
+ * "0 of 0 applied" about it would be a confident answer to a question this function cannot see.
+ */
+let migrationFilesCache: string[] | null | undefined;
+function migrationVersionsOnDisk(): string[] | null {
+  if (migrationFilesCache !== undefined) return migrationFilesCache;
+  try {
+    migrationFilesCache = readdirSync(join(ROOT, 'db', 'sqlite', 'migrations'))
+      .filter((f) => /^\d{4}_[a-z0-9_]+\.up\.sql$/.test(f))
+      .map((f) => f.slice(0, 4))
+      .sort();
+    if (!migrationFilesCache.length) migrationFilesCache = null;
+  } catch {
+    migrationFilesCache = null;
+  }
+  return migrationFilesCache;
 }
 
 /**
@@ -627,8 +655,40 @@ export async function ping(): Promise<DbPing> {
         detail: 'the file exists, but no migrations are applied. Run: node db/sqlite/migrate.mjs up'
       };
     }
+
+    /**
+     * APPLIED IS NOT THE SAME AS CURRENT — and conflating them hid a release-blocking bug twice.
+     *
+     * This used to return ok as soon as the ledger had a single row in it. When the 2.0.0 runner
+     * refused to apply 0016, the database sat at 15 of 16 with no `account_proxies` table in it,
+     * and every surface downstream — the blocking "Database" requirement, the Setup screen, the
+     * doctor line — reported it healthy. The failure existed only in boot.log, which is the one
+     * place nobody looks until a feature is inexplicably missing.
+     *
+     * So a schema that is behind the build it is running under is NOT ok. Named, so the message
+     * says which migration and not merely that something is wrong.
+     */
+    const onDisk = migrationVersionsOnDisk();
+    if (onDisk) {
+      const have = new Set(
+        (conn.prepare('SELECT version FROM schema_migrations').all() as { version: string }[])
+          .map((r) => r.version)
+      );
+      const pendingMigrations = onDisk.filter((v) => !have.has(v));
+      if (pendingMigrations.length) {
+        return {
+          ok: false, serverVersion, migrationsApplied, pendingMigrations,
+          detail:
+            `${migrationsApplied} of ${onDisk.length} migrations are applied — `
+            + `${pendingMigrations.join(', ')} still pending. redbot applies these itself on launch, `
+            + 'so if this persists the migration runner refused to go on. '
+            + 'Run: node db/sqlite/migrate.mjs status'
+        };
+      }
+    }
+
     return {
-      ok: true, serverVersion, migrationsApplied,
+      ok: true, serverVersion, migrationsApplied, pendingMigrations: [],
       detail: `sqlite ${serverVersion}, ${migrationsApplied} migration(s) applied`
     };
   } catch (e) {

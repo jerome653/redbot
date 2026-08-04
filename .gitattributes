@@ -1,0 +1,20 @@
+# Line endings — narrow on purpose.
+#
+# The migration runner hashes each migration to detect an applied file being edited. That hash was
+# over the file's BYTES, so a checkout that produced CRLF and a build that produced LF disagreed
+# about migrations whose SQL was identical, and the runner refused to apply anything further. It
+# cost two debugging cycles and blocked a release.
+#
+# db/sqlite/migrate.mjs no longer hashes line endings, so this file is not what makes the app work
+# — it is what stops the divergence being manufactured in the first place. Both halves ship
+# together: the runner heals a mismatch, this keeps one from arising.
+#
+# WHY THESE PATHS AND NOT `* text=auto eol=lf`:
+# a blanket rule would also rewrite redbot.cmd, and a Windows batch file with LF endings has its
+# own failure modes around labels and GOTO. That is not a trade worth making to fix a SQL problem.
+#
+# The blobs in this repository are ALREADY LF, so nothing needs renormalising — this only overrides
+# the checkout smudge on a machine with core.autocrlf=true. A working tree that already holds CRLF
+# copies needs one re-checkout of these paths to pick the change up.
+db/sqlite/migrations/*.sql text eol=lf
+db/sqlite/*.mjs            text eol=lf

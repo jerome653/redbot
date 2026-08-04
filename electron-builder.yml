@@ -85,6 +85,15 @@ win:
   # No signing configured. An unsigned installer shows a SmartScreen warning; a certificate is a
   # purchase and a decision for whoever publishes this, not something to fake here.
 
+  # THE FILENAME THE UPDATER LOOKS FOR, AND THE ONE ON DISK, MUST BE THE SAME STRING.
+  #
+  # Left unset, electron-builder writes "redbot Setup 2.0.0.exe" (spaces) but sanitises the name in
+  # latest.yml to "redbot-Setup-2.0.0.exe" (hyphens). Upload the file under its disk name and the
+  # updater fetches a 404 forever; the release looks complete and every install silently stops
+  # updating. This has already cost one release, and a release checklist is the wrong place to fix
+  # something a config line can make impossible.
+  artifactName: ${productName}-Setup-${version}.${ext}
+
 nsis:
   oneClick: false                  # let a person choose the install directory
   perMachine: false                # per-user: no elevation, and userData is per-user anyway
