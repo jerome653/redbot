@@ -410,12 +410,21 @@ describe('the schema-derived column map', () => {
     // The counts reconcile against the Postgres schema they replace:
     //   8 text[] + 12 jsonb = 20 json · 3 bytea = 3 blob · 8 boolean · 39 timestamptz
     //
-    // boolean is 9, not 8: migration 0015 added `account_machines.selected`, which is the per-machine
+    // boolean was 9, not 8: migration 0015 added `account_machines.selected`, which is the per-machine
     // account choice. This test FAILING on that addition is the point of it — a new boolean column
     // that nobody added to the coercion map would come back as 0/1 instead of false/true, and the
     // map is derived, so the only way to notice is a count that no longer matches.
+    //
+    // Migration 0016 (per-account proxy exits) moved both counts again, and it moved them for
+    // exactly the reason above rather than because the numbers were loosened:
+    //   date    39 -> 43   account_proxies.{vetted_at,created_at,updated_at}, account_exit_ips.observed_at
+    //   boolean  9 -> 11   account_proxies.enabled, account_exit_ips.matched_pin
+    // `matched_pin` is the one that would bite hardest if it stopped coercing: the drift halt reads
+    // it to decide whether an account's exit still matches its vetted address, and a raw 0 is
+    // truthy in JavaScript — so an un-coerced column would report every observation as a match and
+    // silently disable the check.
     const expected = {
-      date: 39, json: 20, boolean: 9, blob: 3
+      date: 43, json: 20, boolean: 11, blob: 3
     };
 
     const rows = await getPool().query<{ name: string; sql: string }>(
@@ -451,6 +460,10 @@ describe('the schema-derived column map', () => {
     assert.ok(found.boolean!.includes('certification_contradictions.fatal'), 'the publish gate reads this');
     assert.ok(found.boolean!.includes('account_machines.selected'),
       'the account choice must coerce to a boolean, or "selected" reads as 1 and never as true');
+    assert.ok(found.boolean!.includes('account_exit_ips.matched_pin'),
+      'the drift halt reads matched_pin; an un-coerced 0 is truthy and would report every exit as a match');
+    assert.ok(found.date!.includes('account_proxies.vetted_at'),
+      'the vetting gate compares vetted_at to now');
   });
 
   test('forgetSchema() lets a process pick up a migrated schema without restarting', () => {
@@ -466,10 +479,10 @@ describe('ping', () => {
   test('reports ok, the engine version and the migration count', async () => {
     const p = await ping();
     assert.equal(p.ok, true, p.detail);
-    /* 15 since migration 0015 added the per-machine account selection. Asserting an exact number
-       rather than ">0" on purpose: it catches a migration that silently failed to apply as well as
-       one that was added without anybody noticing here. */
-    assert.equal(p.migrationsApplied, 15);
+    /* 16 since migration 0016 added the per-account proxy exit and its observation ledger.
+       Asserting an exact number rather than ">0" on purpose: it catches a migration that silently
+       failed to apply as well as one that was added without anybody noticing here. */
+    assert.equal(p.migrationsApplied, 16);
     assert.match(p.detail, /sqlite \d+\.\d+/);
   });
 

@@ -367,9 +367,13 @@ describe('updated_at triggers', () => {
     assert.equal(db.prepare('SELECT count(*) AS n FROM accounts WHERE handle = $1').get(P('trig')).n, 1);
   });
 
-  test('all ten tables that had the plpgsql trigger still have one', () => {
+  test('every table that carries updated_at has a trigger to move it', () => {
+    /* Was "all ten tables that had the plpgsql trigger": migration 0016 added `account_proxies`,
+       which carries updated_at and therefore needs the same trigger. `account_exit_ips` is
+       deliberately NOT here — it is an append-only ledger with no updated_at to maintain, and
+       giving it one would imply observations get rewritten. */
     const want = ['accounts', 'threads', 'gap_analyses', 'opportunity_assessments', 'drafts',
-      'jobs', 'credentials', 'sources', 'account_machines', 'thread_prefilter'];
+      'jobs', 'credentials', 'sources', 'account_machines', 'thread_prefilter', 'account_proxies'];
     const have = db.prepare("SELECT tbl_name FROM sqlite_master WHERE type='trigger'").all()
       .map((r) => r.tbl_name);
     assert.deepEqual([...have].sort(), [...want].sort());

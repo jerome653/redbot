@@ -103,6 +103,47 @@ export function portIsFree(port: number): Promise<boolean> {
   });
 }
 
+/**
+ * Where each kind of port is allocated from.
+ *
+ * Debug ports keep 9222–9299 — 9222 is Chrome's conventional default and the range predates
+ * this. Relay ports get their own band so the two allocators can never collide: an account whose
+ * relay took the port its own browser wanted would be a self-inflicted `foreign` state, and the
+ * failure would look like the Lenovo Vantage squatter this module was written for.
+ *
+ * 9400–9499 measured 100/100 bindable on the development machine, 2026-08-03.
+ */
+export const DEBUG_PORT_FIRST = 9222;
+export const DEBUG_PORT_LAST = 9299;
+export const RELAY_PORT_FIRST = 9400;
+export const RELAY_PORT_LAST = 9499;
+
+/**
+ * The first port in a range that is both unclaimed by redbot and actually bindable.
+ *
+ * Generalised out of `src/console-accounts.ts`, which had this hardcoded to the debug range, so
+ * relay allocation and debug allocation ask "is this port free" in exactly ONE way. Two
+ * definitions of free is how a console hands out a port it has just described as occupied.
+ *
+ * Scans rather than increments: a machine with something on the first two ports should hand out
+ * the third, not fail, and not silently hand out a port another program owns.
+ */
+export async function firstFreePortInRange(
+  taken: readonly number[],
+  first: number,
+  last: number,
+  what: string
+): Promise<number> {
+  const claimed = new Set(taken);
+  for (let p = first; p <= last; p++) {
+    if (claimed.has(p)) continue;
+    if (await portIsFree(p)) return p;
+  }
+  throw new Error(
+    `No free ${what} between ${first} and ${last}. Close some programs, or free a port in that range.`
+  );
+}
+
 /** `--user-data-dir=C:\x` or `--user-data-dir="C:\x with spaces"`. Both shapes are real. */
 export function userDataDirFrom(commandLine: string | null): string | null {
   if (!commandLine) return null;

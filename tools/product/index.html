@@ -3156,9 +3156,24 @@ const PORTLOOK = {
   unknown: { tag:'no',   word:'cannot be identified' }
 };
 
+/**
+ * The exit check that is running, if one is.
+ *
+ * Fetched beside the ports rather than on its own timer, because it is the same question asked at
+ * the same moment — "what is true about this account's network right now" — and two timers would
+ * paint the card from two different instants. A check runs for SIX HOURS by default, so it long
+ * outlives the form that started it and has to be re-found on every repaint, including after a
+ * reload or a screen change.
+ */
+let EXITVET=null;
+
 async function loadPorts(){
-  const r=await fetch('/api/ports').then(x=>x.json()).catch(e=>({error:String(e&&e.message||e)}));
+  const [r,v]=await Promise.all([
+    fetch('/api/ports').then(x=>x.json()).catch(e=>({error:String(e&&e.message||e)})),
+    fetch('/api/account/exit').then(x=>x.json()).catch(()=>null)
+  ]);
   PORTS=(r&&Array.isArray(r.ports))?r:{ports:[],suggestion:null,error:(r&&r.error)||'this console did not answer /api/ports'};
+  EXITVET=v;
   paintPorts();
 }
 
@@ -3199,8 +3214,117 @@ function paintPorts(){
     if(s&&s.state!=='free'&&s.state!=='running'){
       node.line.innerHTML+=`<div style="margin-top:.25rem;color:var(--ember)">${esc(s.detail)}</div>`;
     }
+    node.line.innerHTML+=exitLine(handle,s);
     paintPortBar(node,s);
   });
+}
+
+/**
+ * Which address this account leaves from — the line the whole proxy feature exists to earn.
+ *
+ * TWO SOURCES, AND THEY ARE NOT THE SAME CLAIM. `PORTS.proxies` is the RECORD: which address was
+ * vetted, where it is, when it was proven. `PORTS.relays` is the LIVE FACT: whether a listener is
+ * up in the console right now and what the world saw through it a moment ago. Showing only the
+ * record would print "exit 198.51.100.20" over a browser doing nothing of the kind, which is the
+ * wrong reassurance this whole screen exists to avoid.
+ *
+ * THE STATES, deliberately not collapsed — the difference between them is the difference between
+ * "safe", "not protected" and "I do not know":
+ *
+ *   unknown     the exit could not be read at all (no database, or migration 0016 not applied).
+ *               Says NOTHING. Claiming "no proxy" here would read as "you are exiting from your
+ *               home address" — which might be false, and a wrong reassurance is worse than
+ *               silence. The `unknown` posture src/ports.ts takes about a port it cannot prove.
+ *   none        no exit configured. Stated plainly, because for a proxied setup this IS the
+ *               problem: the account is using the operator's own connection.
+ *   unvetted    an address is configured but has never passed the check. A warning, not success.
+ *   ready       vetted, and the relay is not up — which is the ORDINARY resting state, because
+ *               the relay starts with the browser. Said as "will exit from", future tense: the
+ *               address is a plan, not a fact, until something is carrying traffic.
+ *   live        vetted, relay up, and the address it answered from IS the pinned one.
+ *   changed     relay up and answering from a DIFFERENT address. Loud: this is R4, the event the
+ *               drift halt refuses to launch on.
+ *   stranded    the browser is running and its relay is not. Chrome fails closed on a dead proxy
+ *               (measured — zero connections, no fallback to the direct address), so nothing is
+ *               leaking; the window simply cannot load anything. Worth saying, because
+ *               "every page is broken" otherwise looks like the internet.
+ *
+ * The credential is never rendered: the payload does not carry it (see /api/ports).
+ */
+function exitLine(handle,portStatus){
+  if(!PORTS||PORTS.proxies===null||PORTS.proxies===undefined)return '';
+  const p=(PORTS.proxies||[]).find(x=>x&&x.handle===handle);
+  const wrap=(inner)=>`<div class="exit-line" style="margin-top:.35rem">${inner}</div>`;
+
+  /**
+   * A check in flight outranks everything below, because until it finishes the account's state is
+   * genuinely undecided — and the default check is SIX HOURS, so this is not a flash of a spinner.
+   * The last line the gate printed is shown rather than a percentage: the gate reports each sample
+   * with the address it saw, which is the thing worth watching.
+   */
+  if(EXITVET&&EXITVET.running&&EXITVET.handle&&EXITVET.handle.toLowerCase()===handle.toLowerCase()){
+    const lines=(EXITVET.lines||[]).join('').split('\n').map(s=>s.trim()).filter(Boolean);
+    const last=lines.length?lines[lines.length-1]:'starting…';
+    return wrap(`<span class="tag no">checking the exit</span> `+
+      `<span style="opacity:.75">nothing is stored until every check passes</span>`+
+      `<div style="margin-top:.2rem;font-family:var(--mono,monospace);font-size:.75rem;opacity:.8">${esc(last)}</div>`);
+  }
+
+  if(!p||!p.enabled){
+    return wrap(`<span class="tag no">no proxy</span> `+
+      `<span style="opacity:.75">exits from this computer’s own address</span>`);
+  }
+
+  const where=[p.region,p.country].filter(Boolean).join(', ');
+  const label=p.label?`<div style="margin-top:.2rem;opacity:.75">${esc(p.label)}</div>`:'';
+
+  if(!p.pinnedExitIp){
+    return wrap(`<span class="tag stop">exit not verified</span> `+
+      `<code>${esc(p.host)}:${esc(String(p.port))}</code>`+
+      `<div style="margin-top:.2rem;color:var(--ember)">This account has an exit configured but it has `+
+      `never been checked. Run the check before signing in — the first sign-in ties the account to `+
+      `whatever address it uses, and that cannot be undone.</div>`+label);
+  }
+
+  /* `relays` is null only when the compiled build is missing, which the Setup screen already
+     reports; an empty list genuinely means nothing is running. */
+  const live=(PORTS.relays||[]).find(x=>x&&x.handle&&x.handle.toLowerCase()===handle.toLowerCase());
+  const place=where?` · ${esc(where)}`:'';
+
+  if(live&&live.exitIp&&live.matchedPin===false){
+    /* No country beside this address, deliberately. `region`/`country` describe the address that
+       was VETTED; printing them next to the one that answered instead would assert a location
+       nothing has checked — the drifted address could be anywhere. */
+    return wrap(`<span class="tag stop">exit changed</span> `+
+      `<code>${esc(live.exitIp)}</code>`+
+      `<div style="margin-top:.2rem;color:var(--ember)">This account is pinned to `+
+      `<code>${esc(p.pinnedExitIp)}</code> but its proxy is answering from `+
+      `<code>${esc(live.exitIp)}</code>. redbot will not open a browser for it until the address `+
+      `is checked again — appearing from a new address is the thing this setup exists to avoid.</div>`+label);
+  }
+
+  if(live){
+    return wrap(`<span class="tag ok">exit live</span> `+
+      `<code>${esc(p.pinnedExitIp)}</code>${place}`+
+      ` · relay <code>${esc(String(live.port))}</code>`+
+      ` · ${esc(String(live.requests))} request${live.requests===1?'':'s'}`+
+      (live.lastError?`<div style="margin-top:.2rem;color:var(--ember)">Last failure through it: ${esc(live.lastError)}</div>`:'')+
+      label);
+  }
+
+  /* Running browser, no relay: it was started before this console was, or the console restarted
+     under it. Not a leak — a dead window. */
+  if(portStatus&&portStatus.ours){
+    return wrap(`<span class="tag stop">exit down</span> `+
+      `<code>${esc(p.pinnedExitIp)}</code>${place}`+
+      `<div style="margin-top:.2rem;color:var(--ember)">This account’s browser is running but its exit `+
+      `is not, so every page in it will fail to load rather than quietly use this computer’s own `+
+      `address. Stop the browser and start it again from here.</div>`+label);
+  }
+
+  return wrap(`<span class="tag ok">exit ready</span> `+
+    `<code>${esc(p.pinnedExitIp)}</code>${place}`+
+    `<span style="opacity:.75"> · will carry the browser when it starts</span>`+label);
 }
 
 /** The one button an account shared from another machine can offer: give it a browser here. */
@@ -3326,6 +3450,99 @@ function paintPortBar(node,s){
         held.done('Browser stopped');
       }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
     },'danger'));
+  }
+
+  /**
+   * The exit — adding one, stopping a check, or forgetting one.
+   *
+   * Only offered when the console can SEE the exit table. With `proxies` null the question could
+   * not be asked at all (no database, or migration 0016 not applied), and offering to add an exit
+   * that cannot be stored is worse than offering nothing.
+   */
+  if(PORTS&&PORTS.proxies!==null&&PORTS.proxies!==undefined){
+    const exit=(PORTS.proxies||[]).find(x=>x&&x.handle===account.handle);
+    const checking=EXITVET&&EXITVET.running&&EXITVET.handle
+                 &&EXITVET.handle.toLowerCase()===account.handle.toLowerCase();
+    const busyElsewhere=EXITVET&&EXITVET.running&&!checking;
+
+    if(checking){
+      bar.append(mini('Stop the check',`Stop checking ${account.handle}'s exit`,async()=>{
+        const held=busy('Stopping the check…');
+        try{
+          const r=await post('/api/account/exit/stop',{});
+          if(!r.ok){say(r.error||'could not stop it',true);held.fail(r.error);return}
+          await loadPorts();
+          held.done('Check stopped — nothing was stored');
+        }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+      },'danger'));
+    }else if(exit){
+      bar.append(mini('Remove the exit',`Remove ${account.handle}'s exit`,async()=>{
+        if(!confirm(`Remove ${account.handle}'s exit?\n\n`
+          +`The address ${exit.pinnedExitIp||exit.host} and its stored password are forgotten, and this `
+          +'account goes back to using this computer\'s own connection.\n\n'
+          +'The record of what its exit actually was is kept.'))return;
+        const held=busy('Removing the exit…');
+        try{
+          const r=await post('/api/account/exit/remove',{handle:account.handle});
+          if(!r.ok){say(r.error||'could not remove it',true);held.fail(r.error);return}
+          await loadPorts();
+          held.done('Exit removed');
+        }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+      },'danger'));
+    }else if(!busyElsewhere){
+      bar.append(mini('Add an exit',`Give ${account.handle} its own exit address`,()=>{
+        bar.dataset.editing='1';
+        bar.textContent='';
+
+        const field=(label,type,value,width)=>{
+          const i=el('input');
+          i.type=type; i.value=value||'';
+          i.placeholder=label;
+          i.setAttribute('aria-label',`${label} for ${account.handle}'s exit`);
+          i.style.cssText=`width:${width};font:inherit;font-size:.78rem;padding:.35rem .5rem;border-radius:8px;`
+            +'border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink);margin:0 .3rem .3rem 0';
+          return i;
+        };
+        const host=field('address','text','','9rem');
+        const port=field('port','text','','4.5rem');
+        const user=field('username','text','','8rem');
+        /* type=password so it is not shoulder-read, and it is never sent back by any endpoint. */
+        const pass=field('password','password','','8rem');
+        const country=field('country','text','US','3.5rem');
+        const region=field('region (e.g. New York)','text','','10rem');
+
+        const go_=async(quick)=>{
+          const held=busy(quick?'Starting a quick check…':'Starting the check…');
+          try{
+            const r=await post('/api/account/exit',{
+              handle:account.handle,host:host.value.trim(),port:Number(port.value),
+              username:user.value,password:pass.value,
+              country:country.value.trim(),region:region.value.trim(),quick:!!quick
+            });
+            if(!r.ok){say(r.error||'the exit could not be checked',true);held.fail(r.error);return}
+            /* Cleared the instant it is sent. It lives in the vault from here, and there is no
+               reason for it to sit in a DOM node for the next six hours. */
+            pass.value='';
+            bar.dataset.editing='0';
+            await loadPorts();
+            held.done(quick?'Quick check running':'Checking — this takes about six hours');
+          }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+        };
+
+        const note=el('div','tiny');
+        note.style.cssText='margin:.15rem 0 .4rem;opacity:.8;line-height:1.5';
+        note.innerHTML='Nothing is stored until every check passes. The full check takes about '
+          +'<b>six hours</b> — an address that stays put is the one thing a rented address has and '
+          +'a rotating pool does not, and one look cannot tell them apart. A quick check is a smoke '
+          +'test only: it is <b>not</b> enough to sign an account in on.';
+
+        bar.append(note,host,port,user,pass,country,region,
+          mini('Check and save',`Check ${account.handle}'s exit for six hours and save it if it passes`,()=>go_(false),'act'),
+          mini('Quick check',`Take one sample of ${account.handle}'s exit`,()=>go_(true)),
+          mini('Cancel',`Cancel adding an exit for ${account.handle}`,()=>{bar.dataset.editing='0';paintPorts()}));
+        host.focus();
+      },'act'));
+    }
   }
 
   bar.append(mini('Change port',`Change port for ${account.handle}`,()=>{

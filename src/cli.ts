@@ -8,6 +8,7 @@
 import { login } from './commands/login.js';
 import { operators } from './commands/operators.js';
 import { vault } from './commands/vault.js';
+import { proxy } from './commands/proxy.js';
 import { accounts } from './commands/accounts.js';
 import { sources } from './commands/sources.js';
 import { probeKarma } from './probe-karma.js';
@@ -52,6 +53,8 @@ redbot — Reddit engagement assistant
     redbot vault [list|check]    what secrets are stored, encrypted, in the database
     redbot vault set <name>      store one — piped in, never typed as an argument
     redbot vault rm <name>       remove one
+    redbot proxy vet             check an exit address before an account signs in through it
+                                 (proxy read from REDBOT_PROXY_HOST/PORT/USER/PASS)
     redbot session [--kind short|medium] [--sub <name>]
                                  one human-shaped browsing session (reads only)
     redbot read <subreddit>      collect threads from a subreddit
@@ -244,6 +247,21 @@ async function main(): Promise<number> {
      * operator so two people on one machine can hold different keys under the same name.
      */
     case 'vault':   return vault(positional[0], positional[1], flagValue('scope'));
+    /**
+     * `redbot proxy vet` — check an exit address BEFORE an account signs in through it.
+     *
+     * The proxy credential comes from the environment rather than from a flag, so there is no
+     * `--pass` to read here: a password in a command line lands in shell history and in the
+     * process list. See src/commands/proxy.ts.
+     */
+    case 'proxy':   return proxy(positional[0], {
+      handle: positional[1],
+      samples: flagValue('samples'),
+      hours: flagValue('hours'),
+      country: flagValue('country'),
+      region: flagValue('region'),
+      quick: flags.has('--quick')
+    });
     /**
      * The product console's "Check it worked" button spawns `dist/cli.js probe-karma`.
      * Without this case it answered "Unknown command" and step 3 of the wizard was dead.
