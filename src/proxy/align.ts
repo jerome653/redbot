@@ -22,8 +22,11 @@
  *   CDP Emulation.setLocaleOverride                  MOVES Intl ONLY — navigator.language does
  *                                                    NOT follow it (2026-08-04, Chrome 150.0.7871.187:
  *                                                    de-DE/fr-FR/en-GB each left navigator.language
- *                                                    at en-US while Intl followed every time)
- *   CDP Network.setUserAgentOverride acceptLanguage  MOVES navigator.language and .languages
+ *                                                    at en-US while Intl followed every time;
+ *                                                    reproduced independently on Chrome 151.0.7922.72)
+ *   CDP Emulation.setUserAgentOverride               MOVES navigator.language, navigator.languages
+ *     with acceptLanguage                            and the Accept-Language header — and does NOT
+ *                                                    move Intl. So BOTH are sent; see `cover`.
  *   context.on('page') hook, human types a URL       PROTECTED
  *   context.on('page') hook, window.open (0 latency) PROTECTED — the feared race did not occur
  *
@@ -234,7 +237,28 @@ export async function alignBrowser(opts: {
     try {
       const cdp = await context.newCDPSession(page);
       await cdp.send('Emulation.setTimezoneOverride', { timezoneId: opts.timezone });
-      if (opts.locale) await cdp.send('Emulation.setLocaleOverride', { locale: opts.locale });
+      if (opts.locale) {
+        /**
+         * BOTH CALLS, because they move DIFFERENT properties and neither moves the other's.
+         *
+         * `setLocaleOverride` was here alone and was described as the route to navigator.language.
+         * It is not — measured twice, independently, on Chrome 150.0.7871.187 and 151.0.7922.72:
+         * it moves `Intl` (dates, numbers, collation) and leaves navigator.language untouched.
+         * `setUserAgentOverride` with `acceptLanguage` is what moves navigator.language,
+         * navigator.languages and the Accept-Language header — and it leaves `Intl` alone.
+         *
+         * A US address announcing en-PH is the contradiction this module exists to remove, so
+         * sending only one of these left half the job undone in the half nobody was looking at.
+         *
+         * The user-agent is handed straight back unchanged: this call REQUIRES a userAgent, and
+         * inventing one here would forge a second identity signal to fix a language one.
+         */
+        await cdp.send('Emulation.setLocaleOverride', { locale: opts.locale });
+        const ua = await page.evaluate(() => navigator.userAgent);
+        await cdp.send('Emulation.setUserAgentOverride', {
+          userAgent: ua, acceptLanguage: opts.locale
+        });
+      }
       pagesAligned++;
     } catch {
       /* A page that closed mid-flight is the ordinary case here and not a failure. A page that

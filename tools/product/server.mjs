@@ -1911,11 +1911,13 @@ async function coverProxiedBrowser(endpoint, account, exit) {
        * reads. Overriding to de-DE, fr-FR and en-GB each left `navigator.language` at en-US while
        * `Intl.NumberFormat().resolvedOptions().locale` followed the override every time.
        *
-       * So this is kept for what it does — dates, numbers and collation agreeing with the exit's
-       * region rather than the operator's — and it is NOT the language alignment D-5 asks for.
-       * `Network.setUserAgentOverride({ acceptLanguage })` is what moves navigator.language;
-       * measured to work, deliberately not wired up here, because it is a separate decision from
-       * the timezone this call rides along with.
+       * So one call was never enough. `align.ts` now sends BOTH: `setLocaleOverride` for what it
+       * genuinely buys — dates, numbers and collation agreeing with the exit's region rather than
+       * the operator's — and `setUserAgentOverride({ acceptLanguage })` for navigator.language,
+       * navigator.languages and the Accept-Language header, which is the property D-5 is about.
+       *
+       * One value feeds both, so the two cannot drift apart into a browser formatting dates for
+       * one country while announcing the language of another.
        */
       locale: exit.proxy.country ? `en-${exit.proxy.country}` : null,
       openUrl: 'https://www.reddit.com/login'
