@@ -3214,6 +3214,7 @@ function paintPorts(){
     if(s&&s.state!=='free'&&s.state!=='running'){
       node.line.innerHTML+=`<div style="margin-top:.25rem;color:var(--ember)">${esc(s.detail)}</div>`;
     }
+    node.line.innerHTML+=proxyLocationLine(handle);
     node.line.innerHTML+=exitLine(handle,s);
     paintPortBar(node,s);
   });
@@ -3251,6 +3252,60 @@ function paintPorts(){
  *
  * The credential is never rendered: the payload does not carry it (see /api/ports).
  */
+/**
+ * `proxy: Los Angeles, US · 191.96.254.138` — one line, on every account, always present.
+ *
+ * WHY IT IS SEPARATE FROM `exitLine` BELOW. exitLine explains the SITUATION: checking, un-vetted,
+ * stranded, drifted, and what to do about each. Useful, and several lines long. This answers the
+ * one question asked most often and answers it in the same shape every time: which address is this
+ * account on. A reader scanning five accounts should not have to parse five different sentences to
+ * compare five locations.
+ *
+ * It never renders empty. "no proxy" and "unknown" are answers and are stated as such — a blank
+ * where a location belongs reads as "fine", which is exactly the wrong default for this question.
+ *
+ * The posture comes from the SERVER (`/api/ports` -> `postures`), computed by the same
+ * `exitPosture()` the header chip uses, so the two can never disagree about one account.
+ */
+function proxyLocationLine(handle){
+  const post=PORTS&&PORTS.postures?PORTS.postures[String(handle).toLowerCase()]:null;
+  if(!post)return '';
+
+  /**
+   * THE LOCATION AND ITS STATE ARE ONE SENTENCE, and only `live` is green.
+   *
+   * The first cut of this line painted `ready` green with the address next to it. `ready` means
+   * the address has been PROVEN and nothing is flowing through it yet — the relay starts with the
+   * browser. A green address is read as "you are on this address", so that cut said the account was
+   * somewhere it was not. Same wrong-reassurance shape as the "all connected" chip over an empty
+   * fleet, one screen away, and it was written the same morning.
+   *
+   * So: green is reserved for `live`, which is the only state backed by an address the world
+   * actually answered from. Everything else is stated with what is missing.
+   */
+  const where=post.place
+    ? esc(post.place)+(post.ip?` <span style="opacity:.65">· ${esc(post.ip)}</span>`:'')
+    : (post.ip?esc(post.ip):'');
+
+  let colour='ember', text;
+  if(post.state==='live'){ colour='jade'; text=where+' <span style="opacity:.75">— live</span>'; }
+  else if(post.state==='ready'){ colour='amber';
+    text=where+' <span style="opacity:.75">— proven, not carrying traffic yet</span>'; }
+  else if(post.state==='changed'){
+    text=where+' <span style="opacity:.9">— CHANGED, not the vetted address</span>'; }
+  else if(post.state==='stranded'){
+    text=where+' <span style="opacity:.9">— relay down, this browser can load nothing</span>'; }
+  else if(post.state==='unvetted'){
+    text=(where||'configured')+' <span style="opacity:.9">— never checked, do not sign in through it</span>'; }
+  else if(post.state==='unknown'){ text='unknown — the record could not be read'; }
+  else { text='none — this computer’s own connection'; }
+
+  return `<div class="proxy-location" style="margin-top:.35rem;font-family:var(--mono,monospace);font-size:.78rem">`+
+    `<span style="opacity:.6">proxy:</span> `+
+    `<span style="color:var(--${colour})">${text}</span>`+
+    `</div>`;
+}
+
 function exitLine(handle,portStatus){
   if(!PORTS||PORTS.proxies===null||PORTS.proxies===undefined)return '';
   const p=(PORTS.proxies||[]).find(x=>x&&x.handle===handle);
@@ -6083,17 +6138,55 @@ async function pulseCheck(){
     const upBefore=was&&Array.isArray(was.browsers)&&was.browsers.length&&was.browsers.every(b=>b.browserUp);
     if(was&&upNow!==upBefore){ await loadSetup(); paintBanner(); setupBadge(); }
 
+    /**
+     * "Connected" without "connected FROM WHERE" is half a fact, and it is the half that reads as
+     * safe. The chip now carries the exit beside the state, so a green badge can never be read as
+     * "and therefore protected" — an account on this computer's own address says `no proxy` right
+     * there, in the place the operator is already looking.
+     */
+    const exitSummary=(browsers)=>{
+      const list=Array.isArray(browsers)?browsers.filter(b=>b&&b.exit):[];
+      if(!list.length)return '';
+      const st=(s)=>list.filter(b=>b.exit.state===s).length;
+      /* Loudest first: a moved address outranks everything, and an unreadable record outranks a
+         confident summary — it is the absence of an answer, not an answer. */
+      if(st('changed'))return 'exit CHANGED';
+      if(st('unknown'))return 'exit unknown';
+      if(st('stranded'))return 'exit down';
+      const proxied=list.filter(b=>b.exit.state==='live'||b.exit.state==='ready');
+      if(!proxied.length)return 'no proxy';
+      if(proxied.length<list.length)return `${proxied.length} of ${list.length} proxied`;
+      const places=[...new Set(proxied.map(b=>b.exit.place).filter(Boolean))];
+      if(places.length===1)return places[0];
+      if(places.length>1)return `${places.length} exits`;
+      return 'proxied';
+    };
+    const where=exitSummary(p.browsers);
+
     if(p.running){
-      chip.textContent=`running ${p.running}`;
+      chip.textContent=`running ${p.running}`+(where?` · ${where}`:'');
       chip.style.cssText='color:var(--amber);border-color:var(--amber)';
     } else if(p.healthy){
-      chip.textContent='all connected';
+      chip.textContent='all connected'+(where?` · ${where}`:'');
       chip.style.cssText='color:var(--jade);border-color:var(--jade)';
+    } else if(!(p.browsers||[]).length){
+      /* Named rather than counted. "1 problem" over an install that has never had an account sends
+         you looking for a fault; "no accounts" tells you it is not set up yet, which is the truth
+         and matches the setup banner instead of competing with it. */
+      chip.textContent='no accounts';
+      chip.style.cssText='color:var(--ember);border-color:var(--ember)';
     } else {
-      chip.textContent=`${p.problems.length} problem${p.problems.length===1?'':'s'}`;
+      chip.textContent=`${p.problems.length} problem${p.problems.length===1?'':'s'}`+(where?` · ${where}`:'');
       chip.style.cssText='color:var(--ember);border-color:var(--ember)';
     }
-    chip.title=p.problems.length?p.problems.join('\n'):'Every account browser is answering.';
+    /* The tooltip names every account's exit individually — the chip can only ever summarise, and
+       with more than one account the summary is the thing you would want to expand. */
+    const exitLines=(p.browsers||[]).filter(b=>b&&b.exit)
+      .map(b=>`${b.handle}: ${b.exit.word}${b.exit.place?` — ${b.exit.place}`:''}${b.exit.ip?` (${b.exit.ip})`:''}`);
+    chip.title=[
+      ...(p.problems.length?p.problems:['Every account browser is answering.']),
+      ...(exitLines.length?['','Exits:',...exitLines]:[])
+    ].join('\n');
     /* tell me once when it changes, not every fifteen seconds */
     if(was&&was.healthy&&!p.healthy)toast(p.problems[0]);
     if(was&&!was.healthy&&p.healthy)toast('Everything reconnected');

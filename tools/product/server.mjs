@@ -47,6 +47,8 @@ import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, appendF
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { exitPosture } from './exit-posture.mjs';
+import { fleetProblems } from './fleet-posture.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -2983,25 +2985,38 @@ const server = createServer((req, res) => {
        * than a pass. See src/ports.ts.
        */
       const statuses = await portStatusImpl(accts);
+
+      /**
+       * The exit travels WITH the status, so no surface can render a green "connected" without
+       * also being able to say where that connection leaves from. `undefined` is deliberate and
+       * load-bearing: it means the record could not be read, which `exitPosture` renders as
+       * "unknown" rather than as "no proxy". Reporting no-proxy for an unreadable record would
+       * tell the operator they are on their own address, which might be false.
+       */
+      let proxyRows;
+      try { proxyRows = proxiesApi ? await proxiesApi() : undefined; } catch { proxyRows = undefined; }
+      const relayStates = relayApi ? (relayApi.states() || []) : [];
+      const byHandle = (rows, h) =>
+        (rows || []).find((r) => r && String(r.handle).toLowerCase() === String(h).toLowerCase());
+
       return statuses.map((s) => ({
         handle: s.handle, port: s.port,
         browserUp: s.ours,
         state: s.state,
         detail: s.detail,
-        profileOnDisk: s.profileOnDisk
+        profileOnDisk: s.profileOnDisk,
+        exit: exitPosture(
+          proxyRows === undefined ? undefined : (byHandle(proxyRows, s.handle) || null),
+          byHandle(relayStates, s.handle) || null,
+          { browserUp: s.ours }
+        )
       }));
     })().then((browsers) => {
-      const problems = [];
-      for (const b of browsers) {
-        /* Ownership is checked BEFORE the folder. A brand-new account has no sign-in folder
-           until its Chrome has run once, so testing the folder first let "browser folder is
-           missing" mask "port is held by something else" — hiding the one condition here that
-           makes redbot act on the wrong browser rather than simply not act. */
-        if (b.state === 'foreign') problems.push(`${b.handle}: port ${b.port} is held by something else`);
-        else if (b.state === 'unknown') problems.push(`${b.handle}: what is on port ${b.port} could not be identified`);
-        else if (!b.profileOnDisk) problems.push(`${b.handle}: its browser folder is missing`);
-        else if (!b.browserUp) problems.push(`${b.handle}: browser is not open`);
-      }
+      /* Derived in ONE tested place, and that place knows about the empty fleet. While this loop
+         lived inline here, zero accounts meant zero iterations meant zero problems meant
+         `healthy: true` — and the console painted "all connected" in green directly above its own
+         banner listing the two things still missing. See tools/product/fleet-posture.mjs. */
+      const problems = fleetProblems(browsers);
       if (!existsSync(join(ROOT, 'dist', 'cli.js'))) problems.push('redbot is not built — run npm run build');
       send(200, JSON.stringify({
         at: new Date().toISOString(), running, browsers, problems,
@@ -3105,8 +3120,27 @@ const server = createServer((req, res) => {
          state and not a rendering detail. `pagesAligned` is what makes a hook that never fired
          visible rather than silent. */
       const alignments = alignApi ? alignApi.states() : null;
+      /**
+       * The per-account posture, computed HERE so the Accounts card and the header chip cannot
+       * disagree about the same account. Keyed by lower-cased handle, the canonical account key.
+       *
+       * `proxies === null` means the record could not be read — that is passed through as
+       * `undefined` so `exitPosture` returns `unknown` rather than the flat lie of "no proxy".
+       */
+      const postures = {};
+      for (const p of (ports || [])) {
+        const h = String(p.handle || '');
+        if (!h) continue;
+        const key = h.toLowerCase();
+        const rec = proxies === null || proxies === undefined
+          ? undefined
+          : ((proxies || []).find((x) => x && String(x.handle).toLowerCase() === key) || null);
+        const rel = (relays || []).find((x) => x && String(x.handle).toLowerCase() === key) || null;
+        postures[key] = exitPosture(rec, rel, { browserUp: p.state === 'running' || p.ours === true });
+      }
+
       return { at: new Date().toISOString(), machine: machineImpl(), ports, suggestion, boundHere,
-               proxies, relays, alignments };
+               proxies, relays, alignments, postures };
     })()
       .then((payload) => send(200, JSON.stringify(payload)))
       .catch((e) => send(500, JSON.stringify({ error: String(e && e.message || e) })));
