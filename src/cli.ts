@@ -66,7 +66,7 @@ redbot — Reddit engagement assistant
                                  add only the ones you picked as sources
 
   Deciding
-    redbot opportunity [--force] [--limit N]
+    redbot opportunity [--all] [--force] [--limit N] [--only <id>]
                                  what each discussion is missing, then contribute-or-skip
     redbot select [--all]        rank assessed threads against the pilot criteria
     redbot draft [threadId]      draft against a gap; the model may decline
@@ -157,7 +157,21 @@ export const VALUE_FLAGS = new Set([
   // `redbot vault set <name> --scope <operator>`. This one currently works either way, because
   // `vault` reads its positionals before the flag — but that is an accident of argument order,
   // not a property of the parser, and the next command to take --scope would not be so lucky.
-  'scope'
+  'scope',
+  /**
+   * `redbot opportunity --only <id>`, and every flag `proxy vet` documents.
+   *
+   * MEASURED 2026-08-11, and this one reaches a WRITE. `redbot proxy vet --country US` printed
+   * "The check passed but US could not be bound to it: \"US\" is not a configured account" —
+   * because `flagValue()` reads the token after `--country` regardless of this set, so the value
+   * applied, while `positional` only drops a token whose predecessor is IN this set. `US` therefore
+   * stayed positional and became the ACCOUNT HANDLE. A handle is what makes `proxy vet` BIND, so
+   * that command's stated guarantee — "with no handle it only reports, nothing is written" — was
+   * defeated by its own documented flags. `--samples 8 --hours 6` would make `8` the handle.
+   *
+   * It failed safe only because no account happens to be named "US". That is luck, not a design.
+   */
+  'only', 'country', 'region', 'samples', 'hours'
 ]);
 
 export interface ParsedArgs {
@@ -307,8 +321,14 @@ async function main(): Promise<number> {
 
     case 'opportunity': {
       const limit = flagValue('limit');
+      const only = flagValue('only');
       return opportunity({
         force: flags.has('--force'),
+        /* `--all` turns the mechanical prefilter OFF for this run. It is separate from `--force`,
+           which means "re-assess threads already assessed" — two different things whose names
+           read alike. Neither touches the publish gates. */
+        all: flags.has('--all'),
+        ...(only ? { only: [only] } : {}),
         ...(limit && /^\d+$/.test(limit) ? { limit: Number(limit) } : {})
       });
     }

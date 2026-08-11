@@ -95,7 +95,7 @@ export function prefilter(
   return { keep, dropped };
 }
 
-export async function opportunity(opts?: { force?: boolean; limit?: number; only?: string[] }): Promise<number> {
+export async function opportunity(opts?: { force?: boolean; limit?: number; only?: string[]; all?: boolean }): Promise<number> {
   say.head('redbot opportunity');
 
   const threads = await loadThreads();
@@ -117,12 +117,43 @@ export async function opportunity(opts?: { force?: boolean; limit?: number; only
     allowed = allowedSubreddits(selectedAccount());
   } catch { /* no account resolvable — the fallback above is the honest answer */ }
 
-  /* `--only <id>` names threads the operator asked for by hand. They skip the mechanical rules;
-     see prefilter() for why that is a decision the person is entitled to make. */
-  const force = new Set(opts?.only ?? []);
+  /**
+   * `--only <id>` names threads the operator asked for by hand. They skip the mechanical rules;
+   * see prefilter() for why that is a decision the person is entitled to make.
+   *
+   * `--all` extends the same entitlement to the whole batch. It exists because the prefilter can
+   * legitimately drop EVERYTHING — a /hot feed on a slow subreddit is mostly older than the 72h
+   * ceiling — and "0 pass, 20 dropped" leaves the operator unable to see what was collected at
+   * all. There was no blanket override before: `--force` means "re-assess threads already
+   * assessed", which is a different thing that reads like this one.
+   *
+   * WHAT IT DOES NOT TOUCH. The 20 publish gates, the health state, the disclosure linter and
+   * certification are all downstream of here and are untouched by it. This decides what is
+   * LOOKED AT, not what may be said in public — those are separate, and only the first is a
+   * matter of taste.
+   *
+   * Nothing is hidden by it: every thread that WOULD have been dropped is still reported, with
+   * the reason, so relaxing the filter costs visibility of nothing.
+   */
+  const forcedAll = opts?.all === true;
+  const force = new Set(forcedAll ? threads.map((t) => t.id) : (opts?.only ?? []));
   const { keep, dropped } = prefilter(threads, { allowed, force });
-  if (force.size) say.step(`${force.size} thread(s) forced past the prefilter by request`);
-  say.step(`${threads.length} collected · ${keep.length} pass the mechanical prefilter · ${dropped.length} dropped`);
+
+  if (forcedAll) {
+    /* Re-run the rules purely to SAY what they would have done. The operator asked to see the
+       threads, not to be kept ignorant of why they are usually skipped. */
+    const { dropped: wouldDrop } = prefilter(threads, { allowed });
+    say.step(`${threads.length} collected · prefilter OFF (--all) · ${keep.length} kept`);
+    if (wouldDrop.length) {
+      const byKind = new Map<string, number>();
+      for (const d of wouldDrop) byKind.set(d.kind, (byKind.get(d.kind) ?? 0) + 1);
+      say.step(`   ${wouldDrop.length} would normally have been dropped: ` +
+        [...byKind.entries()].map(([k, n]) => `${n} ${k}`).join(' · '));
+    }
+  } else {
+    if (force.size) say.step(`${force.size} thread(s) forced past the prefilter by request`);
+    say.step(`${threads.length} collected · ${keep.length} pass the mechanical prefilter · ${dropped.length} dropped`);
+  }
 
   /**
    * Written down, not just printed.

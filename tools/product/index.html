@@ -2572,6 +2572,61 @@ function collecting(root){
          and an exact-key lookup read 0 while 16 threads sat in the table below. */
       const n=kind==='sub'?((s.collectedByKey||{})[String(id).toLowerCase()]||0):null;
       row.append(el('div','src-n',n==null?'':`${n} on file`));
+
+      /**
+       * EDIT IN PLACE.
+       *
+       * Before this, changing a keyphrase meant remove-then-add, and `addSource` hard-codes
+       * `why` to "Added from the console." when none is given — so fixing one typo silently
+       * discarded the reason you wrote for watching it. The reason is the only record of intent
+       * a source carries; a rename is not a change of intent.
+       *
+       * Relevance is deliberately not checked, here or on the server. What is worth watching is
+       * the operator's call — the prefilter and the competence check decide what happens to what
+       * comes back, later and visibly.
+       */
+      const editBtn=el('button','mini');
+      editBtn.type='button';
+      editBtn.textContent='Edit';
+      editBtn.title='Change the text or the reason. Anything is allowed — relevance is not checked here.';
+      editBtn.style.cssText='padding:.3rem .7rem;font-size:.75rem';
+      editBtn.onclick=()=>{
+        const form=el('div');
+        form.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.4rem 0 .6rem 2.4rem';
+        const inp=el('input');
+        inp.value=id;
+        inp.setAttribute('aria-label',kind==='sub'?'Subreddit name':'Search phrase');
+        inp.style.cssText='flex:1;min-width:200px;font:inherit;font-size:.85rem;padding:.45rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+        const whyInp=el('input');
+        whyInp.value=descOf(it)||'';
+        whyInp.placeholder='why you watch it';
+        whyInp.setAttribute('aria-label','Reason');
+        whyInp.style.cssText=inp.style.cssText+';flex:1.2';
+        const save=el('button','mini lg act');save.type='button';save.textContent='Save';
+        const cancel=el('button','mini');cancel.type='button';cancel.textContent='Cancel';
+        cancel.onclick=()=>{form.remove();editBtn.disabled=false};
+        save.onclick=async()=>{
+          const next=inp.value.trim();
+          if(!next){toast('A source needs a value');return}
+          save.disabled=true;
+          const held=busy(`Saving ${next}…`);
+          try{
+            const r=await fetch('/api/sources/edit',{method:'POST',headers:{'content-type':'application/json'},
+              body:JSON.stringify({kind:kind==='sub'?'subreddit':'search',value:id,newValue:next,why:whyInp.value})}).then(x=>x.json());
+            if(!r.ok){held.fail(r.error);save.disabled=false;return}
+            held.update('Reloading…');
+            await load();
+            held.done('Saved');
+            openDialog('Where redbot looks','sources',collecting);
+          }catch(e){held.fail(String(e&&e.message||e));save.disabled=false}
+        };
+        form.append(inp,whyInp,save,cancel);
+        editBtn.disabled=true;
+        row.after(form);
+        inp.focus();
+        inp.select();
+      };
+      row.append(editBtn);
       b.append(row);
 
       /**

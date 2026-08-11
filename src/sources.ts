@@ -193,6 +193,76 @@ export async function addSource(kind: SourceKind, rawValue: string, why?: string
   return { ok: true, kind, value, storedIn: 'database' };
 }
 
+/**
+ * Change a source in place — its value, its reason, or both.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS NOT "remove then add".
+ *
+ * That was the only route before, and it is lossy in a way that is easy to miss: `addSource`
+ * hard-codes `why` to "Added from the console." when none is given, so fixing a typo in a
+ * keyphrase silently discarded the operator's stated reason for watching it. The reason is the
+ * only record of INTENT a source carries — `sources.json` calls itself "configuration a person
+ * writes" — and a rename is not a change of intent.
+ *
+ * It also fails badly halfway: a remove that succeeds followed by an add that is rejected (name
+ * shape, duplicate, database gone) leaves the source deleted and nothing put back. So the new
+ * value is validated to the SAME rules as `addSource` BEFORE anything is deleted, and the write
+ * is a delete+upsert only once the input is known to be acceptable.
+ *
+ * Relevance is deliberately not a consideration here, exactly as it is not in `addSource`. What
+ * is worth watching is the operator's call; the prefilter and the competence check decide what
+ * happens to what comes back, and they do it later and visibly.
+ */
+export async function editSource(
+  kind: SourceKind,
+  rawOldValue: string,
+  rawNewValue: string,
+  why?: string
+): Promise<MutationResult> {
+  const oldValue = String(rawOldValue ?? '').trim().replace(/^\/?r\//i, '');
+  const newValue = String(rawNewValue ?? '').trim().replace(/^\/?r\//i, '');
+  if (!oldValue) return { ok: false, error: 'Nothing to change.' };
+  if (!newValue) return { ok: false, error: 'A source needs a value.' };
+  if (kind === 'subreddit' && !SUBREDDIT_RE.test(newValue)) {
+    return { ok: false, error: 'A subreddit name is 2–21 characters: letters, numbers or underscore.' };
+  }
+  if (newValue.length > 200) return { ok: false, error: 'That is too long to be a source.' };
+
+  try { loadSourcesFile(); }
+  catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+
+  const reason = dbUnavailableReason();
+  if (reason) return { ok: false, error: `The database is not available, so this cannot be recorded.\n${reason}` };
+
+  const existing = await getSource(getPool(), kind, oldValue);
+  if (!existing) return { ok: false, error: 'Not on the list.' };
+
+  /* Renaming onto a DIFFERENT source that already exists would silently merge two entries into
+     one. Changing only the reason — same value, different `why` — is a legitimate edit and is
+     allowed through. */
+  const renaming = newValue.toLowerCase() !== oldValue.toLowerCase();
+  if (renaming) {
+    const clash = await getSource(getPool(), kind, newValue);
+    if (clash) return { ok: false, error: `${newValue} is already on the list.` };
+  }
+
+  /* The reason survives a rename unless a new one was given. Losing it is the defect this
+     function exists to prevent. */
+  const record: SourceRecord = {
+    kind,
+    value: newValue,
+    why: why?.trim() || existing.why || 'Added from the console.',
+    enabled: existing.enabled
+  };
+
+  if (renaming) await deleteSource(getPool(), kind, oldValue);
+  await upsertSources(getPool(), [record]);
+
+  writeSeedFile(await loadSourcesFromDb(getPool()));
+  return { ok: true, kind, value: newValue, storedIn: 'database' };
+}
+
 /** Remove a source from the record, and from the seed file with it. */
 export async function removeSource(kind: SourceKind, rawValue: string): Promise<MutationResult> {
   const value = String(rawValue ?? '').trim();

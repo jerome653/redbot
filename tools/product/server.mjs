@@ -2700,6 +2700,20 @@ const server = createServer((req, res) => {
         const r = await sourcesApi.addSource(kind, String(body.value || ''), String(body.why || ''));
         return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
+      /* Change one in place. Not remove-then-add: that route discards the operator's stated
+         reason (addSource defaults `why`), and a rejected add after a successful remove leaves
+         the source gone with nothing put back. Relevance is not checked here for the same reason
+         it is not checked on add — what is worth watching is the operator's call. */
+      if (url.pathname === '/api/sources/edit') {
+        const kind = body.kind === 'search' ? 'search' : 'subreddit';
+        const r = await sourcesApi.editSource(
+          kind,
+          String(body.value || ''),
+          String(body.newValue ?? body.value ?? ''),
+          body.why === undefined ? undefined : String(body.why)
+        );
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
       if (url.pathname === '/api/sources/remove') {
         const kind = body.kind === 'search' ? 'search' : 'subreddit';
         const r = await sourcesApi.removeSource(kind, String(body.value || ''));
