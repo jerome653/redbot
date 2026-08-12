@@ -130,6 +130,31 @@ export async function threadsBySubreddit(
   return { collected, collectedByKey };
 }
 
+/**
+ * How many threads each saved search has actually put on file.
+ *
+ * The subreddit tally above exists because a source reading "0 on file" beside sixteen of its
+ * own threads reported the collector as having done nothing. A SEARCH row had no count at all,
+ * which is the same question left unanswered — and it was the row where it mattered most:
+ * until 2026-08-12 the console could only run the preview half of `search`, so every search
+ * source collected exactly nothing and there was no figure anywhere that said so.
+ *
+ * Keyed lower-cased only, with no second casing. A subreddit has a canonical name that Reddit
+ * owns; a query is free text a person typed, so there is nothing to preserve the casing of.
+ */
+export async function threadsByQuery(db: Db): Promise<Record<string, number>> {
+  const r = await db.query<{ query: string | null; n: number }>(
+    `SELECT query, count(*) AS n FROM threads WHERE query IS NOT NULL AND query <> '' GROUP BY query`
+  );
+  const byQuery: Record<string, number> = {};
+  for (const row of r.rows) {
+    const key = String(row.query ?? '').trim().toLowerCase();
+    if (!key) continue;
+    byQuery[key] = (byQuery[key] ?? 0) + Number(row.n);
+  }
+  return byQuery;
+}
+
 export interface ArgusSummary {
   runs: number;
   draftsChecked: number;

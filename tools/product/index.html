@@ -2350,6 +2350,28 @@ function doAction(job,opts){
   const canStop=!(opts&&opts.stoppable===false);
   return async(bt)=>{
     /**
+     * A CLICK EVENT IS NOT A BUTTON, AND THAT MISTAKE MUST NOT COST THE SESSION.
+     *
+     * `pick.onclick=doAction(...)` reads exactly like the correct `bt.onclick=()=>job(bt)` and
+     * is wrong in a way nothing catches: onclick hands its handler a MouseEvent, so `bt.style`
+     * was undefined and `bt.style.opacity='.6'` threw — one line AFTER `BUSY=true`. The lock
+     * was taken and never released, the `finally` that releases it had not been entered yet,
+     * and every button in the console refused for the rest of the session with "another job is
+     * still running". Nothing on any screen changed again until the page was reloaded, which is
+     * indistinguishable from an app that has stopped working.
+     *
+     * So: recover the element the click was bound to, and take the lock only once there is a
+     * real one. The guard is deliberately BEFORE the BUSY assignment — the failure was never
+     * that this threw, it was WHERE it threw.
+     */
+    if(bt&&typeof bt.preventDefault==='function')bt=bt.currentTarget||bt.target;
+    if(!bt||!bt.style||!bt.parentElement){
+      /* Loud, because this is a wiring fault in the console itself and a silent no-op button
+         is what sends a person looking for a fault in the engine. */
+      toast('That button is wired wrong — nothing ran. Reload the page and report it.',5000,{now:true});
+      return;
+    }
+    /**
      * Refusing a second job is right. Refusing it anonymously is not.
      *
      * "Something else is still running" named nothing and timed nothing, so the honest reading
@@ -2549,6 +2571,30 @@ function collecting(root){
     `<span class="hint">${s.maxPerRun?esc(s.maxPerRun+' threads per run'):''}</span>`));
   const b=el('div','collect-b');
 
+  /**
+   * THE COUNTS IN THIS DIALOG DID NOT MOVE WHEN THE COLLECT THEY STARTED FINISHED.
+   *
+   * Collecting is started from inside this dialog, and it is modal. `doAction` reloads the
+   * state and repaints the screen UNDERNEATH — but this body is an overlay that nothing
+   * rebuilds, so "15 on file" stayed 15 while the Threads screen behind the scrim had already
+   * gone to 30. The one place a person is looking when they press Collect is the one place
+   * that did not update, which reads exactly like an app that has stopped refreshing.
+   *
+   * Rebuilt in place rather than reopened: `doAction` hangs the run-log off the pressed
+   * button's parent, which IS this body, so reopening the dialog destroys the log of the run
+   * that just finished — a fix already tried once and reverted for that reason.
+   */
+  const countCells=[];
+  const refreshCounts=()=>{
+    const c=S.collect||{};
+    for(const {node,kind,id} of countCells){
+      const n=kind==='sub'
+        ? ((c.collectedByKey||{})[String(id).toLowerCase()]||0)
+        : (c.collectedByQuery?(c.collectedByQuery[String(id).trim().toLowerCase()]||0):null);
+      node.textContent=n==null?'':`${n} on file`;
+    }
+  };
+
   const rows=(kind,items,label,nameOf,descOf)=>{
     b.append(el('div','srcgrp',label));
     items.forEach(it=>{
@@ -2570,8 +2616,15 @@ function collecting(root){
       row.append(mid);
       /* Case-insensitive: a source typed as "wordpress" is stored by Reddit as "Wordpress",
          and an exact-key lookup read 0 while 16 threads sat in the table below. */
-      const n=kind==='sub'?((s.collectedByKey||{})[String(id).toLowerCase()]||0):null;
-      row.append(el('div','src-n',n==null?'':`${n} on file`));
+      /* A search gets the same figure now that it can actually collect one. `collectedByQuery`
+         is null when the database could not be asked, and that renders as nothing — a confident
+         "0 on file" over a number nobody looked up is the exact defect this row shipped once. */
+      const n=kind==='sub'
+        ? ((s.collectedByKey||{})[String(id).toLowerCase()]||0)
+        : (s.collectedByQuery?(s.collectedByQuery[String(id).trim().toLowerCase()]||0):null);
+      const nCell=el('div','src-n',n==null?'':`${n} on file`);
+      countCells.push({node:nCell,kind,id});
+      row.append(nCell);
 
       /**
        * EDIT IN PLACE.
@@ -2628,6 +2681,98 @@ function collecting(root){
       };
       row.append(editBtn);
       b.append(row);
+
+      /**
+       * THE SECOND HALF OF A SEARCH — the step this console never had.
+       *
+       * `redbot search "<q>"` PREVIEWS. It reads the listing, opens no thread, writes
+       * data/search-candidates.json and exits 0 saying "Nothing has been collected yet."
+       * `redbot search --commit <picks>` is the half that puts threads in the corpus, and the
+       * console had no way to reach it. So a search source ran, reported Done, and contributed
+       * nothing — measured 2026-08-12: three previews on record, zero commits, zero threads
+       * with source='search', while Threads sat at the same number all day.
+       *
+       * The pick step is NOT a nicety to skip by committing everything. Bulk commit is exactly
+       * how threads seven and eight years old got into the corpus (DEFECT-11), and the corpus is
+       * the only production evidence redbot has. So: preview, show what came back with what the
+       * mechanical checks said about it, and let a person tick.
+       *
+       * Ticked-by-default is `clean` — what raised no mechanical objection. A default is not a
+       * recommendation and the notes stay on screen under every row, including the ticked ones.
+       */
+      if(kind==='q'){
+        const pick=el('div');
+        pick.style.cssText='margin:.1rem 0 .6rem 2.6rem';
+        const list=el('div');
+
+        const renderPicks=(cands,who)=>{
+          list.textContent='';
+          const clean=cands.filter(x=>x.clean).length;
+          list.append(el('div','tiny',esc(
+            `${cands.length} result(s) · ${clean} raised no mechanical objection. Those checks read the TITLE only `+
+            `and are proxies — a good thread with an odd title is flagged, a bad one with a tidy title is not. Read them.`)));
+          const boxes=[];
+          cands.forEach(c=>{
+            const lab=el('label');
+            lab.style.cssText='display:flex;gap:.5rem;align-items:flex-start;padding:.3rem 0;font-size:.8rem;cursor:pointer';
+            const cb=document.createElement('input');
+            cb.type='checkbox';cb.checked=!!c.clean;cb.style.marginTop='.25rem';
+            boxes.push({cb,n:c.n});
+            const mid2=el('div');
+            mid2.append(el('div',null,esc(c.title||'(title not readable)')));
+            if(c.notes&&c.notes.length)mid2.append(el('div','tiny',esc(c.notes.join(' · '))));
+            lab.append(cb,mid2);
+            list.append(lab);
+          });
+          const bar=el('div');bar.style.cssText='padding:.45rem 0';
+          const collectBtn=el('button','mini lg act');
+          collectBtn.type='button';
+          collectBtn.textContent='Collect the ticked ones';
+          const collectJob=doAction(async(say)=>{
+            const picks=boxes.filter(x=>x.cb.checked).map(x=>x.n);
+            if(!picks.length)throw new Error('Nothing is ticked. Tick what is worth collecting, or leave this search alone.');
+            say(`Opening ${picks.length}…`);
+            const r=await runNow({key:'collect-search',picks:picks.join(','),account:who});
+            if(!r.ok)throw new Error(r.error||'collecting did not work');
+            /* Same reason as the batch: this row's own "on file" figure is the thing the click
+               just changed, and it is the figure the person is looking at. */
+            await load();
+            refreshCounts();
+            return `Collected ${picks.length}. They are on Threads — score them to see which are worth answering.`;
+          });
+          collectBtn.onclick=()=>collectJob(collectBtn);
+          bar.append(collectBtn);
+          list.append(bar);
+        };
+
+        const pickBtn=el('button','mini');
+        pickBtn.type='button';
+        pickBtn.textContent='Find & pick';
+        pickBtn.title='Run this search, then choose which results are collected. A search collects nothing until you pick.';
+        pickBtn.style.cssText='padding:.3rem .7rem;font-size:.75rem;border-color:var(--jade);color:var(--jade)';
+        const pickJob=doAction(async(say)=>{
+          const who=collectAcctGet((S.accounts||[]).filter(a=>a&&a.configured&&a.handle));
+          if(!who)throw new Error('No account is set up — a search reads Reddit through an account’s own Chrome.');
+          list.textContent='';
+          say(`Searching “${id}”…`);
+          const r=await runNow({key:'find-search',query:id,account:who});
+          if(!r.ok)throw new Error(r.error||'that search did not work');
+          const c=await fetch('/api/search/candidates').then(x=>x.json())
+            .catch(e=>({ok:false,error:String(e&&e.message||e)}));
+          if(!c.ok)throw new Error(c.error||'the preview could not be read back');
+          if(!c.present||!c.candidates.length)return 'The search returned nothing that looks like a post.';
+          /* One preview file exists at a time and `--commit` reads it by position. If it holds
+             another query, committing row 4 here would collect row 4 of THAT search under this
+             row's name — refuse rather than guess. */
+          if(String(c.query||'').trim().toLowerCase()!==String(id).trim().toLowerCase())
+            throw new Error(`The preview on file is for “${c.query}”, not “${id}”. Run this one on its own, then pick.`);
+          renderPicks(c.candidates,who);
+          return `${c.candidates.length} found — tick what is worth collecting.`;
+        });
+        pickBtn.onclick=()=>pickJob(pickBtn);
+        pick.append(pickBtn,list);
+        b.append(pick);
+      }
 
       /**
        * SAY IT HERE, NOT AFTER A TWO-MINUTE COLLECT.
@@ -2759,6 +2904,19 @@ function collecting(root){
     btns.textContent='';
     const subs=s.subreddits.filter(x=>srcOn('sub',x.name,x.enabled));
     const qs=s.searches.filter(x=>srcOn('q',x.query,x.enabled));
+    /**
+     * A SUBREDDIT IS COLLECTED HERE. A SEARCH IS ONLY LOOKED AT.
+     *
+     * Both still run and the count is unchanged — but they do different things, and the words
+     * now say which. `redbot read` collects. `redbot search` PREVIEWS and collects nothing
+     * until a person picks, which is deliberate (a blanket commit is how threads years old got
+     * into the corpus, DEFECT-11) and which this screen never mentioned: it reported "Done —
+     * looked through 4 places" over a run that had collected from three.
+     *
+     * The preview a batch leaves behind is not what the picker commits from — "Find & pick" on
+     * the row runs its own search first — so it does not matter that several searches overwrite
+     * each other's candidates here.
+     */
     const total=subs.length+qs.length;
     if(!total){note.textContent='Nothing switched on. Turn on at least one source above.';return}
     /* Collecting drives an account's own Chrome, so with none set up there is nothing to
@@ -2787,18 +2945,27 @@ function collecting(root){
         if(!r.ok)throw new Error(r.error||`r/${x.name} did not work`);
       }
       for(const x of qs){
-        say(`Searching “${x.query}”…`);
+        say(`Searching “${x.query}” — showing what is there, collecting nothing…`);
         const r=await runNow({key:'find-search',query:x.query,account:acct});
         if(!r.ok)throw new Error(r.error||'that search did not work');
       }
       say('Working out which are worth answering…');
       const sc=await runNow({key:'score'});
       if(!sc.ok)throw new Error(sc.error||'scoring did not work');
-      return `Done — looked through ${total} place${total===1?'':'s'}.`;
+      /* The numbers on the rows above this button are what the run just changed. Reloaded here
+         rather than left to doAction's own reload afterwards, so they are already right when
+         the "Done" line lands instead of one repaint later. */
+      await load();
+      refreshCounts();
+      /* Two numbers, because two different things happened and one number hid that for good. */
+      return `Done — collected from ${subs.length} subreddit${subs.length===1?'':'s'}.`
+        +(qs.length?` ${qs.length} search${qs.length===1?'':'es'} looked but collected nothing — open one and press “Find & pick” to choose what goes in.`:'');
     });
 
     btns.append(actionButton(`Collect from ${total} source${total===1?'':'s'}`,go));
-    note.innerHTML=`Opens <strong>${esc(acct)}</strong>’s signed-in Chrome, reads up to ${esc(String(s.maxPerRun||15))} threads from each place, then works out which are worth answering. Takes a few minutes. ${esc(s.limitNote||'')}`;
+    note.innerHTML=`Opens <strong>${esc(acct)}</strong>’s signed-in Chrome, reads up to ${esc(String(s.maxPerRun||15))} threads from each place, then works out which are worth answering. Takes a few minutes.`
+      +(qs.length?` A saved search only SHOWS you what it found — nothing from a search is collected until you pick it, on its own row above.`:'')
+      +` ${esc(s.limitNote||'')}`;
   }
   renderRun();
 
@@ -2873,7 +3040,32 @@ function discovery(){
   postBtn.title='Create a post in one of your subreddits — your words, typed SEND to send';
   postBtn.onclick=()=>openDialog('New post','goes to Reddit under your account',(b)=>{
     const subs=((S.collect&&S.collect.subreddits)||[]).filter(x=>x.enabled!==false).map(x=>x.name);
-    b.append(el('div','note','This posts to Reddit as '+esc((S.accounts&&S.accounts[0]&&S.accounts[0].handle)||'this account')+'. It is not drafted for you and it is not fact-checked — a post is your words.'));
+    /**
+     * WHO IT GOES OUT AS — the account a person CHOSE, not whichever one sorts first.
+     *
+     * This dialog named `S.accounts[0]` in its own warning and sent under `S.accounts[0]`, while
+     * Review sends under `sendAcctGet` — the account the operator picked and which is remembered
+     * between sessions. With two accounts configured those are different names, and this is a
+     * publish path: a post under the wrong identity is the one mistake that cannot be taken
+     * back, and it would have been made silently, by a dialog that had already told them which
+     * name it was using.
+     *
+     * Same picker and the same stored choice as Review, deliberately: two send surfaces that
+     * disagree about who is speaking is the defect, not the wording of either.
+     */
+    const sendable=(S.accounts||[]).filter(a=>a&&a.configured&&a.handle);
+    let postAcct=sendAcctGet(sendable);
+    b.append(el('div','note','This posts to Reddit as <strong>'+esc(postAcct||'this account')+'</strong>. It is not drafted for you and it is not fact-checked — a post is your words.'));
+    if(sendable.length>1){
+      const whoRow=el('div','fld');
+      whoRow.append(el('label','','Post as'));
+      const whoSel=el('select','sel');
+      whoSel.setAttribute('aria-label','Which account posts');
+      sendable.forEach(a=>{const o=el('option',null,esc(a.handle));o.value=a.handle;if(a.handle===postAcct)o.selected=true;whoSel.append(o)});
+      whoSel.onchange=()=>{postAcct=whoSel.value;sendAcctSet(postAcct)};
+      whoRow.append(whoSel);
+      b.append(whoRow);
+    }
 
     const subWrap=el('div','fld'); subWrap.append(el('label','','Subreddit'));
     const subIn=el('input'); subIn.type='text'; subIn.placeholder=subs[0]||'WordPress';
@@ -2902,7 +3094,7 @@ function discovery(){
       say('Posting to r/'+subIn.value.trim()+'…');
       const r=await fetch('/api/publish-post',{method:'POST',headers:{'content-type':'application/json'},
         body:JSON.stringify({subreddit:subIn.value.trim(),title:tIn.value.trim(),body:bIn.value,
-                             confirm:cIn.value.trim(),account:(S.accounts&&S.accounts[0]&&S.accounts[0].handle)||undefined})})
+                             confirm:cIn.value.trim(),account:postAcct||undefined})})
         .then(x=>x.json());
       if(!r.ok)throw new Error(r.error||'the post did not go through');
       return 'Posted.';
@@ -2986,12 +3178,25 @@ function discovery(){
         ? `Draft a reply to this thread (scored ${i.score})`
         : `redbot scored this "leave it" (${i.score}) — writing anyway is your call`;
       if(i.verdict!=='contribute')pick.classList.add('warn');
-      pick.onclick=doAction(async say=>{
+      /**
+       * `()=>job(pick)`, NOT `onclick=doAction(...)`.
+       *
+       * doAction returns a function that takes the BUTTON. onclick hands its handler a
+       * MouseEvent, so `bt.style` was undefined and `bt.style.opacity='.6'` threw — one line
+       * AFTER `BUSY=true`. The lock was taken and never released, so every button in the
+       * console refused for the rest of the session ("another job is still running") and the
+       * screens stopped changing. One character of wiring, and the app looked dead.
+       *
+       * Every other call site goes through actionButton, which does this correctly; this row
+       * built its button by hand and was the only place that did.
+       */
+      const writeJob=doAction(async say=>{
         say(`Writing against “${String(i.title||'').slice(0,60)}”…`);
         const r=await runNow({key:'write',threadId:i.threadId});
         if(!r.ok)throw new Error(r.error||'writing did not work');
         return 'Done — it is on the Review screen, waiting for you.';
       });
+      pick.onclick=()=>writeJob(pick);
       cell.textContent='';
       cell.append(pick);
     }
@@ -6225,7 +6430,72 @@ $('#theme').onclick=()=>{
   const dark=(document.documentElement.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';
   document.documentElement.setAttribute('data-theme',dark?'light':'dark');
 };
-$('#reload').onclick=()=>load().then(()=>toast('Refreshed'));
+/**
+ * REFRESH REFRESHES THE ENGINE, NOT ONLY THE PICTURE.
+ *
+ * It used to be `load().then(() => toast('Refreshed'))` — re-fetch the state, repaint, and say
+ * "Refreshed" whatever it found. Right for stale numbers, and no answer at all to the thing a
+ * person presses refresh FOR: something looks stuck and they want it moved on.
+ *
+ * There are two locks, and refresh now reconciles both against what is actually true.
+ *
+ * THE SERVER'S. One run at a time, and while `running` is set every action is refused with
+ * "something else is still running". `/api/run/reconcile` asks the OS whether that run's process
+ * is alive: alive → it is named, timed and offered a Stop, so the choice to let it carry on or
+ * end it is made on evidence; gone → the lock is released and the release is REPORTED.
+ *
+ * THE CONSOLE'S. `BUSY` refuses a second click here in the page. It is taken before a run starts
+ * and released in a `finally` — but anything that threw between those two left it held for the
+ * rest of the session, with every button answering "another job is still running" and no screen
+ * changing again until a reload. That is exactly how this app read as broken. The wiring fault
+ * that did it is fixed and pinned by a test, but a lock with no way out is a design that will
+ * strand somebody again, so refresh is now the way out.
+ *
+ * The rule between them: the SERVER is the authority. If it says nothing is running, the console
+ * has no business refusing work, whatever it believed a moment ago.
+ */
+async function refreshEverything(){
+  let r=null;
+  try{
+    r=await fetch('/api/run/reconcile',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})
+      .then(x=>x.json());
+  }catch(e){
+    /* The reconcile is the part that can fail — the console may be talking to a server that has
+       gone. Say which half failed rather than reporting a clean refresh over a dead engine. */
+    await load().catch(()=>{});
+    toast('Screens refreshed, but the engine did not answer. If this repeats, restart redbot.',5000);
+    return;
+  }
+
+  let note='Refreshed';
+  if(r&&r.running){
+    /* It IS running. Left alone on purpose — refresh is not a kill — but named, timed, and given
+       a way out, which is the whole of "continue or exit". */
+    const secs=Math.max(0,Math.round((r.ms||0)/1000));
+    BUSY=true;BUSY_WHAT=r.label||r.key;BUSY_SINCE=Date.now()-(r.ms||0);
+    const held=busy(`${r.label||r.key} — running ${secs}s`,{onStop:!r.stoppable?null:async()=>{
+      const s=await fetch('/api/run/stop',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})
+        .then(x=>x.json()).catch(e=>({ok:false,error:String(e&&e.message||e)}));
+      if(!s.ok)throw new Error(s.error||'could not stop it');
+    }});
+    /* The toast is a report, not a job — it must not sit there for the rest of the session. */
+    setTimeout(()=>{try{held.done()}catch{}},8000);
+    note=r.stoppable
+      ? `“${r.label||r.key}” is genuinely running (${secs}s, pid ${r.pid}). Leave it, or press Stop.`
+      : `“${r.label||r.key}” is running (${secs}s) and cannot be interrupted part-way.`;
+  }else{
+    /* Nothing is running. Whatever this page believed, it is wrong, and saying so is better than
+       silently unsticking it — a person who does not know it was stuck cannot report it. */
+    const wasStuck=BUSY;
+    BUSY=false;BUSY_WHAT='';BUSY_SINCE=0;
+    if(r&&r.cleared)note=`Cleared a stuck “${r.label||r.key}” — the engine was holding a lock its process no longer had. You can run things again.`;
+    else if(wasStuck)note='Cleared a stuck job on this screen — nothing was running. You can run things again.';
+  }
+
+  await load();
+  toast(note,note==='Refreshed'?2200:6000);
+}
+$('#reload').onclick=()=>refreshEverything();
 
 /* ---------------- pulse ----------------
  * Polls the machine's real state every 15 seconds: is each account's browser actually

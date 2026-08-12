@@ -333,6 +333,197 @@ test('a source count matches threads Reddit stored under a different case', asyn
 });
 
 /* ------------------------------------------------------------------ *
+ * A search is TWO steps, and the console only ever had the first
+ *
+ * `redbot search "<q>"` previews: it reads the listing, opens no thread, writes
+ * data/search-candidates.json and exits 0 saying "Nothing has been collected yet."
+ * `redbot search --commit <picks>` is the half that collects. The console offered only the
+ * preview and reported it as success, so a search source could not put a single thread on
+ * file — measured on the operator's own install 2026-08-12: three `search.preview` rows in
+ * history, zero commits, zero threads with source='search', while the Threads screen sat at
+ * the same number and looked like it was refusing to refresh.
+ * ------------------------------------------------------------------ */
+
+test('the commit half of a search is reachable from the console', async () => {
+  // The allow-list is the thing being pinned. A key that is not in PUBLIC_ACTIONS is refused
+  // with "cannot be run from here" BEFORE anything runs — which is exactly the answer
+  // `collect-search` used to get, and why no pick could ever be collected.
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ key: 'collect-search', picks: '1,4' })
+  }).then((x) => x.json());
+
+  assert.ok(!/cannot be run from here/.test(String(r.error ?? '')),
+            'collect-search must be in the allow-list — without it a search can never collect');
+  // It still refuses here, and for the RIGHT reason: it drives Chrome, and these tests run on
+  // an install with no account. A browser action that ran without one would be the worse bug.
+  assert.equal(r.ok, false, 'a browser action with no account configured must still refuse');
+});
+
+test('the last preview is readable, and an absent one is a state rather than an error', async () => {
+  const p = join(DATA, 'search-candidates.json');
+  if (existsSync(p)) rmSync(p);
+
+  const none = await (await fetch(`http://127.0.0.1:${PORT}/api/search/candidates`)).json();
+  assert.equal(none.ok, true, 'nobody having searched yet is not a fault');
+  assert.equal(none.present, false);
+  assert.deepEqual(none.candidates, [], 'no preview means nothing to pick, not undefined');
+
+  writeFileSync(p, JSON.stringify({
+    query: 'wordpress site slow after update',
+    previewedAt: '2026-08-12T08:17:50.672Z',
+    candidates: [
+      { n: 1, url: 'https://reddit.com/r/WordPress/comments/a', title: 'Site slow after 6.5', notes: [], clean: true },
+      { n: 2, url: 'https://reddit.com/r/WordPress/comments/b', title: 'Social Poker', notes: ['no question'], clean: false }
+    ]
+  }), 'utf8');
+
+  const got = await (await fetch(`http://127.0.0.1:${PORT}/api/search/candidates`)).json();
+  assert.equal(got.ok, true);
+  assert.equal(got.present, true);
+  assert.equal(got.query, 'wordpress site slow after update',
+               'the query travels with the candidates — the picker refuses to commit picks from another search');
+  assert.equal(got.candidates.length, 2);
+  // The annotations are the whole point of previewing. Dropping them would leave a person
+  // ticking titles with nothing to tick against.
+  assert.equal(got.candidates[0].clean, true);
+  assert.deepEqual(got.candidates[1].notes, ['no question']);
+});
+
+test('an unreadable preview says so instead of throwing or reporting an empty one', async () => {
+  // An empty list and a corrupt file are different claims. Rendering the corrupt one as "no
+  // results" would tell a person their search found nothing when in fact it was never read.
+  const p = join(DATA, 'search-candidates.json');
+  writeFileSync(p, '{ this is not json', 'utf8');
+
+  const r = await (await fetch(`http://127.0.0.1:${PORT}/api/search/candidates`)).json();
+  assert.equal(r.ok, false);
+  assert.equal(r.present, true, 'the file exists — saying it does not would send a person to re-run for nothing');
+  assert.match(String(r.error), /could not be read/);
+
+  rmSync(p);
+});
+
+test('a saved search publishes how many threads it has on file', async () => {
+  /**
+   * The subreddit rows carry this figure because "0 on file" beside sixteen of a source's own
+   * threads reported the collector as having done nothing. A search row had no figure at all —
+   * on the row where the honest answer was always zero and nothing said so.
+   *
+   * `null` is a permitted value and is NOT the same as `{}`: an empty object claims every
+   * search has collected nothing, while null says the database could not be asked. The row
+   * renders nothing for null rather than a zero nobody looked up.
+   */
+  const s = await (await fetch(`http://127.0.0.1:${PORT}/api/state`)).json();
+  const byQuery = s.collect.collectedByQuery;
+  assert.ok(byQuery === null || (byQuery && typeof byQuery === 'object'),
+            'collectedByQuery must be published as an object or as null, never left undefined');
+  if (byQuery) {
+    for (const [k, n] of Object.entries(byQuery)) {
+      assert.equal(k, k.toLowerCase(), `query key "${k}" is not lower-cased — the row looks it up that way`);
+      assert.equal(typeof n, 'number');
+    }
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * Refresh reconciles the ENGINE, not just the screen
+ * ------------------------------------------------------------------ */
+
+test('with nothing running, refresh reports a clear lock and clears nothing', async () => {
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/run/reconcile`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+  }).then((x) => x.json());
+
+  assert.equal(r.ok, true);
+  assert.equal(r.running, false);
+  // "cleared" is a claim that something was WRONG and got fixed. Reporting it over a lock that
+  // was never stuck would teach a person to distrust the one message that matters.
+  assert.equal(r.cleared, false, 'nothing was stuck, so nothing may be reported as cleared');
+});
+
+test('refresh names and times a run that is genuinely still going, and does not kill it', async () => {
+  /**
+   * The half of "continue or exit" that is CONTINUE. A refresh that quietly killed whatever it
+   * found would make the button unusable while anything real was running — and collecting takes
+   * minutes, which is exactly when somebody reaches for refresh to check it is still alive.
+   */
+  const run = fetch(`http://127.0.0.1:${PORT}/api/run`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ key: 'score' })
+  }).then((x) => x.json());
+
+  let seen = null;
+  for (let i = 0; i < 60 && !seen; i++) {
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/run/reconcile`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+    }).then((x) => x.json());
+    if (r.running) seen = r;
+    else await new Promise((res) => setTimeout(res, 50));
+  }
+
+  // A run that finished before the first poll is not a failure of this endpoint, so the
+  // assertions below are made only when one was actually caught in flight.
+  if (seen) {
+    assert.equal(seen.cleared, false, 'a live run must never be reported as a cleared lock');
+    assert.equal(seen.key, 'score');
+    assert.equal(typeof seen.pid, 'number');
+    assert.ok(seen.ms >= 0, 'how long it has been going is the figure a person is asking for');
+    assert.equal(seen.stoppable, true, 'score is interruptible, and the button offered must match');
+  }
+
+  const done = await run;
+  assert.ok(done.ok === true || typeof done.error === 'string',
+            'the run itself must still settle — reconciling must not have detached it');
+});
+
+test('a lock whose process has gone is released, and the release is reported', async () => {
+  /**
+   * THE STATE THE APP COULD NOT COME BACK FROM. One run at a time is enforced by a single
+   * server-side lock; if it outlives its process, every action is refused with "something else
+   * is still running" and no screen says why. It was unrecoverable without restarting redbot.
+   *
+   * Provoked the way it really happens — the child dies and the lock is left behind — by
+   * killing the process out from under the server, then asking refresh what is true.
+   */
+  const run = fetch(`http://127.0.0.1:${PORT}/api/run`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ key: 'score' })
+  }).then((x) => x.json()).catch(() => null);
+
+  let live = null;
+  for (let i = 0; i < 60 && !live; i++) {
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/run/reconcile`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+    }).then((x) => x.json());
+    if (r.running) live = r;
+    else await new Promise((res) => setTimeout(res, 50));
+  }
+
+  if (live) {
+    try { process.kill(live.pid, 'SIGKILL'); } catch { /* it beat us to it */ }
+    // The server's own close handler normally clears the lock. Give it the chance, so this
+    // pins the endpoint's behaviour rather than racing it.
+    await new Promise((res) => setTimeout(res, 400));
+    const after = await fetch(`http://127.0.0.1:${PORT}/api/run/reconcile`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+    }).then((x) => x.json());
+    assert.equal(after.running, false, 'a dead process must never be reported as a running job');
+  }
+
+  await run;
+
+  // And the console is usable again — which is the whole point, and the thing that was broken.
+  const next = await fetch(`http://127.0.0.1:${PORT}/api/run`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ key: 'score' })
+  }).then((x) => x.json());
+  assert.ok(!/still running/.test(String(next.error ?? '')),
+            'after a run has gone, the next one must not be refused by its leftover lock');
+});
+
+/* ------------------------------------------------------------------ *
  * The live run log — output while a command is still running
  * ------------------------------------------------------------------ */
 
@@ -1929,4 +2120,43 @@ test('every symbol the header names still exists in the file', () => {
   // The header must not go back to citing its own line numbers.
   assert.ok(!/`:\d+`/.test(header),
     'the header cites a same-file line number again — those rot on the next edit above them');
+});
+
+/**
+ * A JOB IS HANDED THE BUTTON, NEVER THE CLICK.
+ *
+ * `doAction(job)` returns a function whose parameter is the button: it reads `.textContent`,
+ * disables it, and hangs the run-log off its `.parentElement`. Assigning that straight to
+ * `onclick` passes a MouseEvent instead, so `bt.style` is undefined and the opacity assignment
+ * throws — one line after `BUSY = true`, and before the `finally` that releases it. The lock
+ * stays taken, every button in the console then refuses with "another job is still running",
+ * and no screen changes again until the page is reloaded. From the operator's seat that is an
+ * app that has stopped working, with nothing in any log to say why.
+ *
+ * Found on the "Write this" button on Threads — the one button built by hand instead of through
+ * `actionButton`, which wires it correctly. A source-shape check rather than a browser test
+ * because the defect is in the WIRING, and the wiring is visible without running anything.
+ */
+test('no console button hands doAction a click event instead of its button', () => {
+  const ui = readFileSync(join(HERE, 'index.html'), 'utf8');
+
+  /**
+   * Comment lines are skipped, because the first cut of this test failed on the comment that
+   * EXPLAINS the defect — it quotes the broken wiring verbatim, which is the point of it.
+   * Dropped line by line rather than by stripping comments wholesale: a blanket strip would eat
+   * the `//` in every URL in the file and could swallow real code with it, and a check that
+   * quietly stops looking is worse than no check at all.
+   */
+  const code = ui.split('\n').filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join('\n');
+
+  const miswired = [...code.matchAll(/(\w+)\.onclick\s*=\s*doAction\(/g)].map((m) => m[1]);
+  assert.deepEqual(miswired, [],
+    `these buttons pass doAction the click event, which throws with the busy lock held: ${miswired.join(', ')}`);
+
+  // And the guard that makes the mistake survivable is still there, so a future one costs a
+  // toast rather than the session.
+  assert.match(ui, /typeof bt\.preventDefault\s*===\s*'function'/,
+    'doAction must recover the element when it is handed an Event');
+  assert.match(ui, /if\(!bt\|\|!bt\.style\|\|!bt\.parentElement\)/,
+    'doAction must refuse a non-button BEFORE it takes the busy lock');
 });

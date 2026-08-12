@@ -245,6 +245,10 @@ try {
     accounts: () => sum.accountTallies(db.getPool()),
     handles: () => sum.handlesInLogs(db.getPool()),
     subreddits: () => sum.threadsBySubreddit(db.getPool()),
+    /* The same figure for the other kind of source. Absent on an older dist, hence the guard
+       at the call site rather than here — a console must not fail to render because one
+       count is missing. */
+    queries: () => (sum.threadsByQuery ? sum.threadsByQuery(db.getPool()) : Promise.resolve({})),
     argus: () => sum.argusSummary(db.getPool()),
     /* Which mechanical rule caught each thread that never reached a model call (0014). */
     prefilter: () => pre.prefilterBreakdown(db.getPool())
@@ -354,15 +358,16 @@ async function buildState(opts = {}) {
    * Falls back to an unscoped read when the pager is unavailable, which keeps a console with no
    * database, or an older build, correct rather than empty.
    */
-  let draftPage = null, draftTally = null, summary = null, argusRaw = null, subs = null;
+  let draftPage = null, draftTally = null, summary = null, argusRaw = null, subs = null, byQuery = null;
   if (pagesApi && summaryApi) {
     try {
-      [draftPage, draftTally, summary, argusRaw, subs] = await Promise.all([
+      [draftPage, draftTally, summary, argusRaw, subs, byQuery] = await Promise.all([
         pagesApi.draftIds({ offset: opts.reviewOffset }),
         pagesApi.draftCounts(),
         summaryApi.totals(),
         summaryApi.argus(),
-        summaryApi.subreddits()
+        summaryApi.subreddits(),
+        summaryApi.queries().catch(() => null)
       ]);
     } catch (e) {
       /* Unscoped, then — every draft rather than a page. Correct, just not bounded, and the
@@ -690,7 +695,16 @@ async function buildState(opts = {}) {
       const k = (t.subreddit || 'unknown').toLowerCase();
       m[k] = (m[k] || 0) + 1;
       return m;
-    }, {})
+    }, {}),
+    /**
+     * The same tally for saved searches, so a search row can answer "did anything come of it".
+     *
+     * `null` when the database could not be asked, and that is not the same as `{}`: an empty
+     * object says every search has collected nothing, which is a claim, while null says the
+     * figure could not be read. The row renders nothing rather than a confident zero — the
+     * console has already shipped one "0 on file" that was really "not looked up".
+     */
+    collectedByQuery: byQuery
   };
 
   return {
@@ -914,6 +928,25 @@ async function buildState(opts = {}) {
 const ACTIONS = {
   'find-threads':   { args: (o) => ['read', String(o.subreddit || 'WordPress')], label: 'look for new threads', needsBrowser: true, stoppable: true },
   'find-search':    { args: (o) => ['search', String(o.query || '')],            label: 'run a saved search',   needsBrowser: true, stoppable: true },
+  /**
+   * The second half of a search — and the reason a search source could not collect anything.
+   *
+   * `redbot search "<q>"` is a PREVIEW by construction: it reads the listing, opens no thread,
+   * writes data/search-candidates.json and exits **0** saying "Nothing has been collected yet."
+   * That two-step is deliberate and documented at the top of src/commands/search.ts — a bulk
+   * commit is how threads seven and eight YEARS old got into the corpus (DEFECT-11), and the
+   * corpus is the only production evidence redbot has.
+   *
+   * The console only ever ran the first half, so a search source was decorative, and said
+   * nothing about it because exit 0 reads as success. Measured on this install 2026-08-12:
+   * three `search.preview` rows in history, **zero** `search` commits, and zero threads with
+   * `source='search'` — while the operator had added a search and pressed Collect three times.
+   *
+   * `picks` is passed straight through to the CLI's own parser ("1,4,7", "1-5" or "all")
+   * rather than re-implemented here. The picker builds it from ticked rows, so what the
+   * console commits and what the CLI would commit cannot drift apart.
+   */
+  'collect-search': { args: (o) => ['search', '--commit', String(o.picks || '')], label: 'collect the ones you picked', needsBrowser: true, stoppable: true },
   'score':          { args: () => ['opportunity'],                               label: 'score what came back', stoppable: true },
   'write':          { args: (o) => ['draft', ...(o.threadId ? [String(o.threadId)] : [])], label: 'write a reply', stoppable: true },
   'check':          { args: (o) => ['certify', ...(o.draftId ? [String(o.draftId)] : []), ...(o.override ? ['--override'] : [])], label: 'fact-check a reply', stoppable: true },
@@ -958,6 +991,14 @@ let running = null;   // one at a time — two runs against the same data files 
 let runningChild = null;
 /** Set when a person pressed Stop, so the close handler can say "stopped" and not "failed". */
 let runningStopped = false;
+/**
+ * When the current run started, so refresh can say how long it has been going.
+ *
+ * Module-level rather than the local `started` inside runAction, because the question "has this
+ * been running for eight seconds or eight minutes" is asked from OUTSIDE the promise — which is
+ * exactly where a person stands when they suspect something is stuck.
+ */
+let runningSince = 0;
 /**
  * WHICH account the running action is driving, or null when it drives no browser.
  *
@@ -1169,6 +1210,59 @@ function runLogFinish(code) {
 }
 
 /**
+ * Is that pid still a live process — asked of the OS, not of our own bookkeeping.
+ *
+ * Signal 0 performs the existence and permission checks and delivers nothing. EPERM means the
+ * process EXISTS and belongs to somebody else, which is still alive; only ESRCH is gone. Reading
+ * EPERM as "dead" would clear a lock over a running child and let a second run start against the
+ * same data files, which is the one thing the lock exists to prevent.
+ */
+function pidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return !!(e && e.code === 'EPERM'); }
+}
+
+/**
+ * What is actually running, and release the lock when the answer is nothing.
+ *
+ * Called by refresh. Reports rather than acts, with one exception: a lock whose process has
+ * gone is cleared, because that state is unrecoverable from the UI and blocks every button.
+ *
+ * The pending `/api/run` request of a cleared run is NOT resolved here — it belongs to the
+ * promise inside runAction and only the child's own close handler can settle it. If that
+ * handler never ran, that request was already never going to answer; the caller's fetch is
+ * lost either way. What this changes is that the NEXT run can start.
+ */
+function reconcileRun() {
+  if (!running) return { ok: true, running: false, cleared: false };
+
+  const key = running;
+  const spec = ACTIONS[key] || null;
+  const label = spec ? spec.label : key;
+  const child = runningChild;
+  const exited = !child || child.exitCode !== null || child.signalCode !== null;
+
+  if (!exited && pidAlive(child.pid)) {
+    return {
+      ok: true, running: true, cleared: false,
+      key, label, account: runningAccount, pid: child.pid,
+      ms: runningSince ? Date.now() - runningSince : null,
+      /* Whether a person is ALLOWED to end it. Sending a reply is not stoppable, and offering a
+         button the server would refuse is a button that lies. */
+      stoppable: !!(spec && spec.stoppable),
+      command: runLog.command || null
+    };
+  }
+
+  running = null; runningAccount = null; runningChild = null; runningStopped = false; runningSince = 0;
+  /* Only if the log is still open — a run that closed normally has already written its footer,
+     and a second one would make the file describe two endings. */
+  if (!runLog.done) { runLogAppend(`${NEWLINE}[the console found this run had already ended]${NEWLINE}`); runLogFinish(-1); }
+  return { ok: true, running: false, cleared: true, key, label };
+}
+
+/**
  * Why a reply could not start right now, or null when nothing is in the way.
  *
  * The same three questions `runAction` asks, asked without side effects so `publish()` can ask
@@ -1243,6 +1337,7 @@ function runAction(key, opts) {
     running = key;
     runningAccount = spec.needsBrowser ? account : null;
     const started = Date.now();
+    runningSince = started;
     /**
      * Who runs it, and as whom.
      *
@@ -1296,7 +1391,7 @@ function runAction(key, opts) {
     child.stderr.on('data', (d) => { err += String(d); runLogAppend(d); });
     const timer = setTimeout(() => { try { child.kill(); } catch {} }, 20 * 60 * 1000);
     child.on('close', (code) => {
-      clearTimeout(timer); running = null; runningAccount = null; runningChild = null;
+      clearTimeout(timer); running = null; runningAccount = null; runningChild = null; runningSince = 0;
       runLogFinish(code);
       /* The moment the numbers changed. Fire-and-forget: the run's response must not wait on a
          network call, and a push that fails leaves its cursor alone and retries on the heartbeat. */
@@ -1315,7 +1410,7 @@ function runAction(key, opts) {
       });
     });
     child.on('error', (e) => {
-      clearTimeout(timer); running = null; runningAccount = null; runningChild = null;
+      clearTimeout(timer); running = null; runningAccount = null; runningChild = null; runningSince = 0;
       runningStopped = false;
       runLogAppend(`failed to start: ${e && e.message || e}` + NEWLINE);
       runLogFinish(-1);
@@ -2869,6 +2964,34 @@ const server = createServer((req, res) => {
        * is read from the LIVE handle at this instant and only if the child has not already
        * exited: a number captured earlier can name somebody else's process by now.
        */
+      /**
+       * REFRESH, BUT OF THE ENGINE RATHER THAN THE PICTURE.
+       *
+       * The console's refresh re-fetched state and repainted, and said "Refreshed" whatever it
+       * found. That is the right answer to stale numbers and no answer at all to a stuck job:
+       * this process holds a single `running` lock, and while it is set every action is refused
+       * with "something else is still running". If the lock ever outlives its process, the app
+       * is finished until it is restarted, and nothing on any screen says why.
+       *
+       * So refresh now ASKS. Three answers, and they are different facts:
+       *   - nothing is running: the lock is clear and always was;
+       *   - something is running: it is named, timed and its pid given, so a person can let it
+       *     carry on or stop it — the "continue or exit" choice, made on evidence;
+       *   - the lock outlived its process: cleared here, and REPORTED as cleared rather than
+       *     silently tidied, because a console that quietly fixes itself teaches nobody what
+       *     went wrong.
+       *
+       * Liveness is checked against the OS (`process.kill(pid, 0)`), not against this process's
+       * own belief. Believing our own bookkeeping is what produced the stuck lock in the first
+       * place, and a gauge that reads its own memory cannot report its own memory being wrong.
+       *
+       * It does NOT kill anything. Stopping stays an explicit act with its own endpoint and its
+       * own refusal for the one action that must not be interrupted part-way.
+       */
+      if (url.pathname === '/api/run/reconcile') {
+        return send(200, JSON.stringify(reconcileRun()));
+      }
+
       if (url.pathname === '/api/run/stop') {
         const key = running;
         if (!key || !runningChild) {
@@ -3008,6 +3131,35 @@ const server = createServer((req, res) => {
    * Past runs, newest first. Headers only — a run's lines are read from disk only when one is
    * actually opened, so listing 500 runs costs 500 first-lines rather than 500 whole files.
    */
+  /**
+   * The last preview's candidates, so the console can offer the pick step the CLI documents.
+   *
+   * Read from disk on every call, never cached: `search --commit` reads this same file, so a
+   * remembered copy here could show a list that no longer matches what a commit would collect —
+   * and the operator would be picking row 4 of one search and committing row 4 of another.
+   *
+   * An absent file is `present:false`, not an error. Nobody has previewed yet is a state, not
+   * a fault, and the console renders it as "run the search first".
+   */
+  if (url.pathname === '/api/search/candidates') {
+    const p = join(DATA, 'search-candidates.json');
+    if (!existsSync(p)) return send(200, JSON.stringify({ ok: true, present: false, candidates: [] }));
+    try {
+      const f = JSON.parse(readFileSync(p, 'utf8'));
+      return send(200, JSON.stringify({
+        ok: true, present: true,
+        query: f.query || '',
+        previewedAt: f.previewedAt || null,
+        candidates: Array.isArray(f.candidates) ? f.candidates : []
+      }));
+    } catch (e) {
+      return send(200, JSON.stringify({
+        ok: false, present: true, candidates: [],
+        error: `search-candidates.json could not be read (${e.message}). Run the search again.`
+      }));
+    }
+  }
+
   if (url.pathname === '/api/run/history') {
     const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit') ?? 100) || 100));
     return send(200, JSON.stringify({ keep: RUN_LOG_KEEP, runs: runLogList(limit) }));
