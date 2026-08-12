@@ -25,6 +25,8 @@ import { corpora } from '../corpus.js';
 import { say } from '../log.js';
 import { hoursSinceLastBackup, listSnapshots } from '../backup.js';
 import { checkRequirements } from '../requirements.js';
+import { currentAgeHours } from '../select.js';
+import type { Thread } from '../types.js';
 
 /**
  * `N/A` exists because of a specific trap, not for tidiness.
@@ -100,6 +102,30 @@ export function buildFreshness(
 }
 
 /** The four required rules. Named here so the test and the check cannot disagree about them. */
+/**
+ * How many collected threads are still inside the reply window — the SAME question the prefilter
+ * asks before it spends a model call, so it is answered by the same function.
+ *
+ * It used to be answered here by `ageMinutes / 60 <= ceiling`, which is the age a thread had at
+ * the moment it was collected and never after. That reading does not age: a thread collected 11
+ * days ago while it was 31h old still counted as fresh. Measured 2026-08-12 on the live corpus —
+ * doctor reported 35 of 35 inside the 72h window in the same session `opportunity` dropped 14 of
+ * those 35 as 257-298h old. `currentAgeHours` adds the time since collection, which is what makes
+ * the two agree; see select.ts.
+ *
+ * Pure and exported so this stays one derivation rather than two that drift apart again.
+ */
+export function freshThreadCount(
+  threads: readonly Pick<Thread, 'ageMinutes' | 'collectedAt'>[],
+  ceilingHours: number,
+  now: number = Date.now()
+): number {
+  return threads.filter((t) => {
+    const age = currentAgeHours(t, now);
+    return age != null && age <= ceilingHours;
+  }).length;
+}
+
 export const REQUIRED_IGNORES = ['data/chrome-profile', 'data/operators', 'data/*.json', 'data/*.jsonl'];
 
 /**
@@ -363,9 +389,7 @@ export async function doctor(): Promise<number> {
   );
 
   const threads = await loadThreads();
-  const freshThreads = threads.filter(
-    (t) => t.ageMinutes != null && t.ageMinutes / 60 <= policy.maxThreadAgeHoursToPublish.value
-  ).length;
+  const freshThreads = freshThreadCount(threads, policy.maxThreadAgeHoursToPublish.value);
   add(
     'corpus freshness',
     freshThreads === 0 && threads.length > 0 ? 'WARN' : 'PASS',

@@ -1,8 +1,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  gitignoreActivePatterns, buildFreshness, secretProtection, REQUIRED_IGNORES
+  gitignoreActivePatterns, buildFreshness, secretProtection, REQUIRED_IGNORES, freshThreadCount
 } from '../commands/doctor.js';
+import { currentAgeHours } from '../select.js';
 
 /**
  * The secret-protection check must look at ACTIVE ignore rules, not the whole file — the old
@@ -117,5 +118,50 @@ describe('secret protection', () => {
     // The M6 regression, asserted through the real check rather than the helper alone.
     const r = secretProtection('# data/chrome-profile\n# data/operators\nnode_modules/\n', true);
     assert.equal(r.status, 'FAIL');
+  });
+});
+
+/**
+ * Corpus freshness measured the age a thread had AT COLLECTION and never aged it, so a thread
+ * collected 11 days ago while it was 31h old still counted as "inside the 72h window" forever.
+ * Measured 2026-08-12 on the live corpus: doctor said 35 of 35 fresh in the same session the
+ * prefilter dropped 14 of those 35 as 257-298h old. Two gauges, one question, an order of
+ * magnitude apart.
+ *
+ * The rule now delegates to currentAgeHours() — the function the prefilter already uses — so
+ * the two cannot answer differently again.
+ */
+describe('corpus freshness ages a thread after it was collected', () => {
+  const CEILING = 72;
+  const NOW = Date.parse('2026-08-12T00:00:00.000Z');
+  const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+
+  test('a thread young at collection but old now is NOT fresh', () => {
+    const threads = [{ ageMinutes: 31.7 * 60, collectedAt: hoursAgo(256.8) }];
+    assert.equal(freshThreadCount(threads, CEILING, NOW), 0);
+  });
+
+  test('a thread young at collection and collected just now IS fresh', () => {
+    const threads = [{ ageMinutes: 4 * 60, collectedAt: hoursAgo(1) }];
+    assert.equal(freshThreadCount(threads, CEILING, NOW), 1);
+  });
+
+  test('a thread whose age was never captured cannot be called fresh', () => {
+    const threads = [{ ageMinutes: null, collectedAt: hoursAgo(1) }];
+    assert.equal(freshThreadCount(threads, CEILING, NOW), 0);
+  });
+
+  test('it answers exactly what currentAgeHours answers, on the same input', () => {
+    const threads = [
+      { ageMinutes: 10 * 60, collectedAt: hoursAgo(1) },
+      { ageMinutes: 10 * 60, collectedAt: hoursAgo(100) },
+      { ageMinutes: 71 * 60, collectedAt: hoursAgo(0.5) },
+      { ageMinutes: null, collectedAt: hoursAgo(1) }
+    ];
+    const byHand = threads.filter((t) => {
+      const a = currentAgeHours(t, NOW);
+      return a != null && a <= CEILING;
+    }).length;
+    assert.equal(freshThreadCount(threads, CEILING, NOW), byHand);
   });
 });
