@@ -3638,6 +3638,66 @@ function paintPortBar(node,s){
         const country=field('country','text','US','3.5rem');
         const region=field('region (e.g. New York)','text','','10rem');
 
+        /* ---- Webshare auto-fill (optional) ----
+         *
+         * Shown ONLY if a Webshare key is stored and the list comes back non-empty. Selecting a
+         * proxy fills the fields above; it does NOT skip the check below — the exit still has to
+         * pass the same vet. The timezone note carries the account's half of the job: an exit whose
+         * city implies America/Los_Angeles behind an account set to Asia/Manila is refused at
+         * launch (src/proxy/align.ts), so the zone is offered here, ready to copy onto the card. */
+        const pick=el('select','sel');
+        pick.setAttribute('aria-label',`Fill ${account.handle}'s exit from a Webshare US proxy`);
+        pick.style.cssText='display:none;font:inherit;font-size:.78rem;padding:.35rem .5rem;border-radius:8px;'
+          +'border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink);margin:0 .3rem .3rem 0;max-width:22rem';
+
+        const tzNote=el('div','tiny');
+        tzNote.style.cssText='display:none;margin:.15rem 0 .4rem;line-height:1.5';
+
+        let webshareProxies=[];
+        const renderTz=(p)=>{
+          tzNote.textContent='';
+          if(!p){tzNote.style.display='none';return}
+          tzNote.style.display='';
+          const head=el('div');
+          if(p.timezone){
+            head.innerHTML=`This exit is in <b>${esc(p.city||p.region||'the US')}</b>. Set this account’s `
+              +`timezone to <code>${esc(p.timezone)}</code> — a browser whose timezone does not match its `
+              +`exit is refused at launch. Copy it, then update the timezone on this account’s card.`;
+            tzNote.append(head,copyBox(p.timezone,'the timezone'));
+          }else{
+            head.innerHTML=`This exit is in <b>${esc(p.city||'an unknown city')}</b>, which redbot could not map `
+              +`to a US timezone. Set this account’s timezone to the zone for that city yourself, or the `
+              +`launch will be refused.`;
+            tzNote.append(head);
+          }
+        };
+
+        pick.onchange=()=>{
+          const p=webshareProxies[Number(pick.value)];
+          if(!p){renderTz(null);return}
+          host.value=p.host; port.value=String(p.port);
+          user.value=p.username||''; pass.value=p.password||'';
+          country.value=p.country||'US'; region.value=p.city||'';
+          renderTz(p);
+        };
+
+        /* Any refusal — no key stored, Webshare down, an empty plan — just leaves the dropdown
+           hidden and manual entry working. This is a convenience, so it fails by disappearing. */
+        fetch('/api/webshare/proxies').then(x=>x.json()).then(r=>{
+          if(!r||!r.ok||!Array.isArray(r.proxies)||!r.proxies.length)return;
+          webshareProxies=r.proxies;
+          pick.textContent='';
+          const first=el('option');
+          first.textContent=`Fill from Webshare — ${r.proxies.length} US ${r.proxies.length===1?'proxy':'proxies'}…`;
+          first.value=''; first.disabled=true; first.selected=true; pick.append(first);
+          r.proxies.forEach((p,i)=>{
+            const o=el('option');
+            o.textContent=`${p.host}:${p.port} — ${p.city||'?'}${p.valid?'':' (unverified)'}`;
+            o.value=String(i); pick.append(o);
+          });
+          pick.style.display='';
+        }).catch(()=>{/* no dropdown; manual entry still works */});
+
         const go_=async(quick)=>{
           const held=busy(quick?'Starting a quick check…':'Starting the check…');
           try{
@@ -3663,7 +3723,7 @@ function paintPortBar(node,s){
           +'a rotating pool does not, and one look cannot tell them apart. A quick check is a smoke '
           +'test only: it is <b>not</b> enough to sign an account in on.';
 
-        bar.append(note,host,port,user,pass,country,region,
+        bar.append(note,pick,host,port,user,pass,country,region,tzNote,
           mini('Check and save',`Check ${account.handle}'s exit for six hours and save it if it passes`,()=>go_(false),'act'),
           mini('Quick check',`Take one sample of ${account.handle}'s exit`,()=>go_(true)),
           mini('Cancel',`Cancel adding an exit for ${account.handle}`,()=>{bar.dataset.editing='0';paintPorts()}));
@@ -5406,6 +5466,64 @@ function setup(){
       }else{
         b.append(el('div','tiny','This build did not report a sign-in command for that operator.'));
       }
+    }
+  });
+
+  /* ==================== (optional) Webshare proxies ====================
+   *
+   * OPTIONAL, and it says so at the top. redbot needs no proxy-vendor key: an exit is typed by
+   * hand on the Accounts screen, and the settled vendor is IPRoyal ISP, not Webshare
+   * (PROXY-VENDOR-DECISION.md). A key here buys ONE thing — the "Add an exit" form can be filled
+   * from a dropdown of your US proxies instead of typed. Never `required`, and `done:true`
+   * regardless: a local install with no key is COMPLETE, so this must never read as unfinished. */
+  steps.push({
+    title:'Webshare proxies (optional)',
+    sub:s.webshareKeyStored?'a key is stored — the exit form can auto-fill':'not set — exits are typed by hand',
+    required:false,
+    done:true,
+    build(b){
+      b.append(el('div','tiny',
+        'This step is <b>optional</b>. redbot does not need a Webshare account, and Webshare is '+
+        'not the exit vendor redbot settled on — that is IPRoyal ISP. Storing a Webshare API key '+
+        'here only lets the “Add an exit” form on the Accounts screen offer a dropdown of your US '+
+        'proxies, so an address, port and password are filled in for you instead of typed. Every '+
+        'exit still goes through the same six-hour check before an account signs in on it.'));
+
+      if(!s.vault.ok){
+        b.append(el('div','tiny','The vault must be openable before a key can be stored. '+esc((s.vault.reason||'').split('\n')[0])));
+        return;
+      }
+
+      const hint=(s.secrets.find(x=>x.name==='webshare_api_key')||{}).hint;
+      b.append(setupRow(s.webshareKeyStored?'ok':'warn','Webshare API key',
+        s.webshareKeyStored
+          ?'stored, sealed'+(hint?` — ending ${esc(hint)}`:'')
+          :'no key stored — the exit form will not offer a dropdown'));
+
+      const keyRow=ctlRow();
+      const keyIn=setupInput('your Webshare API token','Webshare API key',{password:true});
+      keyRow.append(keyIn,actBtn('Store it',async()=>{
+        if(!keyIn.value.trim()){toast('Paste the key first');return}
+        const r=await fetch('/api/webshare/key',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({value:keyIn.value})}).then(x=>x.json());
+        /* Cleared whatever the answer: a key must not sit in a form field afterwards. */
+        keyIn.value='';
+        if(!r.ok){toast(r.error||'could not store');return}
+        toast(`Stored — ends ${r.hint}`);await again();
+      }));
+      if(s.webshareKeyStored){
+        keyRow.append(actBtn('Remove stored key',async()=>{
+          const r=await fetch('/api/webshare/key/remove',{method:'POST',headers:{'content-type':'application/json'},
+            body:JSON.stringify({})}).then(x=>x.json());
+          if(!r.ok){toast(r.error||'could not remove');return}
+          toast('Removed');await again();
+        },'danger'));
+      }
+      b.append(keyRow);
+      b.append(el('div','tiny',
+        'The key is sealed with AES-256-GCM before it reaches the database, and is never shown '+
+        'again — only the last four characters. Find your token at '+
+        '<code>proxy.webshare.io</code> → Dashboard → API keys.'));
     }
   });
 

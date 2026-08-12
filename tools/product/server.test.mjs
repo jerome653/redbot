@@ -985,6 +985,70 @@ test('/api/setup reports each prerequisite separately, and never a secret value'
   }
 });
 
+/* ------------------------------------------------------------------ *
+ * Webshare — the OPTIONAL exit-autofill convenience
+ * ------------------------------------------------------------------ */
+
+test('/api/setup reports whether a Webshare key is stored — a boolean, never the value', async () => {
+  const s = await getJson('/api/setup');
+  assert.equal(typeof s.webshareKeyStored, 'boolean',
+               'the optional autofill step turns on this one fact');
+  // Same rule as every other secret: a webshare key, if present, is a hint at most, never a value.
+  for (const c of s.secrets) {
+    if (c.name === 'webshare_api_key' && c.hint !== null) {
+      assert.ok(c.hint.length <= 4, 'a Webshare key is identified, not revealed');
+    }
+  }
+});
+
+test('listing Webshare proxies without a stored key is refused, and says a key is needed', async () => {
+  const s = await getJson('/api/setup');
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/webshare/proxies`);
+  const body = await r.json();
+  assert.equal(body.ok, false, 'no key means no list — never a silent empty success');
+  assert.ok(r.status >= 400, `a refusal must not be a 2xx (got ${r.status})`);
+  if (s.vault.ok) {
+    // With a working vault the reason is specifically "store a key first", flagged for the UI so
+    // it can tell that apart from "Webshare rejected the key".
+    assert.equal(body.noKey, true, 'the console must tell "no key" from "Webshare said no"');
+  }
+});
+
+test('a Webshare key can be stored and removed, reported by /api/setup, never echoed back', async () => {
+  const before = await getJson('/api/setup');
+  if (!before.vault.ok) {
+    /* No REDBOT_VAULT_KEY in this environment — the store path cannot run, and the endpoint
+       already fails closed with the vault reason. Assert that closed state rather than a false green. */
+    assert.equal(before.webshareKeyStored, false, 'no vault means no stored key');
+    return;
+  }
+
+  const post = (path, body) => fetch(`http://127.0.0.1:${PORT}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+
+  try {
+    const stored = await post('/api/webshare/key', { value: 'webshare-test-key-1234' });
+    assert.equal(stored.status, 200, `store was refused: ${JSON.stringify(stored.body)}`);
+    assert.equal(stored.body.ok, true);
+    assert.equal(stored.body.hint, '1234', 'the response carries only the 4-char hint');
+    assert.ok(!('value' in stored.body) && !('key' in stored.body), 'the key itself must never be echoed');
+
+    const mid = await getJson('/api/setup');
+    assert.equal(mid.webshareKeyStored, true, 'Setup must now see the stored key');
+
+    const removed = await post('/api/webshare/key/remove', {});
+    assert.equal(removed.status, 200);
+    assert.equal(removed.body.removed, true, 'removing an existing key reports it was there');
+
+    const after = await getJson('/api/setup');
+    assert.equal(after.webshareKeyStored, false, 'and Setup must see it gone');
+  } finally {
+    // Belt and braces: the throwaway key must not be left in the test vault for a later test.
+    await post('/api/webshare/key/remove', {}).catch(() => {});
+  }
+});
+
 test('an operator can be registered from the console, but signing in stays a terminal job', async () => {
   const r = await fetch(`http://127.0.0.1:${PORT}/api/operator/create`, {
     method: 'POST',

@@ -125,7 +125,7 @@ let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccou
     dbStatus = null, dbPing = null, sourcesApi = null, requirementsApi = null, configApi = null,
     updateApi = null, pushApi = null, pushStateApi = null, pushSchedulerApi = null,
     pushClientApi = null, pushAccountsApi = null, dependenciesApi = null, profilesApi = null,
-    proxiesApi = null, relayApi = null, alignApi = null, exitApi = null;
+    proxiesApi = null, relayApi = null, alignApi = null, exitApi = null, webshareApi = null;
 
 /**
  * The push scheduler lives HERE rather than in the Electron shell.
@@ -146,7 +146,7 @@ let pushScheduler = null;
  */
 let vaultApi = null;
 try {
-  const [d, a, db, src, cred, ports, dbAccounts, machine, pages, sum, pre, dbProxies, relay, align, relayCore, proxyCred] = await Promise.all([
+  const [d, a, db, src, cred, ports, dbAccounts, machine, pages, sum, pre, dbProxies, relay, align, relayCore, proxyCred, webshare] = await Promise.all([
     import('../../dist/console-data.js'),
     import('../../dist/console-accounts.js'),
     import('../../dist/db.js'),
@@ -166,7 +166,10 @@ try {
     /* The upstream validity rule, so the console refuses a malformed exit in the SAME words the
        relay would — two definitions of "usable" is how a form accepts what the relay rejects. */
     import('../../dist/proxy/relay.js'),
-    import('../../dist/proxy/credential.js')
+    import('../../dist/proxy/credential.js'),
+    /* Webshare: an OPTIONAL convenience — turning a stored API key into a US-proxy list the exit
+       form can be filled from. No network happens here; only when /api/webshare/proxies is asked. */
+    import('../../dist/proxy/webshare.js')
   ]);
   domain = d.loadConsoleDomain;
   consoleAccounts = d.loadConsoleAccounts;
@@ -223,6 +226,9 @@ try {
     forget: (handle) => dbProxies.deleteAccountProxy(db.getPool(), handle),
     forgetCredential: (handle) => proxyCred.forgetProxyCredential(handle)
   };
+  /* The one call the Setup screen makes with a stored Webshare key: list this account's US exits.
+     Read-only and vendor-optional — see src/proxy/webshare.ts for why it is not on any run path. */
+  webshareApi = { fetchUsProxies: webshare.fetchUsProxies };
   /**
    * Which account this machine acts as (migration 0015).
    *
@@ -1556,6 +1562,9 @@ async function setupStatus() {
     secrets, secretsError, apiKeyName,
     /* Whether a key is on file at all — the one fact the "which provider" choice turns on. */
     apiKeyStored: secrets.some((s) => s.name === apiKeyName),
+    /* Whether a Webshare key is stored — the one fact the OPTIONAL exit-autofill step turns on.
+       A boolean, never the value: the key is used only server-side by /api/webshare/proxies. */
+    webshareKeyStored: secrets.some((s) => s.name === (vaultApi ? vaultApi.WEBSHARE_API_KEY : 'webshare_api_key')),
     /* The environment's key wins over the vault (src/config.ts anthropicKey), so say when one
        is set — otherwise storing a vault key and seeing no change is baffling. */
     apiKeyFromEnv: Boolean(process.env.ANTHROPIC_API_KEY),
@@ -1917,11 +1926,13 @@ async function coverProxiedBrowser(endpoint, account, exit) {
        * reads. Overriding to de-DE, fr-FR and en-GB each left `navigator.language` at en-US while
        * `Intl.NumberFormat().resolvedOptions().locale` followed the override every time.
        *
-       * So this is kept for what it does — dates, numbers and collation agreeing with the exit's
-       * region rather than the operator's — and it is NOT the language alignment D-5 asks for.
-       * `Network.setUserAgentOverride({ acceptLanguage })` is what moves navigator.language;
-       * measured to work, deliberately not wired up here, because it is a separate decision from
-       * the timezone this call rides along with.
+       * So one call was never enough. `align.ts` now sends BOTH: `setLocaleOverride` for what it
+       * genuinely buys — dates, numbers and collation agreeing with the exit's region rather than
+       * the operator's — and `setUserAgentOverride({ acceptLanguage })` for navigator.language,
+       * navigator.languages and the Accept-Language header, which is the property D-5 is about.
+       *
+       * One value feeds both, so the two cannot drift apart into a browser formatting dates for
+       * one country while announcing the language of another.
        */
       locale: exit.proxy.country ? `en-${exit.proxy.country}` : null,
       openUrl: 'https://www.reddit.com/login'
@@ -2433,6 +2444,44 @@ const server = createServer((req, res) => {
           return send(200, JSON.stringify({ ok: true, hint: value.slice(-4), scope: scope || 'global' }));
         } catch (e) {
           // The message names the problem, never the value — same rule as src/vault.ts.
+          return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+        }
+      }
+
+      /**
+       * Store the Webshare API key — the SAME never-echoed, POST-body-only rule as /api/vault/key,
+       * for the same reason: a key in a query string lands in access logs and browser history.
+       *
+       * OPTIONAL. Nothing in redbot's run path reads this key (src/credentials.ts WEBSHARE_API_KEY);
+       * it only lets /api/webshare/proxies list this account's US exits so the exit form can be
+       * auto-filled. Global scope, like the sync tokens: it is a per-install convenience, not
+       * per-operator identity. The response carries the 4-character hint and nothing else.
+       */
+      if (url.pathname === '/api/webshare/key') {
+        if (!vaultApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing — run npm run build' }));
+        const reason = vaultApi.vaultUnavailableReason();
+        if (reason) return send(400, JSON.stringify({ ok: false, error: reason }));
+
+        const value = typeof body.value === 'string' ? body.value.trim() : '';
+        if (!value) return send(400, JSON.stringify({ ok: false, error: 'no key given' }));
+        if (value.length > 4096) return send(400, JSON.stringify({ ok: false, error: 'that is too long to be an API key' }));
+
+        try {
+          await vaultApi.putSecret(vaultApi.WEBSHARE_API_KEY, value);
+          return send(200, JSON.stringify({ ok: true, hint: value.slice(-4) }));
+        } catch (e) {
+          return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+        }
+      }
+
+      if (url.pathname === '/api/webshare/key/remove') {
+        if (!vaultApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing' }));
+        const reason = vaultApi.vaultUnavailableReason();
+        if (reason) return send(400, JSON.stringify({ ok: false, error: reason }));
+        try {
+          const removed = await vaultApi.removeSecret(vaultApi.WEBSHARE_API_KEY);
+          return send(200, JSON.stringify({ ok: true, removed }));
+        } catch (e) {
           return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
         }
       }
@@ -3336,6 +3385,34 @@ const server = createServer((req, res) => {
     setupStatus()
       .then((s) => send(200, JSON.stringify(s)))
       .catch((e) => send(500, JSON.stringify({ error: e && e.message ? e.message : String(e) })));
+    return;
+  }
+
+  /**
+   * This account's US Webshare proxies, for filling the exit form.
+   *
+   * Reads the stored key from the vault and asks Webshare with it — the KEY never comes in on the
+   * request and never goes back out in the response. What DOES go back is the proxy list, proxy
+   * credentials included, because auto-filling the exit form is the whole feature and the exit form
+   * takes those credentials anyway; this response only reaches the localhost console. Each proxy
+   * carries a suggested `timezone` (src/proxy/align.ts usZoneForCity) so the exit's city can be
+   * copied straight onto the account's timezone.
+   *
+   * OPTIONAL end to end: a 400 with `noKey` means simply "store a key first", not that anything is
+   * broken. The GET handler is not async, so this owns its own promise like /api/state does.
+   */
+  if (url.pathname === '/api/webshare/proxies') {
+    if (!vaultApi || !webshareApi) {
+      return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing — run npm run build' }));
+    }
+    const reason = vaultApi.vaultUnavailableReason();
+    if (reason) return send(400, JSON.stringify({ ok: false, error: reason }));
+    (async () => {
+      const key = await vaultApi.getSecret(vaultApi.WEBSHARE_API_KEY);
+      if (!key) return send(400, JSON.stringify({ ok: false, error: 'no Webshare key stored', noKey: true }));
+      const proxies = await webshareApi.fetchUsProxies(key);
+      return send(200, JSON.stringify({ ok: true, count: proxies.length, proxies }));
+    })().catch((e) => send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) })));
     return;
   }
 

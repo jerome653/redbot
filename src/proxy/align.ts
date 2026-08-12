@@ -22,8 +22,11 @@
  *   CDP Emulation.setLocaleOverride                  MOVES Intl ONLY — navigator.language does
  *                                                    NOT follow it (2026-08-04, Chrome 150.0.7871.187:
  *                                                    de-DE/fr-FR/en-GB each left navigator.language
- *                                                    at en-US while Intl followed every time)
- *   CDP Network.setUserAgentOverride acceptLanguage  MOVES navigator.language and .languages
+ *                                                    at en-US while Intl followed every time;
+ *                                                    reproduced independently on Chrome 151.0.7922.72)
+ *   CDP Emulation.setUserAgentOverride               MOVES navigator.language, navigator.languages
+ *     with acceptLanguage                            and the Accept-Language header — and does NOT
+ *                                                    move Intl. So BOTH are sent; see `cover`.
  *   context.on('page') hook, human types a URL       PROTECTED
  *   context.on('page') hook, window.open (0 latency) PROTECTED — the feared race did not occur
  *
@@ -109,6 +112,102 @@ export function timezoneMatchesCountry(
   }
   if (!zones || !zones.length) return 'unknown';
   return zones.some((z) => z.toLowerCase() === timezone.toLowerCase()) ? 'yes' : 'no';
+}
+
+/**
+ * The IANA zone a US city sits in — so an exit's reported city can SUGGEST the account timezone
+ * that `timezoneMatchesCountry` then accepts, rather than the operator guessing and tripping the
+ * launch refusal in `alignmentRefusal`.
+ *
+ * A curated table, deliberately, not a geo database. A Webshare US exit lands in a bounded set of
+ * datacenter metros, and the alternative — bundling a city→coordinate→timezone dataset — is
+ * megabytes and a new dependency to answer what a lookup answers. Two rules keep it honest:
+ *
+ *   1. An UNKNOWN city returns `null`, never a default. A confident wrong zone is the exact
+ *      IP/timezone contradiction alignment exists to refuse; "I don't know, you pick" is safe,
+ *      a guessed `America/New_York` is not.
+ *   2. A city whose name is AMBIGUOUS across zones (Portland OR/ME, Arlington VA/TX, Aurora CO/IL,
+ *      Glendale AZ/CA, Columbia, Springfield) is OMITTED, so it falls to `null` rather than
+ *      resolving to whichever state the table's author happened to think of first.
+ *
+ * The Webshare list API returns `city_name` only — no state — which is why this is keyed on city
+ * and why the ambiguous names cannot be disambiguated here.
+ */
+const US_CITY_ZONES: ReadonlyMap<string, string> = (() => {
+  const byZone: Record<string, string[]> = {
+    'America/New_York': [
+      'new york', 'brooklyn', 'queens', 'the bronx', 'bronx', 'manhattan', 'staten island',
+      'buffalo', 'rochester', 'albany', 'syracuse', 'yonkers', 'white plains',
+      'piscataway', 'newark', 'jersey city', 'secaucus', 'edison', 'elizabeth', 'clifton',
+      'boston', 'cambridge', 'quincy', 'worcester', 'providence', 'hartford', 'stamford', 'new haven',
+      'philadelphia', 'pittsburgh', 'allentown', 'harrisburg', 'scranton', 'erie',
+      'washington', 'ashburn', 'herndon', 'reston', 'sterling', 'manassas', 'chantilly', 'leesburg',
+      'richmond', 'virginia beach', 'norfolk', 'baltimore', 'boydton',
+      'atlanta', 'columbus', 'savannah', 'augusta', 'macon',
+      'miami', 'orlando', 'tampa', 'jacksonville', 'fort lauderdale', 'west palm beach',
+      'boca raton', 'tallahassee', 'gainesville', 'saint petersburg', 'st petersburg',
+      'charlotte', 'raleigh', 'durham', 'greensboro', 'winston-salem', 'cary',
+      'cleveland', 'cincinnati', 'dayton', 'akron', 'toledo',
+      'detroit', 'grand rapids', 'ann arbor', 'lansing',
+      'indianapolis', 'louisville', 'lexington', 'knoxville', 'chattanooga',
+      'charleston', 'wilmington'
+    ],
+    'America/Chicago': [
+      'chicago', 'naperville', 'aurora il', 'rockford', 'peoria',
+      'dallas', 'fort worth', 'houston', 'austin', 'san antonio', 'plano', 'irving', 'garland',
+      'mesquite', 'frisco', 'mckinney', 'corpus christi', 'laredo', 'lubbock',
+      'oklahoma city', 'tulsa', 'kansas city', 'wichita', 'topeka', 'overland park',
+      'omaha', 'lincoln', 'des moines', 'cedar rapids',
+      'minneapolis', 'saint paul', 'st paul', 'rochester mn',
+      'milwaukee', 'madison', 'green bay',
+      'memphis', 'nashville', 'new orleans', 'baton rouge', 'shreveport', 'little rock', 'jackson',
+      'st louis', 'saint louis', 'springfield mo'
+    ],
+    'America/Denver': [
+      'denver', 'colorado springs', 'boulder', 'fort collins', 'lakewood', 'aurora co',
+      'salt lake city', 'provo', 'ogden', 'west valley city',
+      'albuquerque', 'santa fe', 'las cruces', 'rio rancho', 'el paso',
+      'boise', 'nampa', 'meridian', 'cheyenne', 'billings', 'helena', 'bozeman'
+    ],
+    'America/Phoenix': [
+      'phoenix', 'tucson', 'mesa', 'chandler', 'scottsdale', 'tempe', 'gilbert',
+      'surprise', 'yuma', 'flagstaff', 'goodyear'
+    ],
+    'America/Los_Angeles': [
+      'los angeles', 'san francisco', 'san jose', 'oakland', 'san diego', 'sacramento', 'fresno',
+      'long beach', 'santa clara', 'sunnyvale', 'mountain view', 'palo alto', 'fremont', 'san mateo',
+      'redwood city', 'santa ana', 'anaheim', 'irvine', 'riverside', 'bakersfield', 'stockton',
+      'modesto', 'chula vista', 'santa barbara', 'san bernardino', 'hayward', 'berkeley',
+      'seattle', 'tacoma', 'spokane', 'bellevue', 'redmond', 'kent', 'renton', 'everett', 'kirkland',
+      'las vegas', 'henderson', 'north las vegas', 'reno', 'sparks', 'carson city',
+      'hillsboro', 'beaverton', 'eugene', 'gresham', 'bend'
+    ],
+    'America/Anchorage': ['anchorage', 'fairbanks', 'juneau', 'wasilla'],
+    'Pacific/Honolulu': ['honolulu', 'pearl city', 'hilo', 'kailua', 'kapolei']
+  };
+  const m = new Map<string, string>();
+  for (const [zone, cities] of Object.entries(byZone)) {
+    for (const c of cities) m.set(c, zone);
+  }
+  return m;
+})();
+
+/** Normalise a reported city to the table's key form: first comma-part, lower-case, single-spaced. */
+function normalizeCity(city: string): string {
+  const head = city.split(',')[0] ?? city;
+  return head.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * The IANA timezone for a US exit's city, or null when it is unknown or ambiguous.
+ *
+ * Null is a first-class answer, not a failure — see the table's header. The caller shows the zone
+ * as a copy-and-paste suggestion for the account timezone; on null it asks the operator to choose,
+ * which is the correct thing to do rather than pick one for them.
+ */
+export function usZoneForCity(city: string | null | undefined): string | null {
+  if (!city || typeof city !== 'string') return null;
+  return US_CITY_ZONES.get(normalizeCity(city)) ?? null;
 }
 
 /**
@@ -234,7 +333,28 @@ export async function alignBrowser(opts: {
     try {
       const cdp = await context.newCDPSession(page);
       await cdp.send('Emulation.setTimezoneOverride', { timezoneId: opts.timezone });
-      if (opts.locale) await cdp.send('Emulation.setLocaleOverride', { locale: opts.locale });
+      if (opts.locale) {
+        /**
+         * BOTH CALLS, because they move DIFFERENT properties and neither moves the other's.
+         *
+         * `setLocaleOverride` was here alone and was described as the route to navigator.language.
+         * It is not — measured twice, independently, on Chrome 150.0.7871.187 and 151.0.7922.72:
+         * it moves `Intl` (dates, numbers, collation) and leaves navigator.language untouched.
+         * `setUserAgentOverride` with `acceptLanguage` is what moves navigator.language,
+         * navigator.languages and the Accept-Language header — and it leaves `Intl` alone.
+         *
+         * A US address announcing en-PH is the contradiction this module exists to remove, so
+         * sending only one of these left half the job undone in the half nobody was looking at.
+         *
+         * The user-agent is handed straight back unchanged: this call REQUIRES a userAgent, and
+         * inventing one here would forge a second identity signal to fix a language one.
+         */
+        await cdp.send('Emulation.setLocaleOverride', { locale: opts.locale });
+        const ua = await page.evaluate(() => navigator.userAgent);
+        await cdp.send('Emulation.setUserAgentOverride', {
+          userAgent: ua, acceptLanguage: opts.locale
+        });
+      }
       pagesAligned++;
     } catch {
       /* A page that closed mid-flight is the ordinary case here and not a failure. A page that

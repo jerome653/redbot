@@ -20,6 +20,16 @@ export const SCOPE_GLOBAL = 'global';
 /** The one name redbot itself looks up. Others may be stored; nothing else is read by default. */
 export const ANTHROPIC_API_KEY = 'anthropic_api_key';
 
+/**
+ * A Webshare account API key, when an operator chooses to store one.
+ *
+ * OPTIONAL, and nothing in redbot's run path reads it — it powers one convenience only: listing
+ * that account's US proxies on the Setup screen so the exit form can be auto-filled instead of
+ * typed. The settled exit vendor is IPRoyal ISP (PROXY-VENDOR-DECISION.md), not Webshare; this
+ * key is a shortcut for whoever already has a Webshare account, never a dependency.
+ */
+export const WEBSHARE_API_KEY = 'webshare_api_key';
+
 export { vaultReady, vaultUnavailableReason, keyFingerprint };
 export type { CredentialSummary };
 
