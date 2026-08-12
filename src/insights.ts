@@ -22,6 +22,7 @@ import { loadThreads, loadGaps, loadAssessments, loadDrafts } from './store.js';
 import { loadReviews, summarizeReviews } from './review.js';
 import { loadHistory } from './store.js';
 import { prefilter } from './commands/opportunity.js';
+import { policy } from './policy.js';
 
 export interface Signal {
   /** Which component the evidence points at. */
@@ -55,6 +56,31 @@ const median = (xs: number[]): number => {
   const mid = Math.floor(s.length / 2);
   return s.length % 2 ? s[mid]! : Math.round((s[mid - 1]! + s[mid]!) / 2);
 };
+
+/**
+ * Which of the two opposite causes a batch of "too old" drops actually has.
+ *
+ * `ageMinutes` is the age a thread had AT COLLECTION. If it was already past the ceiling then,
+ * the feed handed over something stale and the sort is the thing to change. If it was inside the
+ * ceiling then, the feed did its job and the thread aged on disk — the corpus is old because
+ * nothing has collected since, and changing the sort would fix nothing.
+ *
+ * Measured 2026-08-12: 14 of 35 dropped too old, 0 of 35 over the ceiling at collection. The
+ * finding said "the collector is reading a feed that surfaces old posts" for a collector that
+ * had never once done so.
+ *
+ * Rows with no captured age abstain rather than vote — an unmeasured thread is not evidence for
+ * either story, and counting it as one would be the same mistake in a smaller place.
+ */
+export function tooOldCause(
+  dropped: readonly { ageMinutes: number | null }[],
+  ceilingHours: number
+): 'feed' | 'stale' | 'unknown' {
+  const measurable = dropped.filter((d) => d.ageMinutes != null);
+  if (!measurable.length) return 'unknown';
+  const oldOnArrival = measurable.filter((d) => d.ageMinutes! / 60 > ceilingHours).length;
+  return oldOnArrival * 2 > measurable.length ? 'feed' : 'stale';
+}
 
 export async function computeInsights(): Promise<Insights> {
   const threads = await loadThreads();
@@ -104,7 +130,12 @@ export async function computeInsights(): Promise<Insights> {
       severity: share > 0.4 ? 'act' : 'watch',
       finding:
         topReason === 'too old'
-          ? 'most collected threads are too old to reply to — the collector is reading a feed that surfaces old posts'
+          ? tooOldCause(
+              dropped.filter((d) => d.kind === 'too-old').map((d) => d.thread),
+              policy.maxThreadAgeHoursToPublish.value
+            ) === 'feed'
+            ? 'most collected threads are too old to reply to — the collector is reading a feed that surfaces old posts'
+            : 'most collected threads have aged past the ceiling since they were collected — the corpus is stale, collect again rather than change the sort'
           : topReason === 'not a question'
             ? 'most collected threads are not questions — the sort or the subreddit is wrong'
             : `most collected threads are dropped for: ${topReason}`,
