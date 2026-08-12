@@ -67,7 +67,8 @@ const COUNTERS: HealthCounters = {
   rateLimitHits24h: 0, loginFailures24h: 0,
   removalsObserved30d: 0, absentSignedOut30d: 0, suspensionNotices: 0,
   accountAgeDays: 400, karma: 500,
-  lastReplyAt: null, lastRateLimitAt: null, lastRemovalAt: null
+  lastReplyAt: null, lastRateLimitAt: null, lastRemovalAt: null,
+  fleetSize: 1, unattributedEvents24h: 0
 };
 
 const healthy: HealthVerdict = {

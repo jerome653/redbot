@@ -201,6 +201,7 @@ const counters = (over: Partial<HealthCounters> = {}): HealthCounters => ({
   // Stage 1 by karma, as both live accounts actually are (measured 2026-07-27: karma 1).
   accountAgeDays: 3, karma: 1,
   lastReplyAt: null, lastRateLimitAt: null, lastRemovalAt: null,
+  fleetSize: 1, unattributedEvents24h: 0,
   ...over
 });
 

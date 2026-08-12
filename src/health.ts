@@ -24,6 +24,7 @@ import { policy } from './policy.js';
 import { loadHistory } from './store.js';
 import { getPool } from './db.js';
 import { insertObservation, selectObservations } from './db/logs.js';
+import { countAccounts } from './db/accounts.js';
 import type { HistoryEntry } from './types.js';
 
 export const observationsPath = join(DATA, 'observations.jsonl');
@@ -90,6 +91,13 @@ export interface HealthCounters {
   lastReplyAt: string | null;
   lastRateLimitAt: string | null;
   lastRemovalAt: string | null;
+  /**
+   * How many accounts this install has, and how many events in the last 24h named none of them
+   * and were therefore charged to nobody. Both travel with the counters so a reader can check
+   * which attribution rule produced the numbers above.
+   */
+  fleetSize: number;
+  unattributedEvents24h: number;
 }
 
 export type HealthState = 'Healthy' | 'Caution' | 'Cooldown' | 'Stop';
@@ -148,16 +156,46 @@ export async function counters(
   now: Date = new Date(),
   sources?: { history?: HistoryEntry[]; observations?: Observation[] },
   /** The account's IANA timezone, so "today" for the daily counts matches its quiet hours. */
-  zone?: string
+  zone?: string,
+  /** How many accounts exist. Read from the store when not supplied; injectable for tests. */
+  fleet?: number
 ): Promise<HealthCounters> {
   const history = sources?.history ?? await loadHistory();
   const obs = sources?.observations ?? await loadObservations();
 
+  /**
+   * WHO AN UNATTRIBUTED ROW BELONGS TO.
+   *
+   * A row with `account: null` is what a command run without an account context writes — and
+   * what a foreign headless Chrome's block page wrote on 2026-07-27. It used to be charged to
+   * whichever account was being asked about, which is nearly right at one account (there is
+   * nothing else it could be) and wrong at scale in the most expensive direction: two such
+   * `login.fail` rows put EVERY account at `Stop` / `mayPublish: false`, with no override and
+   * no reset until they aged out of the 24h window.
+   *
+   * So it is charged only while the install has at most one account, and beyond that it is
+   * counted separately and reported. Not counted is not the same as not seen: an event that
+   * quietly belongs to nobody is how a real block page goes unnoticed.
+   *
+   * A fleet size that cannot be read counts as one — the single-account reading, which sees
+   * more rather than fewer.
+   */
+  const fleetSize = fleet ?? await countAccounts(getPool()).catch(() => 1);
+  const chargeUnowned = fleetSize <= 1;
+
   const mine = <T extends { account?: string | null }>(rows: T[]) =>
-    account ? rows.filter((r) => r.account === account || r.account == null) : rows;
+    account
+      ? rows.filter((r) => r.account === account || (r.account == null && chargeUnowned))
+      : rows;
 
   const h = mine(history);
   const o = mine(obs);
+
+  /* Only meaningful when an account was named AND unowned rows were held back: with no account
+     named nothing is being attributed, so nothing is outstanding. */
+  const unattributedEvents24h = account && !chargeUnowned
+    ? history.filter((e) => e.account == null && now.getTime() - new Date(e.ts).getTime() <= DAY_MS).length
+    : 0;
 
   const today = (ts: string) => sameLocalDay(new Date(ts), now, zone);
   const within = (ts: string, ms: number) => now.getTime() - new Date(ts).getTime() <= ms;
@@ -215,7 +253,9 @@ export async function counters(
     karma: karmaObs ? num(karmaObs.value) : null,
     lastReplyAt: lastTs(publishes),
     lastRateLimitAt: lastTs(rateLimits),
-    lastRemovalAt: lastTs(removals)
+    lastRemovalAt: lastTs(removals),
+    fleetSize,
+    unattributedEvents24h
   };
 }
 
@@ -295,6 +335,15 @@ export function assess(c: HealthCounters, now: Date = new Date()): HealthVerdict
   }
   if (c.repliesToday === policy.maxRepliesPerDay.value - 1) {
     caution.push(`${c.repliesToday} replies today — one below the daily ceiling`);
+  }
+  if (c.unattributedEvents24h > 0) {
+    /* Said out loud precisely because it is NOT counted above. A block page written by a Chrome
+       redbot was not driving names no account, and with a fleet it cannot be assigned to one —
+       but somebody should look at it rather than have it vanish between accounts. */
+    caution.push(
+      `${c.unattributedEvents24h} event(s) in the last 24h name no account, so they were counted ` +
+      `against none of the ${c.fleetSize} accounts here — read data/history.jsonl before publishing`
+    );
   }
 
   if (stop.length) {

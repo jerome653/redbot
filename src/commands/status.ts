@@ -31,6 +31,11 @@ export async function healthCmd(account?: string): Promise<number> {
   say.step(`Avg dwell      : ${c.avgDwellMs == null ? 'no data' : Math.round(c.avgDwellMs / 1000) + 's'}`);
   say.step(`429s (24h)     : ${c.rateLimitHits24h}`);
   say.step(`Login failures : ${c.loginFailures24h}`);
+  /* Printed only when it is non-zero, and printed at all because these events were deliberately
+     charged to nobody: with more than one account there is no way to say whose they are. */
+  if (c.unattributedEvents24h > 0) {
+    say.step(`Named no account (24h): ${c.unattributedEvents24h}   counted against none of the ${c.fleetSize} accounts`);
+  }
   say.step(`Removals (30d) : ${c.removalsObserved30d}   observed, not inferred`);
   say.step(`Absent to a signed-out browser (30d): ${c.absentSignedOut30d}`);
   say.step(`Account age    : ${c.accountAgeDays == null ? 'never measured' : c.accountAgeDays + ' days'}`);
