@@ -5,7 +5,9 @@
  * Works with a saved session; falls back to logged-out reading if there is none.
  */
 import { attach, isBrowserUp, isBlocked, NoBrowserError } from '../browser.js';
-import { openSubreddit, collectPermalinks, collectThread } from '../reddit/scrape.js';
+import {
+  openSubreddit, collectPermalinks, collectThread, feedSort, DEFAULT_FEED_SORT
+} from '../reddit/scrape.js';
 import { sel } from '../reddit/selectors.js';
 import { config } from '../config.js';
 import { saveThreads } from '../store.js';
@@ -13,13 +15,18 @@ import { record, say } from '../log.js';
 import type { Thread } from '../types.js';
 
 /**
- * `sort` matters more than it looks. The default `hot` feed is where warming goes to die:
- * measured 2026-07-27, the YOUNGEST thread in r/WordPress's hot feed was 2.7h old, because a
- * thread has to accumulate engagement before it becomes hot. The warming protocol wants threads
- * under 2h — so from `hot`, the rule can never be satisfied and `warmup` reports zero targets
- * forever. Fresh threads live in `new`.
+ * `sort` matters more than it looks, and it used to default to `hot`, which is where warming
+ * goes to die: measured 2026-07-27, the YOUNGEST thread in r/WordPress's hot feed was 2.7h old,
+ * because a thread has to accumulate engagement before it becomes hot. The warming protocol
+ * wants threads under 2h — so from `hot`, the rule could never be satisfied and `warmup`
+ * reported zero targets forever. The publish gate says the same thing one step later: 72h and
+ * the thread is a footprint, not a reply. Measured on r/WordPress 2026-08-11, `/hot` → 0 of 20
+ * survived the prefilter and `--sort new` → 12 of 35 did.
+ *
+ * So the default is `new` (`DEFAULT_FEED_SORT`) and `hot` is one flag away — `redbot read
+ * r/WordPress --sort hot`.
  */
-export async function read(subreddit: string | undefined, limit?: number, sort = 'hot'): Promise<number> {
+export async function read(subreddit: string | undefined, limit?: number, sort?: string): Promise<number> {
   if (!subreddit) {
     say.fail('Usage: redbot read <subreddit>');
     return 1;
@@ -27,7 +34,17 @@ export async function read(subreddit: string | undefined, limit?: number, sort =
   const name = subreddit.replace(/^\/?r\//i, '');
   const max = limit ?? config.limits.maxThreadsPerRead;
 
-  say.head(`redbot read r/${name}` + (sort === 'hot' ? '' : ` · ${sort}`));
+  /* Checked BEFORE a browser is attached: a typo'd sort renders as a page with no posts, which
+     reads as "the subreddit is quiet" instead of "that is not a sort". */
+  let feed: string;
+  try {
+    feed = feedSort(sort ?? DEFAULT_FEED_SORT);
+  } catch (e) {
+    say.fail(e instanceof Error ? e.message : String(e));
+    return 1;
+  }
+
+  say.head(`redbot read r/${name} · ${feed}`);
   if (!(await isBrowserUp())) {
     say.fail(new NoBrowserError(config.browser.cdpEndpoint).message);
     return 1;
@@ -36,7 +53,7 @@ export async function read(subreddit: string | undefined, limit?: number, sort =
   const threads: Thread[] = [];
 
   try {
-    await openSubreddit(s.page, name, sort);
+    await openSubreddit(s.page, name, feed);
 
     // A block page renders as a normal document, so collection would otherwise scrape an
     // interstitial and count it as "0 threads" while hammering Reddit. `isBlocked` was imported
@@ -74,8 +91,10 @@ export async function read(subreddit: string | undefined, limit?: number, sort =
 
     const added = await saveThreads(threads);
     say.ok(`Collected ${threads.length} threads (${added} new). Next: redbot analyze`);
+    /* The sort is recorded because `insights` splits a "too old" drop into a FEED cause and a
+       STALE cause, and "which feed did this batch come from" is the evidence for that split. */
     await record('read', `r/${name}: ${threads.length} threads, ${added} new`, {
-      subreddit: name, collected: threads.length, added
+      subreddit: name, collected: threads.length, added, sort: feed
     });
     return 0;
   } catch (e) {

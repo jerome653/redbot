@@ -2083,6 +2083,40 @@ test('the startup banner does not claim to be read-only', async () => {
 });
 
 /**
+ * THE BUG THIS PINS: the two collect buttons read feeds whose contents the publish gate would
+ * refuse, so a run could only ever end in a prefilter drop.
+ *
+ * `find-threads` spawned `read <sub>` with no sort, taking the CLI default `hot` — and a post
+ * becomes hot by ACCUMULATING votes, so `hot` is an age filter pointing the wrong way. Measured
+ * on r/WordPress 2026-08-11: `/hot` → 0 of 20 survived the prefilter, `--sort new` → 12 of 35.
+ * `find-search` spawned `search "<q>"` with no window, which is Reddit's ALL TIME — where the
+ * seven- and eight-year-old threads of DEFECT-11 came from.
+ *
+ * Pinned in the SOURCE rather than by spawning, because the value is the whole point: a run that
+ * spawns proves the child started, not which feed it was pointed at.
+ */
+test('the collect buttons name the feed they read, and it is one a reply can still reach', () => {
+  const src = readFileSync(join(HERE, 'server.mjs'), 'utf8');
+
+  assert.match(src, /const FEED_SORT = 'new'/,      'the subreddit feed must be new, not hot');
+  assert.match(src, /const SEARCH_WINDOW = 'week'/, 'a search must carry a time window');
+
+  const findThreads = /'find-threads':\s*\{\s*args:\s*\(o\)\s*=>\s*(\[[^\]]*\])/.exec(src);
+  assert.ok(findThreads, 'find-threads must still build its own args');
+  assert.match(findThreads[1], /'--sort',\s*FEED_SORT/,
+    'find-threads must pass the sort explicitly — a CLI default can move under it');
+
+  const findSearch = /'find-search':\s*\{\s*args:\s*\(o\)\s*=>\s*(\[[^\]]*\])/.exec(src);
+  assert.ok(findSearch, 'find-search must still build its own args');
+  assert.match(findSearch[1], /'--time',\s*SEARCH_WINDOW/,
+    'find-search must pass the window explicitly, or the search is all-time');
+
+  /* The commit half stays as it is: picking is what keeps ancient threads out of the corpus. */
+  assert.match(src, /'collect-search':\s*\{\s*args:\s*\(o\)\s*=>\s*\['search',\s*'--commit'/,
+    'collect-search must still commit only what a person picked');
+});
+
+/**
  * The header names symbols rather than line numbers, on purpose — the claim it replaced rotted
  * because same-file `:line` citations shift under every edit above them. Symbols only rot when
  * renamed or deleted, which is what this pins: every one the header names must still exist, and

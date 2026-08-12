@@ -24,7 +24,10 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { attach, isBrowserUp, isBlocked, NoBrowserError } from '../browser.js';
-import { runSearch, collectListings, collectThread } from '../reddit/scrape.js';
+import {
+  runSearch, collectListings, collectThread, DEFAULT_SEARCH_WINDOW, searchWindow
+} from '../reddit/scrape.js';
+import type { SearchWindow } from '../reddit/scrape.js';
 import { sel } from '../reddit/selectors.js';
 import { config, DATA, ensureData } from '../config.js';
 import { saveThreads } from '../store.js';
@@ -80,8 +83,8 @@ function annotate(title: string | null): { notes: string[]; clean: boolean } {
   return { notes, clean: notes.length === 0 };
 }
 
-async function preview(query: string, max: number): Promise<number> {
-  say.head(`redbot search "${query}"`);
+async function preview(query: string, max: number, time: SearchWindow): Promise<number> {
+  say.head(`redbot search "${query}" · past ${time}`);
   if (!(await isBrowserUp())) {
     say.fail(new NoBrowserError(config.browser.cdpEndpoint).message);
     return 1;
@@ -89,7 +92,7 @@ async function preview(query: string, max: number): Promise<number> {
 
   const s = await attach();
   try {
-    await runSearch(s.page, query);
+    await runSearch(s.page, query, { time });
     // A block page renders as a normal document; collecting from it scrapes an interstitial and
     // keeps hitting Reddit. `isBlocked` was imported but never called here (evaluation L4).
     if (await isBlocked(s.page)) {
@@ -249,13 +252,30 @@ async function commit(spec: string): Promise<number> {
  * Entry
  * ------------------------------------------------------------------ */
 
-export async function search(query: string | undefined, limit?: number, commitSpec?: string): Promise<number> {
+export async function search(
+  query: string | undefined,
+  limit?: number,
+  commitSpec?: string,
+  time?: string
+): Promise<number> {
   if (commitSpec !== undefined) return commit(commitSpec);
   if (!query) {
-    say.fail('Usage: redbot search "<query>"   then   redbot search --commit <1,4,7|all>');
+    say.fail('Usage: redbot search "<query>" [--time week]   then   redbot search --commit <1,4,7|all>');
     return 1;
   }
-  return preview(query, limit ?? config.limits.maxThreadsPerRead);
+
+  /* Checked before the browser: Reddit IGNORES a `t=` it does not recognise and searches all
+     time, so a typo'd window is silently the widest possible search — which is how threads
+     seven and eight years old reached the corpus. */
+  let window: SearchWindow;
+  try {
+    window = searchWindow(time ?? DEFAULT_SEARCH_WINDOW);
+  } catch (e) {
+    say.fail(e instanceof Error ? e.message : String(e));
+    return 1;
+  }
+
+  return preview(query, limit ?? config.limits.maxThreadsPerRead, window);
 }
 
 export { parsePicks as _parsePicks, annotate as _annotate };

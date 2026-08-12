@@ -218,18 +218,93 @@ export async function collectPermalinks(
   return [...found].slice(0, max);
 }
 
-export async function openSubreddit(page: Page, subreddit: string, sort = 'hot'): Promise<void> {
+/**
+ * WHICH FEED redbot READS, decided in one place because both readers had it wrong.
+ *
+ * The publish gate refuses a thread older than `maxThreadAgeHoursToPublish` (72h), so a feed
+ * that surfaces older posts spends page loads on threads that cannot be replied to — the
+ * expensive half of a run, followed by a prefilter drop.
+ *
+ * `hot` was the subreddit default, and a post becomes hot by ACCUMULATING votes: the sort is an
+ * age filter pointing the wrong way. Measured on r/WordPress 2026-08-11: `/hot` → 0 of 20
+ * survived the prefilter, `--sort new` → 12 of 35 survived. `new` is the default now; `hot` is
+ * still one flag away.
+ */
+export const FEED_SORTS = ['new', 'hot', 'top', 'rising'] as const;
+export type FeedSort = (typeof FEED_SORTS)[number];
+export const DEFAULT_FEED_SORT: FeedSort = 'new';
+
+/**
+ * Reddit's search time windows. `all` is Reddit's default when `t` is absent, and absent is what
+ * redbot sent — which is where the seven- and eight-year-old threads of DEFECT-11 came from.
+ *
+ * `week` is the default: the smallest window Reddit offers that is wider than the 72h publish
+ * ceiling, so it costs nothing at the gate while leaving slack for collection running late.
+ */
+export const SEARCH_WINDOWS = ['hour', 'day', 'week', 'month', 'year', 'all'] as const;
+export type SearchWindow = (typeof SEARCH_WINDOWS)[number];
+export const DEFAULT_SEARCH_WINDOW: SearchWindow = 'week';
+
+export const SEARCH_SORTS = ['relevance', 'new', 'top', 'comments'] as const;
+export type SearchSort = (typeof SEARCH_SORTS)[number];
+
+/**
+ * A bad sort or window must not travel to Reddit. `/r/x/nwe/` collects zero links and
+ * `t=fortnight` is ignored, which searches ALL TIME — both read as "the room is quiet" rather
+ * than "you typed it wrong", and one of them is how ancient threads get collected.
+ */
+function must<T extends string>(value: string, allowed: readonly T[], what: string): T {
+  if ((allowed as readonly string[]).includes(value)) return value as T;
+  throw new Error(`"${value}" is not a ${what} redbot knows. Use one of: ${allowed.join(', ')}.`);
+}
+
+/** The same checks a caller can run BEFORE opening a browser. Throw naming the valid values. */
+export function feedSort(value: string): FeedSort {
+  return must(value, FEED_SORTS, 'feed sort');
+}
+
+export function searchWindow(value: string): SearchWindow {
+  return must(value, SEARCH_WINDOWS, 'time window');
+}
+
+export function feedUrl(base: string, subreddit: string, sort: string = DEFAULT_FEED_SORT): string {
   const name = subreddit.replace(/^\/?r\//i, '');
-  await page.goto(`${config.redditBase}/r/${name}/${sort}/`, {
+  return `${base}/r/${name}/${must(sort, FEED_SORTS, 'feed sort')}/`;
+}
+
+export function searchUrl(
+  base: string,
+  query: string,
+  opts: { sort?: string; time?: string } = {}
+): string {
+  const sort = must(opts.sort ?? 'relevance', SEARCH_SORTS, 'search sort');
+  const time = must(opts.time ?? DEFAULT_SEARCH_WINDOW, SEARCH_WINDOWS, 'time window');
+  // `t=all` and no `t` mean the same thing to Reddit; sending nothing keeps the URL honest.
+  const window = time === 'all' ? '' : `&t=${time}`;
+  return `${base}/search/?q=${encodeURIComponent(query)}&sort=${sort}${window}`;
+}
+
+export async function openSubreddit(
+  page: Page,
+  subreddit: string,
+  sort: string = DEFAULT_FEED_SORT
+): Promise<void> {
+  await page.goto(feedUrl(config.redditBase, subreddit, sort), {
     waitUntil: 'domcontentloaded',
     timeout: 45_000
   });
   await pause();
 }
 
-export async function runSearch(page: Page, query: string): Promise<void> {
-  const url = `${config.redditBase}/search/?q=${encodeURIComponent(query)}&sort=relevance`;
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+export async function runSearch(
+  page: Page,
+  query: string,
+  opts: { sort?: string; time?: string } = {}
+): Promise<void> {
+  await page.goto(searchUrl(config.redditBase, query, opts), {
+    waitUntil: 'domcontentloaded',
+    timeout: 45_000
+  });
   await pause();
 }
 

@@ -57,8 +57,12 @@ redbot — Reddit engagement assistant
                                  (proxy read from REDBOT_PROXY_HOST/PORT/USER/PASS)
     redbot session [--kind short|medium] [--sub <name>]
                                  one human-shaped browsing session (reads only)
-    redbot read <subreddit>      collect threads from a subreddit
-    redbot search "<query>"      search Reddit and PREVIEW the results — collects nothing
+    redbot read <subreddit> [--sort new|hot|top|rising]
+                                 collect threads from a subreddit (default: new — a reply on a
+                                 thread past 72h is refused, and hot is mostly older than that)
+    redbot search "<query>" [--time hour|day|week|month|year|all]
+                                 search Reddit and PREVIEW the results — collects nothing
+                                 (default: week; with no window Reddit searches ALL TIME)
     redbot search --commit <n,n|all>
                                  collect only the ones you picked from that preview
     redbot subreddits "<topic>"  find COMMUNITIES to read, and PREVIEW them — adds nothing
@@ -147,7 +151,9 @@ export const VALUE_FLAGS = new Set([
   // job/queue flags. `account` matters most: omitting it here would make
   // `redbot job list --account docs-architect` read "docs-architect" as a positional filter
   // and then act on whatever REDBOT_ACCOUNT happened to be — the wrong queue, silently.
-  'account', 'state', 'at', 'after', 'attempts', 'note', 'sort',
+  // `time` is `redbot search "<q>" --time week`. Omitted here it would leak back into
+  // `positional` and become the QUERY — the same parser bug this set exists to fix.
+  'account', 'state', 'at', 'after', 'attempts', 'note', 'sort', 'time',
   'permalink', 'direction', 'target', 'query', 'subreddit', 'title', 'body',
   'draft', 'thread', 'comment',
   // `redbot sources add --search "<query>" --why "<reason>"`. Both take a value in space form,
@@ -300,7 +306,7 @@ async function main(): Promise<number> {
       label: flagValue('label')
     });
     case 'read':    return read(positional[0], undefined, flagValue('sort'));
-    case 'search':  return search(positional[0], undefined, flagValue('commit'));
+    case 'search':  return search(positional[0], undefined, flagValue('commit'), flagValue('time'));
     /* Communities, not threads — `search` finds posts. Same preview/commit contract. */
     case 'subreddits': return subreddits(positional[0], flagValue('commit'));
     /* The second write path. Title and body come from the person — see commands/post.ts. */

@@ -925,9 +925,27 @@ async function buildState(opts = {}) {
  * action, and that exception is the whole reason this flag exists rather than a blanket kill —
  * see `__reply` below.
  */
+/**
+ * WHICH FEED A BUTTON READS. Both of these are passed explicitly rather than left to the CLI's
+ * default, because the console is the only path a person actually presses and what it collects
+ * should not move when a default moves.
+ *
+ * `--sort new`: a post becomes `hot` by ACCUMULATING votes, so `hot` hands over threads that are
+ * already old, and the publish gate refuses anything past 72h. Measured on r/WordPress
+ * 2026-08-11: `/hot` → 0 of 20 survived the prefilter, `--sort new` → 12 of 35 survived.
+ * `--time week`: a search with no `t=` is Reddit's ALL TIME, which is where the seven- and
+ * eight-year-old threads of DEFECT-11 came from. A week is the smallest window wider than the
+ * 72h ceiling.
+ *
+ * Both are validated by the CLI, which refuses an unknown value instead of asking Reddit for a
+ * feed that does not exist and reporting the empty page as a quiet subreddit.
+ */
+const FEED_SORT = 'new';
+const SEARCH_WINDOW = 'week';
+
 const ACTIONS = {
-  'find-threads':   { args: (o) => ['read', String(o.subreddit || 'WordPress')], label: 'look for new threads', needsBrowser: true, stoppable: true },
-  'find-search':    { args: (o) => ['search', String(o.query || '')],            label: 'run a saved search',   needsBrowser: true, stoppable: true },
+  'find-threads':   { args: (o) => ['read', String(o.subreddit || 'WordPress'), '--sort', FEED_SORT], label: 'look for new threads', needsBrowser: true, stoppable: true },
+  'find-search':    { args: (o) => ['search', String(o.query || ''), '--time', SEARCH_WINDOW],         label: 'run a saved search',   needsBrowser: true, stoppable: true },
   /**
    * The second half of a search — and the reason a search source could not collect anything.
    *
