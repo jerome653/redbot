@@ -95,13 +95,26 @@ export function prefilter(
   return { keep, dropped };
 }
 
+/**
+ * There was nothing to work on — which is not the same as something went wrong.
+ *
+ * Both of this command's early exits are "the corpus gave me nothing": no threads at all, or none
+ * that survived the mechanical prefilter. They used to return 1, indistinguishable from a crash,
+ * and the console — which judges a run purely by its exit code — showed six runs of "scoring did
+ * not work" for a day on which scoring was never reached. The message is carried up separately now
+ * (tools/product/run-outcome.mjs); this code exists so a caller can branch on the DISTINCTION
+ * without parsing English. Still non-zero: nothing downstream ran, and a script must not treat
+ * that as success.
+ */
+export const NOTHING_TO_DO = 2;
+
 export async function opportunity(opts?: { force?: boolean; limit?: number; only?: string[]; all?: boolean }): Promise<number> {
   say.head('redbot opportunity');
 
   const threads = await loadThreads();
   if (!threads.length) {
     say.warn('No threads collected. Run `redbot session` or `redbot read` first.');
-    return 1;
+    return NOTHING_TO_DO;
   }
 
   /**
@@ -191,7 +204,7 @@ export async function opportunity(opts?: { force?: boolean; limit?: number; only
 
   if (!keep.length) {
     say.warn('Nothing survives the prefilter. Collect fresher threads rather than relaxing it.');
-    return 1;
+    return NOTHING_TO_DO;
   }
 
   const existing = new Map((await loadGaps()).map((g) => [g.threadId, g]));

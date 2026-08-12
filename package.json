@@ -15,7 +15,7 @@
     "build": "npm run clean && tsc",
     "dev": "tsc --watch",
     "redbot": "node dist/cli.js",
-    "test": "tsc && node --env-file=db/sqlite/.env.test db/sqlite/reset-test-db.mjs && node --env-file=db/sqlite/.env.test --test --test-concurrency=1 \"dist/test/*.test.js\" \"db/sqlite/schema.test.mjs\" \"db/sqlite/migrate-heal.test.mjs\" \"tools/operator/server.test.mjs\" \"tools/product/server.test.mjs\" \"tools/product/exit-posture.test.mjs\" \"tools/product/fleet-posture.test.mjs\" \"electron/updater.test.mjs\" \"electron/vault-key.test.mjs\"",
+    "test": "tsc && node --env-file=db/sqlite/.env.test db/sqlite/reset-test-db.mjs && node --env-file=db/sqlite/.env.test --test --test-concurrency=1 \"dist/test/*.test.js\" \"db/sqlite/schema.test.mjs\" \"db/sqlite/migrate-heal.test.mjs\" \"tools/operator/server.test.mjs\" \"tools/product/server.test.mjs\" \"tools/product/exit-posture.test.mjs\" \"tools/product/fleet-posture.test.mjs\" \"tools/product/run-outcome.test.mjs\" \"electron/updater.test.mjs\" \"electron/vault-key.test.mjs\"",
     "test:ui": "node --env-file=db/sqlite/.env.test --test --test-timeout=180000 tools/product/ui.test.mjs",
     "test:smoke": "node --test --test-timeout=120000 electron/smoke.test.mjs",
     "test:all": "npm test && npm run test:ui && npm run test:smoke",

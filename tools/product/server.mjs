@@ -49,6 +49,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { exitPosture } from './exit-posture.mjs';
 import { fleetProblems } from './fleet-posture.mjs';
+import { runError } from './run-outcome.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -1298,9 +1299,12 @@ function runAction(key, opts) {
          say "Stopped" rather than showing a red error for the thing it was asked to do. */
       const stopped = runningStopped;
       runningStopped = false;
+      /* The child already said why. Carrying its own last flagged line up to the response is what
+         stops the front end reaching for `|| 'scoring did not work'` — see run-outcome.mjs. */
+      const error = runError({ code, stopped, out, err });
       resolve({
         ok: code === 0, code, stopped, ms: Date.now() - started,
-        ...(stopped ? { error: 'Stopped.' } : {}),
+        ...(error ? { error } : {}),
         output: (out + err).slice(-24000), command: `redbot ${args.join(' ')}`
       });
     });
