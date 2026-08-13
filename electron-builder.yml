@@ -82,18 +82,24 @@ win:
   target:
     - target: nsis
       arch: [x64]
-    # A ZIP AS WELL, AND WHAT IT IS FOR.
+    # THE SMALL FILE TO HAND SOMEBODY — and what "small" can and cannot mean here.
     #
-    # The zip is the HAND-OUT: unzip it anywhere, run redbot.exe, no installer and no SmartScreen
-    # prompt. It is not an update channel — on Windows electron-updater is the NSIS updater, and
-    # it installs from the Setup exe named in latest.yml. A release carrying only a zip would look
-    # complete and leave every installed copy reporting "up to date" forever.
+    # This app is Electron + Chromium + Playwright. Roughly 100 MB has to reach the machine one
+    # way or another; the only question is whether it travels inside the file you send or is
+    # fetched at install time. `nsis-web` is the second: a ~1.5 MB stub that downloads
+    # `${productName}-${version}-x64.nsis.7z` from this release and installs it. That is the
+    # lightweight installer, and it is the only one.
     #
-    # THE PAIR IS THE POINT: the Setup exe plus its .blockmap is what makes the update button
-    # cheap. The blockmap lets the updater fetch only the changed byte RANGES of the exe —
-    # measured on this repository 2026-08-12, upgrading 2.0.3 to 3.0.0 transferred 1,837,999
-    # bytes, not 103 MB. The big file on the release is what buys the small download.
-    - target: zip
+    # Rejected, for the record: a `zip` target. Built once on 2026-08-13 and it came out at
+    # 143,654,954 bytes — LARGER than the 103 MB installer, because NSIS compresses and a zip of
+    # the unpacked tree does not. It also cannot self-update. It was the wrong answer to "light".
+    #
+    # NOTE ON latest.yml. Build this target in its own output directory
+    # (`--config.directories.output=release-web`) and do NOT upload the latest.yml it writes. The
+    # installed app is an NSIS install and its updater reads `path:` from the release's latest.yml;
+    # the web variant writes a different one, and one file cannot be both without risking the
+    # update path this project has already proved twice.
+    - target: nsis-web
       arch: [x64]
   # No signing configured. An unsigned installer shows a SmartScreen warning; a certificate is a
   # purchase and a decision for whoever publishes this, not something to fake here.
@@ -106,6 +112,16 @@ win:
   # updating. This has already cost one release, and a release checklist is the wrong place to fix
   # something a config line can make impossible.
   artifactName: ${productName}-Setup-${version}.${ext}
+
+# THE WEB STUB MUST NOT BE CALLED WHAT THE FULL INSTALLER IS CALLED.
+#
+# `win.artifactName` above applies to every Windows target, so the nsis-web stub was written as
+# `redbot-Setup-3.1.0.exe` — byte for byte the same NAME as the 103 MB installer, at 726,824
+# bytes. latest.yml points the updater at that exact filename, so publishing the stub under it
+# would leave every update installing a downloader instead of the app. Caught on 2026-08-13
+# before upload; pinned here so it cannot happen again.
+nsisWeb:
+  artifactName: ${productName}-Web-Setup-${version}.${ext}
 
 nsis:
   oneClick: false                  # let a person choose the install directory
