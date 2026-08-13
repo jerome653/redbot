@@ -1,6 +1,6 @@
 {
   "name": "redbot",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "type": "module",
   "description": "redbot MVP — assists a human engaging on Reddit through a real browser session. One account, one profile, local-first.",

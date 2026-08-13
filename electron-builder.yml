@@ -82,6 +82,19 @@ win:
   target:
     - target: nsis
       arch: [x64]
+    # A ZIP AS WELL, AND WHAT IT IS FOR.
+    #
+    # The zip is the HAND-OUT: unzip it anywhere, run redbot.exe, no installer and no SmartScreen
+    # prompt. It is not an update channel — on Windows electron-updater is the NSIS updater, and
+    # it installs from the Setup exe named in latest.yml. A release carrying only a zip would look
+    # complete and leave every installed copy reporting "up to date" forever.
+    #
+    # THE PAIR IS THE POINT: the Setup exe plus its .blockmap is what makes the update button
+    # cheap. The blockmap lets the updater fetch only the changed byte RANGES of the exe —
+    # measured on this repository 2026-08-12, upgrading 2.0.3 to 3.0.0 transferred 1,837,999
+    # bytes, not 103 MB. The big file on the release is what buys the small download.
+    - target: zip
+      arch: [x64]
   # No signing configured. An unsigned installer shows a SmartScreen warning; a certificate is a
   # purchase and a decision for whoever publishes this, not something to fake here.
 
