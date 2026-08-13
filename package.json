@@ -26,7 +26,7 @@
     "start": "tsc && electron .",
     "start:nobuild": "electron .",
     "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder --win nsis",
+    "dist": "npm run build && electron-builder --win nsis zip",
     "dist:dev": "npm run build && electron-builder --win nsis --publish never -c.appId=com.sgen.redbot.dev -c.productName=\"redbot dev\" -c.extraMetadata.productName=\"redbot dev\" -c.directories.output=release-dev"
   },
   "dependencies": {
