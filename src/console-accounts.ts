@@ -30,7 +30,7 @@ import {
 } from './ports.js';
 import { machineId } from './machine.js';
 import { allocateProfileDir, profileState, resolveProfileDir } from './profiles.js';
-import { isAbsolute, dirname, basename } from 'node:path';
+import { isAbsolute, dirname, basename, join } from 'node:path';
 
 /* Re-exported: the allocator here and the status screen must ask "is this port free" in exactly
    one way. Two definitions is how a console hands out a port it has just called occupied. */
@@ -64,6 +64,85 @@ export interface CreateResult {
   account?: AccountRecord;
   /** Where the new row landed, so the console can say so rather than imply both. */
   storedIn?: 'database' | 'seed-file';
+  /**
+   * True when this account took back the Chrome folder a previous removal kept for the same
+   * username. Reported because a reused folder may already be SIGNED IN, and "your browser is
+   * ready" is a different fact from "here is an empty folder to sign into".
+   */
+  adoptedProfileDir?: boolean;
+}
+
+/* ------------------------------------------------------------------ *
+ * Folders kept after a removal
+ * ------------------------------------------------------------------ */
+
+/**
+ * WHY THIS FILE EXISTS.
+ *
+ * Removing an account deletes the record and deliberately KEEPS its Chrome folder: that folder
+ * holds the only copy of the Reddit session, no password is stored anywhere, and the trade the
+ * console states to the operator is that the removal can be undone by re-adding.
+ *
+ * It could not. Measured 2026-08-13: create → remove → add the same username allocated the NEXT
+ * folder, because allocation only knows which folders are TAKEN and which EXIST, and a kept one
+ * is neither. The session was kept and unreachable, and every removal left another signed-in
+ * folder on disk that nothing would ever open again.
+ *
+ * So a removal writes down which folder belonged to which username, and creating that username
+ * again adopts it. This is the only path that reuses a folder: a caller-supplied path is still
+ * refused, which is what stops a request pointing redbot at a profile it does not own.
+ */
+interface KeptFolder { handle: string; profileDir: string; removedAt: string }
+
+function keptPath(): string {
+  return join(DATA, 'removed-accounts.json');
+}
+
+function loadKept(): KeptFolder[] {
+  if (!existsSync(keptPath())) return [];
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(keptPath(), 'utf8'));
+    const list = (parsed as { kept?: unknown })?.kept;
+    if (!Array.isArray(list)) return [];
+    return list.filter((k): k is KeptFolder =>
+      !!k && typeof (k as KeptFolder).handle === 'string' && typeof (k as KeptFolder).profileDir === 'string');
+  } catch {
+    /* Unreadable is treated as empty HERE, unlike the seed file: nothing is being written on the
+       strength of it, and the cost of ignoring it is one extra folder rather than a lost record. */
+    return [];
+  }
+}
+
+function writeKept(list: KeptFolder[]): void {
+  mkdirSync(DATA, { recursive: true });
+  writeFileSync(keptPath(), JSON.stringify({ kept: list }, null, 2), 'utf8');
+}
+
+function rememberKeptFolder(handle: string, profileDir: string): void {
+  const rest = loadKept().filter((k) => k.handle.toLowerCase() !== handle.toLowerCase());
+  rest.push({ handle, profileDir, removedAt: new Date().toISOString() });
+  try { writeKept(rest); } catch { /* the removal itself succeeded; this is a convenience record */ }
+}
+
+/**
+ * The folder kept for this username, if it is still there and nobody else holds it.
+ *
+ * Three conditions, and all three are load-bearing: the record must name this username (a session
+ * is never handed to a different account), the folder must still exist (deleting it by hand is
+ * how an operator says "start clean", and a name is not a session), and no live account may
+ * already be using it.
+ */
+function keptFolderFor(handle: string, taken: ReadonlySet<string | undefined>): KeptFolder | null {
+  const k = loadKept().find((x) => x.handle.toLowerCase() === handle.toLowerCase());
+  if (!k) return null;
+  if ([...taken].some((t) => (t ?? '').toLowerCase() === k.profileDir.toLowerCase())) return null;
+  if (!existsSync(resolveProfileDir(DATA, k.profileDir))) return null;
+  return k;
+}
+
+function forgetKeptFolder(handle: string): void {
+  const rest = loadKept().filter((k) => k.handle.toLowerCase() !== handle.toLowerCase());
+  try { writeKept(rest); } catch { /* leaving a stale line costs nothing — adoption re-checks disk */ }
 }
 
 /**
@@ -166,16 +245,30 @@ export async function createConsoleAccount(body: {
    * the first Chrome launch the name existed only in the database, so two accounts created before
    * either browser was opened — every account in one dashboard pull — could be handed the same
    * folder. See src/profiles.ts.
+   *
+   * ADOPTION FIRST. The folder a previous removal kept for THIS username comes back before a new
+   * one is allocated — otherwise "a removal you can undo by re-adding" is a promise the allocator
+   * cannot keep, and the kept session is stranded on disk for good. See keptFolderFor().
    */
-  const dir = allocateProfileDir({ dataRoot: DATA, taken: dirs });
+  const kept = keptFolderFor(handle, dirs);
+  const dir = kept ? kept.profileDir : allocateProfileDir({ dataRoot: DATA, taken: dirs });
 
   const account: AccountRecord = {
     handle,
     role: String(body.role ?? 'Support'),
     speaks: String(body.speaks ?? ''),
     knows: Array.isArray(body.knows) ? body.knows.map(String) : [],
-    subreddits: Array.isArray(body.subreddits) && body.subreddits.length
-      ? body.subreddits.map(String) : ['WordPress'],
+    /**
+     * NO DEFAULT. This used to store `['WordPress']` when the field was left empty, which is the
+     * build deciding where somebody else's account speaks — and the add form arrived pre-filled
+     * with the same name, so an operator adding an account for another room had to notice a
+     * default and delete it.
+     *
+     * An empty list is now a real state and means "wherever the enabled sources point": see
+     * allowedSubreddits() in select.ts, which reads the operator's own source list before it
+     * falls back to anything. It still never means everywhere.
+     */
+    subreddits: Array.isArray(body.subreddits) ? body.subreddits.map(String).filter(Boolean) : [],
     timezone: String(body.timezone ?? 'Asia/Manila'),
     quietHours: [0, 8],
     dailyCeiling: 1,
@@ -207,8 +300,12 @@ export async function createConsoleAccount(body: {
   mkdirSync(DATA, { recursive: true });
   writeFileSync(accountsPath(), JSON.stringify(seed, null, 2), 'utf8');
 
+  /* Cleared only once the account is on record in both stores: the folder has a live owner
+     again, and a kept-folder line that outlived its removal would offer one session twice. */
+  if (kept) forgetKeptFolder(handle);
+
   forgetAccounts();
-  return { ok: true, account, storedIn };
+  return { ok: true, account, storedIn, ...(kept ? { adoptedProfileDir: true } : {}) };
 }
 
 /**
@@ -443,6 +540,11 @@ export async function deleteConsoleAccount(body: {
     writeFileSync(accountsPath(), JSON.stringify(seed, null, 2), 'utf8');
     removedFrom.push('seed-file');
   }
+
+  /* The kept folder gets an owner on record so re-adding this username can take it back. Written
+     AFTER the stores, because a folder recorded as kept for an account that still exists would
+     hand the same session to the next creation of that name. */
+  if (current.profileDir) rememberKeptFolder(current.handle, current.profileDir);
 
   forgetAccounts();
   return {

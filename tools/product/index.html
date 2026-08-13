@@ -4081,7 +4081,12 @@ function accountEditor(a){
     }catch(e){held.fail(String(e&&e.message||e));return}
     /* Ended here rather than in a `finally`: the needs-confirm branch below is a QUESTION, not
        a result, and leaving a spinner up while somebody reads it would be the same lie. */
-    held.done(r.ok?`${a.handle} removed`:undefined);
+    /* Says what was KEPT, not just what went. The folder holding the Reddit session stays on
+       disk on purpose, and a bare "removed" reads as "all of it is gone" — which is the question
+       this line exists to answer before somebody goes looking for it. Adding the same username
+       back takes that folder, and its sign-in, with it. */
+    held.done(r.ok?(r.profileDirKept?`${a.handle} removed — its sign-in folder ${r.profileDirKept} is kept, and adding ${a.handle} again takes it back`
+                                    :`${a.handle} removed`):undefined);
     if(r.ok){
       EDITING=null;
       await load();
@@ -4389,7 +4394,16 @@ function addAccount(root){
   const fHandle=field('Their Reddit username','wp-fixer');
   const fRole  =field('What is this account for?','Support desk');
   const fSpeaks=field('What do they talk about?','Error messages, plugin conflicts, getting unstuck');
-  const fSubs  =field('Which subreddits? (comma separated)','WordPress, Wordpress_Help','WordPress');
+  /**
+   * Deliberately EMPTY, and deliberately optional.
+   *
+   * This field arrived pre-filled with "WordPress" and the server stored `['WordPress']` when it
+   * was cleared, so the answer was the build's either way and an operator adding an account for
+   * another room had to notice a default and delete it. Left empty the account is confined to
+   * the subreddits enabled under "Where redbot looks" — a list on a screen, which is where a
+   * decision like this belongs.
+   */
+  const fSubs  =field('Which subreddits? (optional, comma separated)','leave empty to use the sources you have enabled');
 
   /**
    * No "which of YOUR Chrome profiles" picker.
@@ -4431,7 +4445,12 @@ function addAccount(root){
             subreddits:fSubs.value.split(',').map(s=>s.trim()).filter(Boolean)
           });
           if(!r.ok){status.innerHTML=`<span style="color:var(--ember)">${esc(r.error)}</span>`;held.fail(r.error);return}
-          made=r.account;status.textContent=`Ready. Its browser folder is ${r.account.profileDir}, on port ${r.account.debugPort}.`;
+          made=r.account;
+          /* An adopted folder may already be signed in — a different fact from an empty one, and
+             the next step says "type the password", which would be wrong advice for it. */
+          status.textContent=r.adoptedProfileDir
+            ? `Ready. This username was removed before, so it got its old browser folder ${r.account.profileDir} back on port ${r.account.debugPort} — it may still be signed in.`
+            : `Ready. Its browser folder is ${r.account.profileDir}, on port ${r.account.debugPort}.`;
           draw();
           held.done('Account set up');
         }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}

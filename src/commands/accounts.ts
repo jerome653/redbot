@@ -41,7 +41,11 @@ function describe(a: AccountRecord, active: string | undefined, boundHere: Set<s
     const where = a.debugPort ? `port ${a.debugPort}` : 'no port — cannot drive a browser';
     say.step(`    ${where}${a.profileDir ? `, profile ${a.profileDir}` : ''}`);
   }
-  if (a.subreddits?.length) say.step(`    speaks in: ${a.subreddits.join(', ')}`);
+  /* An empty list is a real state now — creating an account no longer fills one in — and it
+     means "wherever the enabled sources point", so it is said rather than left blank. */
+  say.step(a.subreddits?.length
+    ? `    speaks in: ${a.subreddits.join(', ')}`
+    : '    speaks in: the subreddits you have enabled as sources (no list of its own)');
 }
 
 async function list(): Promise<number> {

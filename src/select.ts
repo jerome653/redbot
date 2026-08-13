@@ -68,14 +68,29 @@ export interface Candidate {
 export const PILOT_SUBREDDITS = ['wordpress', 'wordpress_help', 'webdev'] as const;
 
 /**
- * Where THIS account may post: its own declared list, or the fallback above when it has none.
+ * Where THIS account may post, in order: its own declared list · the rooms the operator has
+ * actually enabled as sources · the pilot set.
+ *
+ * THE MIDDLE STEP IS THE POINT. Adding an account used to store `['WordPress']` when the field
+ * was left empty, and emptying the list afterwards only moved the same answer one layer down to
+ * the constant above. Both are the build deciding where somebody else's account speaks. The
+ * enabled sources are a choice a person made on a screen they can reach, so they come first.
+ *
+ * An empty list still never means EVERYWHERE — "speaks nowhere" must not quietly become "speaks
+ * anywhere", which is why the pilot set remains the last resort rather than an open gate.
  *
  * Lower-cased at the boundary because Reddit stores "Wordpress" for a source typed "wordpress",
  * and an exact compare here is the bug that reports zero threads for a subreddit holding sixteen.
  */
-export function allowedSubreddits(account?: { subreddits?: readonly string[] } | null): readonly string[] {
+export function allowedSubreddits(
+  account?: { subreddits?: readonly string[] } | null,
+  /** The operator's enabled subreddit sources, used when the account declares none. */
+  enabledSources?: readonly string[]
+): readonly string[] {
+  const lower = (xs: readonly string[]) => xs.map((s) => String(s).toLowerCase());
   const own = account?.subreddits;
-  if (Array.isArray(own) && own.length) return own.map((s) => String(s).toLowerCase());
+  if (Array.isArray(own) && own.length) return lower(own);
+  if (Array.isArray(enabledSources) && enabledSources.length) return lower(enabledSources);
   return PILOT_SUBREDDITS as readonly string[];
 }
 

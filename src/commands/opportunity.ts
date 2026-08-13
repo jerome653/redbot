@@ -16,6 +16,7 @@ import { assessOpportunity, MIN_OPPORTUNITY_SCORE } from '../opportunity.js';
 import { isQuestionShaped, PILOT_SUBREDDITS, allowedSubreddits, currentAgeHours } from '../select.js';
 import { policy } from '../policy.js';
 import { selectedAccount } from '../config.js';
+import { enabledSources } from '../sources.js';
 import { trace, timed } from '../trace.js';
 import { record, say } from '../log.js';
 import { getPool } from '../db.js';
@@ -126,8 +127,19 @@ export async function opportunity(opts?: { force?: boolean; limit?: number; only
    */
   let allowed: readonly string[] = PILOT_SUBREDDITS as readonly string[];
   try {
+    /**
+     * The sources are read so an account that declares NO subreddits is confined to the rooms the
+     * operator actually enabled, rather than to the pilot constant. Adding an account no longer
+     * fills the field in for them, so "declares none" is now a normal state rather than a sign
+     * that somebody deleted a default.
+     */
+    let enabled: string[] = [];
+    try {
+      enabled = (await enabledSources()).subs;
+    } catch { /* an unreadable source list is not a licence to widen; the fallbacks below hold */ }
+
     /* `selectedAccount()` already returns the record, not a handle. */
-    allowed = allowedSubreddits(selectedAccount());
+    allowed = allowedSubreddits(selectedAccount(), enabled);
   } catch { /* no account resolvable — the fallback above is the honest answer */ }
 
   /**
