@@ -961,6 +961,50 @@ test('a send that cannot start leaves no approval token behind', async () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * Reset — the one route that destroys work on purpose
+ *
+ * Pinned by CALLING the route, not by reading the source: a source check proves the words are
+ * present, not that an unconfirmed request is turned away. These live HERE, among the other
+ * live-server tests, because the source-shape tests further down run after the shared console
+ * has been killed — a fetch there answers ECONNREFUSED and proves nothing.
+ *
+ * The destructive path itself is proven in src/test/reset-apply.test.ts against a throwaway data
+ * directory. Every case below is one the server must REFUSE; the plan route runs the CLI in its
+ * print-only mode, which removes nothing.
+ * ------------------------------------------------------------------ */
+
+test('a reset without the typed word is refused, and refused before anything is spawned', async () => {
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/reset`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ scope: 'work' })
+  });
+  assert.equal(r.status, 400);
+  const body = await r.json();
+  assert.equal(body.ok, false);
+  assert.match(body.error, /RESET/, 'the refusal must name the word it wanted');
+});
+
+test('a near-miss confirmation is a refusal, not an approval', async () => {
+  for (const confirm of ['reset', 'RESET ', 'Reset', 'yes', '', null, true]) {
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/reset`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scope: 'all', confirm })
+    });
+    assert.equal(r.status, 400, `"${String(confirm)}" must not be accepted`);
+    assert.equal((await r.json()).ok, false);
+  }
+});
+
+test('the plan route reports what would go and what would stay, and removes nothing', async () => {
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/reset/plan?scope=work`).then((x) => x.json());
+  assert.equal(r.scope, 'work');
+  assert.match(r.plan, /Removed:/);
+  assert.match(r.plan, /Kept:/);
+  assert.match(r.plan, /chrome-profile/, 'the plan must say the sign-ins are kept');
+  assert.match(r.plan, /Nothing has been removed/, 'the preview must be print-only');
+});
+
+/* ------------------------------------------------------------------ *
  * The loop and a button must not drive one Chrome
  * ------------------------------------------------------------------ */
 

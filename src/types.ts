@@ -201,6 +201,12 @@ export type HistoryKind =
   | 'session.view'
   /** a post-publication checkpoint reading (Part F) */
   | 'observe'
+  /**
+   * An install was reset. Written AFTER the wipe on purpose: with scope `all` the history it
+   * would have been appended to is one of the things removed, so this row is the first line of
+   * the new log and the only surviving statement that a reset happened at all.
+   */
+  | 'reset'
   | 'error';
 
 export interface HistoryEntry {

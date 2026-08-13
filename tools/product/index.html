@@ -1787,6 +1787,10 @@ button.acct.on{
   </div>
   <div class="guide-b">
     <section id="v-setup" class="sheet"></section>
+    <!-- Reset lives at the BOTTOM of Settings, behind its own heading, because it is the one
+         control on this page that destroys work on purpose. It shows the plan before it asks
+         for anything, and it asks for a typed word — the same shape as publishing. -->
+    <section id="v-reset" class="sheet"></section>
   </div>
 </aside>
 
@@ -6284,6 +6288,95 @@ function setup(){
   lgBtn.onclick=()=>{settings(false);go('logs')};
   lgRow.append(lgBtn);lgb.append(lgRow);
   root.append(lg);
+
+  resetPanel();
+}
+
+/**
+ * RESET — the only control on this page that destroys work on purpose.
+ *
+ * Three things it does deliberately:
+ *
+ * 1. IT SHOWS THE PLAN FIRST, and the plan comes from the CLI running WITHOUT `--yes` — the mode
+ *    that prints and removes nothing. The screen therefore cannot describe one reset while the
+ *    button carries out another, which is the failure mode that matters when nobody can inspect
+ *    the result afterwards.
+ * 2. IT ASKS FOR A TYPED WORD. Same shape as publishing: anything other than RESET is a refusal,
+ *    never an approval. A button you can hit by accident is the wrong control for this.
+ * 3. THE SIGN-INS ARE THEIR OWN TICK, off by default, with their own sentence. Those folders hold
+ *    the only copy of each Reddit session — no password is stored anywhere — so no scope is
+ *    allowed to take them by implication.
+ */
+function resetPanel(){
+  const root=$('#v-reset'); if(!root) return;
+  root.textContent='';
+  const card=foldCard('Reset this install','put it back to a known state — this deletes work');
+  const b=card.body;
+
+  b.append(el('div','tiny','A snapshot of the append-only logs is written before anything is removed, and a refused snapshot cancels the whole thing. Where that snapshot goes is printed when it runs.'));
+
+  const scopeRow=el('div');scopeRow.style.cssText='display:flex;gap:.75rem;flex-wrap:wrap;margin:.8rem 0 .3rem';
+  const mkRadio=(value,label,hint)=>{
+    const w=el('label','tiny');w.style.cssText='display:flex;gap:.45rem;align-items:flex-start;max-width:22rem;cursor:pointer';
+    const i=el('input');i.type='radio';i.name='resetScope';i.value=value;if(value==='work')i.checked=true;
+    const t=el('span');t.innerHTML=`<b>${esc(label)}</b><br>${esc(hint)}`;
+    w.append(i,t);scopeRow.append(w);return i;
+  };
+  const rWork=mkRadio('work','The work','Threads, gaps, scores and drafts. Keeps your accounts, sources and the record of what redbot did.');
+  mkRadio('all','Everything','Also the history, observations, accounts and sources. The health counters start from zero again.');
+  b.append(scopeRow);
+
+  const signRow=el('label','tiny');
+  signRow.style.cssText='display:flex;gap:.45rem;align-items:flex-start;margin:.5rem 0;cursor:pointer';
+  const signIn=el('input');signIn.type='checkbox';
+  signRow.append(signIn,el('span',null,'<b>Also delete the signed-in Chrome folders.</b> No password is stored anywhere, so every account would have to be signed in by hand again. This cannot be undone.'));
+  b.append(signRow);
+
+  const planBox=el('pre','tiny');
+  planBox.style.cssText='margin:.7rem 0;padding:.6rem .75rem;border:1px solid var(--edge-2);border-radius:9px;background:var(--glass-2);white-space:pre-wrap;max-height:16rem;overflow:auto';
+  planBox.textContent='Press “Show what this would do”.';
+  b.append(planBox);
+
+  const scopeNow=()=>[...scopeRow.querySelectorAll('input')].find(i=>i.checked)?.value||'work';
+
+  const showBtn=el('button','mini lg','Show what this would do');
+  showBtn.onclick=async()=>{
+    planBox.textContent='Reading the plan…';
+    try{
+      const q=`scope=${encodeURIComponent(scopeNow())}${signIn.checked?'&signIns=1':''}`;
+      const r=await fetch(`/api/reset/plan?${q}`).then(x=>x.json());
+      planBox.textContent=(r.plan||'').trim()||r.error||'the plan could not be read';
+    }catch(e){planBox.textContent=String(e&&e.message||e)}
+  };
+
+  const typed=el('input');
+  typed.placeholder='type RESET';
+  typed.setAttribute('aria-label','Type RESET to confirm');
+  typed.style.cssText='font:inherit;font-size:.86rem;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink);max-width:11rem';
+
+  const doBtn=el('button','mini warn','Reset');
+  doBtn.onclick=async()=>{
+    if(typed.value!=='RESET'){toast('Type RESET exactly — nothing has been removed.');return}
+    const held=busy('Resetting…');
+    try{
+      const r=await fetch('/api/reset',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({scope:scopeNow(),signIns:signIn.checked,confirm:'RESET'})}).then(x=>x.json());
+      if(!r.ok){held.fail(r.error||'the reset did not run');planBox.textContent=r.output||r.error||'';return}
+      held.done('Reset done');
+      /* The output carries the snapshot path and the counts — the only remaining record of what
+         was taken, so it is shown rather than replaced with a tick. */
+      planBox.textContent=(r.output||'').trim();
+      typed.value='';
+      await load();
+    }catch(e){held.fail(String(e&&e.message||e))}
+  };
+
+  const bar=el('div');bar.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center';
+  bar.append(showBtn,typed,doBtn);
+  b.append(bar);
+  b.append(el('div','tiny','Refused while anything is running — a reset under a collect leaves both half-done.'));
+  root.append(card);
+  return rWork;
 }
 
 /**

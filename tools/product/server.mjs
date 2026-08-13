@@ -2221,6 +2221,35 @@ async function exitRemove(body) {
 let autoProc = null;
 let autoLog = [];
 
+/**
+ * Run a CLI verb and hand back what it said.
+ *
+ * Deliberately NOT `runAction`: that one takes the one-at-a-time lock, streams to the run log and
+ * is keyed to the PUBLIC_ACTIONS allow-list, none of which fits a call the console makes on its
+ * own behalf. This is the plain "shell out and read the output" case, used by reset so the
+ * console and a terminal run identical code — including the snapshot the CLI takes first.
+ */
+function spawnCli(args, timeoutMs = 5 * 60 * 1000) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), ...args], {
+      cwd: SPAWN_CWD, env: process.env, stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let out = '', err = '';
+    child.stdout.on('data', (d) => { out += String(d); });
+    child.stderr.on('data', (d) => { err += String(d); });
+    const timer = setTimeout(() => { try { child.kill(); } catch {} }, timeoutMs);
+    child.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, error: String(e && e.message || e), output: out }); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      /* The CLI says why it refused on its own last line; repeating "it failed" over the top of
+         that would replace the reason with a category. */
+      resolve(code === 0
+        ? { ok: true, output: out }
+        : { ok: false, output: out, error: (err.trim() || out.trim().split('\n').pop() || `exit ${code}`) });
+    });
+  });
+}
+
 function autoStart({ account, everyMinutes }) {
   if (autoProc) return { ok: false, error: 'The unattended loop is already running.' };
   if (!account) return { ok: false, error: 'Choose which account it should run as.' };
@@ -2908,6 +2937,42 @@ const server = createServer((req, res) => {
        * the account exists, the state of the world is what stopped it. A client that treats
        * every non-200 as "bad input" would otherwise show a validation error for a question.
        */
+      /**
+       * RESET — the one control here that destroys work on purpose.
+       *
+       * Four things guard it, and each one is a separate refusal so the reason is never guessed:
+       *
+       *   1. It REFUSES while anything is running. A reset that deletes threads.json under a
+       *      collect leaves the run writing to a file that no longer describes the install.
+       *   2. `confirm` must be the exact word RESET. Fail closed: anything else is a refusal,
+       *      never an approval — the same rule publishing uses for SEND.
+       *   3. The signed-in Chrome folders are only touched when `signIns` is true, which the
+       *      screen makes a separate tick with its own sentence. No scope implies them.
+       *   4. It shells out to `dist/cli.js reset --yes`, so the console and the terminal run the
+       *      SAME code and take the same snapshot first. A second implementation here is how the
+       *      two would drift on the one operation nobody can inspect afterwards.
+       */
+      if (url.pathname === '/api/reset') {
+        const scope = body.scope === 'all' ? 'all' : 'work';
+        if (running) {
+          return send(409, JSON.stringify({
+            ok: false,
+            error: `"${ACTIONS[running]?.label ?? running}" is running. Let it finish before resetting — a reset under a run leaves both half-done.`
+          }));
+        }
+        if (autoProc) {
+          return send(409, JSON.stringify({
+            ok: false, error: 'the unattended loop is running. Stop it before resetting.'
+          }));
+        }
+        if (body.confirm !== 'RESET') {
+          return send(400, JSON.stringify({ ok: false, error: 'not confirmed — type RESET exactly' }));
+        }
+        const args = ['reset', '--scope', scope, '--yes'];
+        if (body.signIns === true) args.push('--sign-ins');
+        const r = await spawnCli(args);
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
       if (url.pathname === '/api/account/remove') {
         const r = await deleteAccountImpl(body);
         return send(r.ok ? 200 : r.needsConfirm ? 409 : 400, JSON.stringify(r));
@@ -3388,6 +3453,23 @@ const server = createServer((req, res) => {
      needs something to show other than a spinner. Never carries the credential. */
   if (url.pathname === '/api/account/exit') {
     return send(200, JSON.stringify(exitVetStatus()));
+  }
+
+  /**
+   * What a reset WOULD take. Read-only: this runs the same CLI verb without `--yes`, which is
+   * the mode that prints the plan and removes nothing, so the screen cannot show one plan while
+   * the button carries out another.
+   */
+  if (url.pathname === '/api/reset/plan') {
+    const scope = url.searchParams.get('scope') === 'all' ? 'all' : 'work';
+    const args = ['reset', '--scope', scope];
+    if (url.searchParams.get('signIns') === '1') args.push('--sign-ins');
+    /* This half of the handler is not async — the plan is answered from the promise rather than
+       awaited, which is why nothing below runs for this path. */
+    spawnCli(args, 60_000).then((r) => {
+      send(200, JSON.stringify({ ok: r.ok, scope, plan: r.output ?? '', error: r.error ?? null }));
+    });
+    return;
   }
 
   if (url.pathname === '/api/actions') {

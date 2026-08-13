@@ -10,6 +10,7 @@ import { operators } from './commands/operators.js';
 import { vault } from './commands/vault.js';
 import { proxy } from './commands/proxy.js';
 import { accounts } from './commands/accounts.js';
+import { reset } from './commands/reset.js';
 import { sources } from './commands/sources.js';
 import { probeKarma } from './probe-karma.js';
 import { primeAccounts, selectedAccount } from './config.js';
@@ -68,6 +69,11 @@ redbot — Reddit engagement assistant
     redbot subreddits "<topic>"  find COMMUNITIES to read, and PREVIEW them — adds nothing
     redbot subreddits --commit <n,n|all>
                                  add only the ones you picked as sources
+    redbot reset [--scope work|all] [--sign-ins] [--yes]
+                                 put this install back to a known state — prints the plan and
+                                 removes NOTHING without --yes. work = the corpus and what was
+                                 derived from it; all = the logs, accounts and sources too. The
+                                 signed-in Chrome folders are kept unless --sign-ins is given.
 
   Deciding
     redbot opportunity [--all] [--force] [--limit N] [--only <id>]
@@ -288,6 +294,15 @@ async function main(): Promise<number> {
      */
     case 'probe-karma': return probeKarma();
     case 'accounts': return accounts(positional[0], positional[1]);
+    /**
+     * Destructive, so it prints the plan and stops unless `--yes` is given. `--sign-ins` is a
+     * separate word from the scope because the Chrome folders are the only copy of each Reddit
+     * session and no scope should be able to take them by implication.
+     */
+    case 'reset':   return reset({
+      scope: flagValue('scope'), signIns: flags.has('--sign-ins'),
+      yes: flags.has('--yes'), skipBackup: flags.has('--skip-backup')
+    });
     /** `--search "<q>"` adds a saved search; a bare value is a subreddit. */
     case 'sources': return sources(positional[0], positional[1], { search: flagValue('search'), why: flagValue('why') });
     /* Sends only what the dashboard has not acknowledged. `push dry-run` builds and validates
