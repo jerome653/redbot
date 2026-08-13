@@ -20,7 +20,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { existsSync, openSync, closeSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, isAbsolute } from 'node:path';
 import { DATA } from './config.js';
 import { resolveProfileDir } from './profiles.js';
 import type { AccountRecord } from './config.js';
@@ -147,8 +147,25 @@ export async function firstFreePortInRange(
 /** `--user-data-dir=C:\x` or `--user-data-dir="C:\x with spaces"`. Both shapes are real. */
 export function userDataDirFrom(commandLine: string | null): string | null {
   if (!commandLine) return null;
-  const m = /--user-data-dir=(?:"([^"]*)"|(\S+))/.exec(commandLine);
-  return m ? (m[1] ?? m[2] ?? null) : null;
+  /**
+   * THREE SHAPES, AND WINDOWS WRITES THE ONE THAT USED TO BREAK.
+   *
+   *   "--user-data-dir=C:\Users\Clark Pesa\…"   the WHOLE argument quoted  <- Windows' own form
+   *   --user-data-dir="C:\my data\profile a"    the value quoted
+   *   --user-data-dir=C:\data\chrome-profile-c  no quotes, no spaces
+   *
+   * Only the last two were anticipated. With no quote directly after the equals sign the old
+   * alternation fell through to `(\S+)`, which stops at the first space — so a machine whose
+   * Windows user is "Clark Pesa" parsed its own profile as `C:\Users\Clark`, a path that exists
+   * nowhere. Ownership is decided by comparing this string, so redbot classified its OWN Chrome
+   * as foreign, refused to stop it (correctly, on false evidence), and leaked one orphaned
+   * browser onto a debugging port per restart until no port was left. Reported 2026-08-13.
+   *
+   * Invisible on a single-word username, where `(\S+)` happens to capture the whole path — which
+   * is why every machine this was developed on looked fine.
+   */
+  const m = /"--user-data-dir=([^"]*)"|--user-data-dir="([^"]*)"|--user-data-dir=(\S+)/.exec(commandLine);
+  return m ? (m[1] ?? m[2] ?? m[3] ?? null) : null;
 }
 
 /**
@@ -209,6 +226,66 @@ export function sameDir(a: string | null | undefined, b: string | null | undefin
   if (!a || !b) return false;
   const norm = (p: string) => resolve(p).replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
   try { return norm(a) === norm(b); } catch { return false; }
+}
+
+export interface OrphanBrowser {
+  port: number;
+  pid: number;
+  process: string | null;
+  /** The folder it opened — the proof that it is ours. */
+  profileDir: string;
+}
+
+/**
+ * Browsers that are OURS but belong to no account — and can therefore be reclaimed.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY OWNERSHIP CANNOT KEEP RUNNING THROUGH THE ACCOUNTS TABLE.
+ *
+ * `statusForAccounts` walks the accounts and asks about each one's port, so a browser whose
+ * account row has gone is invisible to every screen and every stop button. Reported 2026-08-13:
+ * a Chrome holding `chrome-profile-e` outlived the account `Big_Variation_8580`, sat on 9222 —
+ * the first port the allocator hands out — and could not be reclaimed by any code path:
+ *
+ *     browsers  Big_Variation_8580 NOT closed — Big_Variation_8580 is not set up.
+ *
+ * The evidence never depended on the row. It is the FOLDER: that Chrome was told to open a
+ * directory inside redbot's own data root, and nothing else on the machine does that. So the
+ * question is asked of the folder, and an account is only how a browser gets a name.
+ *
+ * STILL FAIL CLOSED. A null user-data-dir proves nothing and is left alone; a path outside this
+ * install's data root is somebody else's — including another Windows user's redbot, which is
+ * emphatically not this install's to kill. The prefix test is done on normalised paths with a
+ * separator appended, so `…\data-old\chrome-profile-a` cannot pass as being inside `…\data`.
+ * ---------------------------------------------------------------------------
+ */
+export function orphanBrowsers(
+  owners: ReadonlyMap<number, PortOwner>,
+  dataRoot: string,
+  claimedDirs: readonly string[]
+): OrphanBrowser[] {
+  const norm = (p: string) => resolve(p).replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+  let root: string;
+  try { root = norm(dataRoot); } catch { return []; }
+
+  const claimed = new Set<string>();
+  for (const d of claimedDirs) {
+    if (!d) continue;
+    /* A claimed folder may be a bare name under the data root or an absolute adopted path. */
+    try { claimed.add(norm(isAbsolute(d) ? d : join(dataRoot, d))); } catch { /* unusable */ }
+  }
+
+  const out: OrphanBrowser[] = [];
+  for (const o of owners.values()) {
+    if (!o.userDataDir) continue;                       // unproven is not owned
+    let dir: string;
+    try { dir = norm(o.userDataDir); } catch { continue; }
+    if (dir === root) continue;                         // the root is not a profile
+    if (!dir.startsWith(root + '/')) continue;          // outside this install — not ours
+    if (claimed.has(dir)) continue;                     // a live account already owns it
+    out.push({ port: o.port, pid: o.pid, process: o.process, profileDir: o.userDataDir });
+  }
+  return out;
 }
 
 /**

@@ -179,11 +179,24 @@ function wireUpdater(consolePort) {
       try {
         return await ask();
       } catch (first) {
-        /* A timeout means the console answered too slowly, not that the socket was recycled —
-           retrying that only doubles the wait before the same answer. */
+        /**
+         * A TIMEOUT IS NOT AN IDLE CONSOLE — it is the one answer that means the opposite.
+         *
+         * A console that is GONE answers instantly: the connection is refused. A console that
+         * takes longer than five seconds to answer `/api/pulse` is alive and under load, and the
+         * thing most likely to be loading it is the work this probe exists to protect — a collect
+         * driving Chrome, or `__reply`, which is `stoppable:false` because dying between submit
+         * and confirm leaves a live comment on Reddit that redbot does not know it made.
+         *
+         * This used to return null, which reads as "nothing is running", and `quitAndInstall`
+         * then killed the console and every child under it. Reported 2026-08-13 from a machine
+         * that took three silent updates in one day. Retrying is still pointless — the same slow
+         * console will be slow again — so it reports BUSY and the install waits for the next
+         * check. A deferred update costs minutes; a killed publish cannot be undone.
+         */
         if (first && first.name === 'TimeoutError') {
-          boot_log(`updater    busy check timed out, treating as idle — ${first.message}`);
-          return null;
+          boot_log(`updater    busy check timed out — treating as BUSY and deferring: ${first.message}`);
+          return 'the console did not answer in time, so it may be mid-run';
         }
         boot_log(`updater    busy check failed (${first && first.message ? first.message : first}) — retrying once on a fresh connection`);
         try {

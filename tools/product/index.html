@@ -4141,6 +4141,52 @@ function accountEditor(a){
   return box;
 }
 
+/**
+ * Browsers of ours that no account owns — shown only when there are some.
+ *
+ * WHY THIS EXISTS. Ownership used to run through the accounts table, so a Chrome that outlived
+ * its account was invisible here and unkillable by any button: it held a debugging port until the
+ * machine was rebooted, and the allocator kept moving the next account further up the range. On
+ * the machine that reported it, three updates in one day meant three squatted ports.
+ *
+ * It renders NOTHING when the list is empty and there was no problem reading it — a permanently
+ * visible "0 orphans" is noise on every healthy install. A lookup that FAILED does render, because
+ * "none found" and "could not look" are different facts and only one of them is reassuring.
+ */
+async function orphanCard(root){
+  let r;
+  try{ r=await fetch('/api/browsers/orphans').then(x=>x.json()); }catch{ return }
+  const list=(r&&r.orphans)||[];
+  if(!list.length && !(r&&r.lookupProblem) && (r&&r.ok!==false)) return;
+
+  const card=foldCard('Browsers with no account','redbot opened these, and nothing owns them now',{open:true});
+  const b=card.body;
+  if(r&&r.ok===false){ b.append(el('div','tiny warn',esc(r.error||'the check could not run'))); }
+  else if(r&&r.lookupProblem){ b.append(el('div','tiny warn','The process table could not be read, so this list may be incomplete: '+esc(r.lookupProblem))); }
+
+  if(!list.length){ b.append(el('div','tiny','No orphaned browsers were found.')); root.append(card); return }
+
+  b.append(el('div','tiny','Each of these is holding a debugging port. Closing one frees the port; the folder and its sign-in are left alone.'));
+  for(const o of list){
+    const row=el('div');
+    row.style.cssText='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-top:.6rem';
+    row.append(el('div','tiny',`<b>port ${esc(String(o.port))}</b> · pid ${esc(String(o.pid))} · <code>${esc(String(o.profileDir||'').split(/[\\/]/).pop()||'')}</code>`));
+    const close=el('button','mini warn','Close it');
+    close.onclick=async()=>{
+      const held=busy(`Closing pid ${o.pid}…`);
+      try{
+        const res=await fetch('/api/browsers/close-orphan',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({pid:o.pid})}).then(x=>x.json());
+        if(res.ok){held.done(`Port ${res.port} is free again`);await load();accounts();}
+        else held.fail(res.error||'it could not be closed');
+      }catch(e){held.fail(String(e&&e.message||e))}
+    };
+    row.append(close);
+    b.append(row);
+  }
+  root.append(card);
+}
+
 function accounts(){
   const r=$('#v-accounts'); r.textContent='';
   /* The old nodes are about to be thrown away; a stale entry here would have paintPorts()
@@ -4156,6 +4202,7 @@ function accounts(){
   addBtnTop.onclick=()=>openDialog('Add an account','four steps, about ten minutes',addAccount);
   ahead.append(addBtnTop);
   r.append(ahead);
+  orphanCard(r);
 
   /* ---------------- which account this machine acts as ----------------
    *

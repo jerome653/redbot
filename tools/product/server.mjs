@@ -120,6 +120,7 @@ const PORT = portArg > -1 ? Number(process.argv[portArg + 1]) : 7902;
 let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccountImpl = null,
     deleteAccountImpl = null, changePortImpl = null, suggestPortImpl = null,
     portStatusImpl = null, stopBrowserImpl = null, setUpHereImpl = null, adoptProfileImpl = null,
+    inspectPortsImpl = null, orphanBrowsersImpl = null, debugPortRange = null,
     boundHandlesImpl = null, machineImpl = null, pagesApi = null, summaryApi = null,
     selectAccountImpl = null, selectedHandleImpl = null,
     dbStatus = null, dbPing = null, sourcesApi = null, requirementsApi = null, configApi = null,
@@ -180,6 +181,11 @@ try {
   suggestPortImpl = a.suggestFreePort;
   portStatusImpl = ports.statusForAccounts;
   stopBrowserImpl = ports.stopAccountBrowser;
+  /* Orphan reclamation — see `/api/browsers/orphans`. Bound here beside the other port helpers
+     so the console and the CLI decide ownership with one implementation, not two. */
+  inspectPortsImpl = ports.inspectPorts;
+  orphanBrowsersImpl = ports.orphanBrowsers;
+  debugPortRange = { first: ports.DEBUG_PORT_FIRST, last: ports.DEBUG_PORT_LAST };
   setUpHereImpl = a.setUpAccountHere;
   adoptProfileImpl = a.adoptProfileDir;
   boundHandlesImpl = () => dbAccounts.boundHandles(db.getPool());
@@ -1978,7 +1984,36 @@ async function launchChrome(handle, { background = false } = {}) {
     const said = { ok: true, handle, port: a.debugPort, profileDir: a.profileDir,
                    ...(background ? { background: true } : {}),
                    ...(movedFrom ? { movedFrom } : {}) };
-    if (!proxied) return said;
+
+    if (!proxied) {
+      /**
+       * ASKING FOR A PORT IS NOT GETTING ONE.
+       *
+       * This path used to return the instant `spawn` was called, reporting `port: a.debugPort`
+       * because that is the number it passed on the command line. But this file already documents
+       * the thing that makes that a lie: "Chrome given an occupied --remote-debugging-port does
+       * NOT fail: it starts, silently gives up the port to whoever holds it, and the window looks
+       * perfectly normal." So a launch could log `opened on 9223`, the record could say 9224, and
+       * nothing was listening on either — which is what a machine reported on 2026-08-13, where
+       * `statusForAccounts` then probed the recorded port, found it free, and answered "this
+       * account's browser is not running" seventeen times while the browser was up.
+       *
+       * The proxied path below already waited for the port to answer before doing anything with
+       * it. It waits here too now: same helper, same bound, so the report is of a port that
+       * actually answered rather than one that was requested.
+       */
+      const answered = await waitForDebugPort(`http://127.0.0.1:${a.debugPort}`);
+      if (!answered) {
+        return {
+          ok: false,
+          error: `${a.handle}'s browser was opened but nothing answered on port ${a.debugPort} ` +
+                 `within 30s. Chrome yields a debugging port it cannot take, so another program ` +
+                 `probably holds it. The window is open; redbot cannot drive it.`,
+          handle, port: a.debugPort, profileDir: a.profileDir, unverified: true
+        };
+      }
+      return { ...said, verified: true };
+    }
 
     /**
      * Cover it, then navigate. A failure here CLOSES the browser rather than leaving it.
@@ -2010,13 +2045,29 @@ async function launchChrome(handle, { background = false } = {}) {
  * had not started yet". Bounded, because a Chrome that never answers must produce a sentence and
  * not a hang.
  */
-async function coverProxiedBrowser(endpoint, account, exit) {
-  const deadline = Date.now() + 30_000;
-  let up = false;
-  while (!up && Date.now() < deadline) {
-    try { up = (await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(1200) })).ok; }
-    catch { await new Promise((r) => setTimeout(r, 400)); }
+/**
+ * Wait until a debugging port actually ANSWERS, or say it never did.
+ *
+ * One place, because both launch paths need the same question answered and only one of them used
+ * to ask it. Chrome takes a second or two to open the port, and it silently declines to take one
+ * that is already held — so "did spawn return" and "is the browser drivable on this port" are
+ * different facts, and only the second is worth reporting to an operator.
+ *
+ * Bounded on purpose: a Chrome that never answers must produce a sentence, not a hang.
+ */
+async function waitForDebugPort(endpoint, ms = 30_000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    try {
+      if ((await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(1200) })).ok) return true;
+    } catch { /* not up yet — the loop is the retry */ }
+    await new Promise((r) => setTimeout(r, 400));
   }
+  return false;
+}
+
+async function coverProxiedBrowser(endpoint, account, exit) {
+  const up = await waitForDebugPort(endpoint);
   if (!up) {
     return { ok: false, error:
       `${account.handle}'s browser did not open its debugging port on ${endpoint} within 30 `
@@ -2952,6 +3003,46 @@ const server = createServer((req, res) => {
        *      SAME code and take the same snapshot first. A second implementation here is how the
        *      two would drift on the one operation nobody can inspect afterwards.
        */
+      /**
+       * Close an orphaned browser of ours — by PID, but never on the caller's word for it.
+       *
+       * The PID is re-proved against the process table at the moment of the kill: it must still
+       * be holding a profile folder inside this install's data root, and still be claimed by no
+       * account. A stale id from a screen somebody left open ten minutes ago is exactly how a
+       * kill-by-number ends up terminating whatever inherited that PID.
+       */
+      if (url.pathname === '/api/browsers/close-orphan') {
+        const pid = Number(body.pid);
+        if (!Number.isInteger(pid) || pid <= 0) {
+          return send(400, JSON.stringify({ ok: false, error: 'that is not a process id' }));
+        }
+        if (!inspectPortsImpl || !orphanBrowsersImpl || !debugPortRange) {
+          return send(400, JSON.stringify({ ok: false, error: 'the compiled build is missing its ports module — run npm run build' }));
+        }
+        const { accounts: accts } = await consoleAccounts();
+        const range = [];
+        for (let p = debugPortRange.first; p <= debugPortRange.last; p++) range.push(p);
+        const look = await inspectPortsImpl(range);
+        const orphans = orphanBrowsersImpl(look.owners, DATA, accts.map((a) => a.profileDir).filter(Boolean));
+        const target = orphans.find((o) => o.pid === pid);
+        if (!target) {
+          return send(409, JSON.stringify({
+            ok: false,
+            error: look.reason
+              ? `redbot could not read the process table, so it will not close anything: ${look.reason}`
+              : `process ${pid} is not an orphaned browser of ours right now. Nothing was closed.`
+          }));
+        }
+        const killed = await new Promise((resolve) => {
+          const k = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+          k.on('error', () => resolve(false));
+          k.on('close', (code) => resolve(code === 0));
+        });
+        return send(killed ? 200 : 400, JSON.stringify(killed
+          ? { ok: true, pid, port: target.port, profileDir: target.profileDir }
+          : { ok: false, error: `redbot could not close process ${pid}.` }));
+      }
+
       if (url.pathname === '/api/reset') {
         const scope = body.scope === 'all' ? 'all' : 'work';
         if (running) {
@@ -3373,6 +3464,37 @@ const server = createServer((req, res) => {
     fn({ offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') })
       .then((page) => send(200, JSON.stringify({ list: want, ...page })))
       .catch((e) => send(500, JSON.stringify({ error: String(e && e.message || e) })));
+    return;
+  }
+
+  /**
+   * Browsers that are OURS but belong to no account — and can therefore be reclaimed.
+   *
+   * THE STATE THIS ANSWERS. Ownership used to be resolved only THROUGH an account row, so a
+   * Chrome that outlived its account was invisible to every screen and every stop button. On the
+   * machine that reported this, one sat on 9222 — the first port the allocator hands out — and
+   * nothing short of a reboot could take it back:
+   *
+   *     browsers  Big_Variation_8580 NOT closed — Big_Variation_8580 is not set up.
+   *
+   * The proof of ownership is the FOLDER, not the row: that browser was told to open a directory
+   * inside this install's data root. `orphanBrowsers` decides; this route only reports.
+   */
+  if (url.pathname === '/api/browsers/orphans') {
+    if (!inspectPortsImpl || !orphanBrowsersImpl || !debugPortRange) {
+      return send(200, JSON.stringify({ ok: false, error: 'the compiled build is missing its ports module — run npm run build', orphans: [] }));
+    }
+    (async () => {
+      const { accounts: accts } = await consoleAccounts();
+      const range = [];
+      for (let p = debugPortRange.first; p <= debugPortRange.last; p++) range.push(p);
+      const look = await inspectPortsImpl(range);
+      const orphans = orphanBrowsersImpl(look.owners, DATA, accts.map((a) => a.profileDir).filter(Boolean));
+      /* `reason` travels: an empty list because the machine would not answer is a different fact
+         from an empty list because there are none, and a screen that showed both the same way
+         would tell somebody their ports are clean when nothing was ever looked at. */
+      send(200, JSON.stringify({ ok: true, orphans, lookupProblem: look.reason ?? null }));
+    })().catch((e) => send(200, JSON.stringify({ ok: false, error: String(e && e.message || e), orphans: [] })));
     return;
   }
 
