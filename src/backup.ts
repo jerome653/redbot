@@ -176,6 +176,55 @@ export function backupEvidence(now: Date = new Date()): BackupResult {
   return { ok: true, dir, files, missing };
 }
 
+export interface DatabaseBackup {
+  ok: boolean;
+  /** Absolute path of the copy, when one was made. */
+  file?: string;
+  bytes?: number;
+  /** Why no copy exists. Set whenever ok is false. */
+  reason?: string;
+}
+
+/**
+ * Copy the DATABASE into a snapshot directory.
+ *
+ * WHY THIS EXISTS, AND WHAT IT COST TO FIND OUT. `backupEvidence()` copies an allowlist of files
+ * out of the data directory and knows nothing about the database. That was true and harmless
+ * while the corpus lived in threads.json — and quietly false afterwards, because drafts, history,
+ * observations, assessments and the rest moved into sqlite and the JSON files stopped being
+ * written at all.
+ *
+ * Measured on a colleague's machine 2026-08-13: `redbot reset --scope all --sign-ins` reported
+ * `Snapshot written: …\2026-08-13T03-22-23-679Z (0 file(s))` and then removed **442 rows across
+ * 15 tables**. The snapshot was empty, the reset said OK, and nothing was recoverable. A backup
+ * that reports success while copying none of the data is worse than no backup, because the
+ * operator reads it and proceeds.
+ *
+ * `VACUUM INTO` rather than a file copy: it takes a consistent snapshot through sqlite itself,
+ * so a live WAL cannot leave the copy torn — which is exactly the state a running console would
+ * put the file in.
+ */
+export async function backupDatabase(
+  dir: string,
+  db: { query(sql: string, params?: unknown[]): Promise<unknown> } | null,
+  name = 'redbot.db'
+): Promise<DatabaseBackup> {
+  if (!db) return { ok: false, reason: 'no database is configured on this install' };
+  const dest = join(dir, name);
+  if (existsSync(dest)) return { ok: false, reason: `${dest} already exists` };
+  try {
+    mkdirSync(dir, { recursive: true });
+    /* The path is a literal because VACUUM INTO takes no parameters. Single quotes are the
+       sqlite string delimiter, so a quote inside the path is doubled rather than escaped. */
+    await db.query(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
+    const bytes = existsSync(dest) ? statSync(dest).size : 0;
+    if (!bytes) return { ok: false, reason: 'the copy came out empty' };
+    return { ok: true, file: dest, bytes };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export interface SnapshotInfo {
   dir: string;
   takenAt: string | null;

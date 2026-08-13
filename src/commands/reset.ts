@@ -16,7 +16,7 @@
 import { say, record } from '../log.js';
 import { resetPlan, applyReset, profileDirsOnDisk, RESET_SCOPES } from '../reset.js';
 import type { ResetScope } from '../reset.js';
-import { backupEvidence } from '../backup.js';
+import { backupEvidence, backupDatabase } from '../backup.js';
 import { getPool, dbUnavailableReason, closePool } from '../db.js';
 import { forgetAccounts } from '../config.js';
 
@@ -59,7 +59,22 @@ export async function reset(opts: {
     return 0;
   }
 
-  /* The snapshot is part of the operation, not a suggestion beside it. */
+  const dbOff = dbUnavailableReason();
+  if (dbOff) say.warn(`The database is not configured (${dbOff}), so only files are being cleared.`);
+
+  /**
+   * The snapshot is part of the operation, not a suggestion beside it — and it has to cover the
+   * data that is actually about to go.
+   *
+   * THE DEFECT THIS REPLACES, measured on a colleague's machine 2026-08-13: the snapshot copied
+   * an allowlist of JSON files, the install kept everything in sqlite, so it wrote
+   * `(0 file(s))`, reported OK, and the reset then destroyed 442 rows across 15 tables with
+   * nothing recoverable. An empty backup that reports success is worse than no backup, because
+   * the operator reads it and proceeds.
+   *
+   * So: the database is copied too, and a snapshot that covers NOTHING while the plan would
+   * remove something is a refusal, not a warning.
+   */
   if (opts.skipBackup) {
     say.warn('Skipping the snapshot because --skip-backup was given. Nothing will be recoverable.');
   } else {
@@ -69,11 +84,27 @@ export async function reset(opts: {
       say.step('Fix that, or pass --skip-backup if you accept losing the evidence.');
       return 1;
     }
-    say.ok(`Snapshot written: ${snap.dir} (${snap.files.length} file(s))`);
-  }
 
-  const dbOff = dbUnavailableReason();
-  if (dbOff) say.warn(`The database is not configured (${dbOff}), so only files are being cleared.`);
+    const dbSnap = await backupDatabase(snap.dir, dbOff ? null : getPool());
+    if (dbSnap.ok) {
+      say.ok(`Snapshot written: ${snap.dir}`);
+      say.step(`    ${snap.files.length} file(s) + the database (${Math.round((dbSnap.bytes ?? 0) / 1024)} KB)`);
+    } else if (plan.tables.length && !dbOff) {
+      /* Tables are about to be emptied and the copy of them failed. That is the exact shape of
+         the 2026-08-13 loss, and it stops here. */
+      say.fail(`The database could not be copied, so nothing was removed: ${dbSnap.reason}`);
+      say.step('Fix that, or pass --skip-backup if you accept losing the rows.');
+      return 1;
+    } else {
+      say.ok(`Snapshot written: ${snap.dir} (${snap.files.length} file(s), no database: ${dbSnap.reason})`);
+    }
+
+    if (!snap.files.length && !dbSnap.ok) {
+      say.fail('The snapshot came out EMPTY — it covers none of what this would remove. Nothing was removed.');
+      say.step('Pass --skip-backup if you genuinely want an unrecoverable reset.');
+      return 1;
+    }
+  }
 
   const out = await applyReset(plan, dbOff ? null : getPool());
 

@@ -31,13 +31,15 @@ import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNNER = join(HERE, 'migrate.mjs');
+/* db/sqlite/ → the repository root, so the vocabulary test can read src/types.ts. */
+const ROOT = join(HERE, '..', '..');
 
 let dir, file, db;
 
@@ -606,5 +608,52 @@ describe('an upgrade preserves the data', () => {
     for (const c of ['machine', 'handle', 'profile_dir', 'debug_port', 'selected', 'created_at', 'updated_at']) {
       assert.ok(cols.includes(c), `account_machines lost "${c}" in the rebuild`);
     }
+  });
+});
+
+/**
+ * THE TWO LISTS THAT MUST NOT DRIFT.
+ *
+ * `HistoryKind` in src/types.ts and the CHECK on history.kind are the same vocabulary written
+ * twice, and nothing linked them. 3.2.0 added `reset` to the TypeScript union, shipped, and the
+ * first real reset ended with `CHECK constraint failed: kind IN (...)` — the wipe had already
+ * happened, so the command exited non-zero having destroyed data and recorded nothing about it.
+ *
+ * The type is the source of truth here because it is what the writers are compiled against; the
+ * CHECK is the copy that has to keep up. Retired values are allowed to exist in the database
+ * without existing in the type — 'analyze' is deliberately kept so seven old rows stay readable —
+ * so the assertion is one-directional: every kind the code can WRITE must be storable.
+ */
+describe('the history vocabulary in the code and in the database are the same list', () => {
+  test('every HistoryKind the code can write is accepted by the CHECK', () => {
+    const types = readFileSync(join(ROOT, 'src', 'types.ts'), 'utf8');
+    /* Comments go FIRST. The union is documented member by member and that prose contains
+       semicolons, so cutting at the first `;` lands in the middle of a doc block and finds ten
+       of the thirty-odd members — which reads as a schema failure rather than a parse bug. */
+    const bare = types
+      .slice(types.indexOf('export type HistoryKind'))
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+    const body = bare.slice(0, bare.indexOf(';'));
+    const kinds = [...body.matchAll(/'([a-z][a-z.]*)'/g)].map((m) => m[1]);
+
+    assert.ok(kinds.length > 20, `only found ${kinds.length} kinds — the parse is wrong, not the schema`);
+    assert.ok(kinds.includes('reset'), 'the regression case itself must stay in the list');
+
+    for (const kind of kinds) {
+      const err = refused(
+        'INSERT INTO history (ts, kind, summary) VALUES ($1,$2,$3)',
+        P(ISO, kind, `vocabulary check: ${kind}`)
+      );
+      assert.equal(err, null, `the database refuses a kind the code can write: ${kind} — ${err}`);
+    }
+  });
+
+  test('a kind that is in neither list is still refused — the CHECK is doing work', () => {
+    assertRefused(
+      'INSERT INTO history (ts, kind, summary) VALUES ($1,$2,$3)',
+      P(ISO, 'wipe', 'not a kind'),
+      /CHECK constraint failed/
+    );
   });
 });

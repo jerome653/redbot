@@ -21,7 +21,7 @@
 import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -479,10 +479,21 @@ describe('ping', () => {
   test('reports ok, the engine version and the migration count', async () => {
     const p = await ping();
     assert.equal(p.ok, true, p.detail);
-    /* 16 since migration 0016 added the per-account proxy exit and its observation ledger.
-       Asserting an exact number rather than ">0" on purpose: it catches a migration that silently
-       failed to apply as well as one that was added without anybody noticing here. */
-    assert.equal(p.migrationsApplied, 16);
+    /**
+     * An EXACT number on purpose — ">0" would pass over a migration that silently failed to
+     * apply, which is the failure 2.0.0 shipped with. But the number is now DERIVED from the
+     * migrations directory rather than typed here.
+     *
+     * The literal was `16`, and adding 0017 (history.kind gained 'reset') broke this test in a
+     * way that says nothing about what went wrong: "17 !== 16" reads as a schema fault when the
+     * schema is fine and the expectation is stale. Counting the .up.sql files keeps the strength
+     * of the check — every migration on disk must be applied — without a number to remember.
+     */
+    const onDisk = readdirSync(join(ROOT, 'db', 'sqlite', 'migrations'))
+      .filter((f) => f.endsWith('.up.sql')).length;
+    assert.ok(onDisk > 0, 'no migrations were found on disk — the path is wrong, not the schema');
+    assert.equal(p.migrationsApplied, onDisk,
+      `${onDisk} migration(s) on disk but ${p.migrationsApplied} applied`);
     assert.match(p.detail, /sqlite \d+\.\d+/);
   });
 

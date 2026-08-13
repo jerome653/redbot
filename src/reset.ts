@@ -160,6 +160,10 @@ export function resetPlan(scope: ResetScope, opts: { signIns?: boolean } = {}): 
       'removals go with it, so the gate that would have held this account back starts from zero.'
     );
     warnings.push('Accounts and sources are removed — the console will ask you to set up again.');
+    warnings.push(
+      'install-id goes too, so this install is a NEW one to the dashboard: any ingest or share ' +
+      'token minted against the old id stops matching and has to be re-minted.'
+    );
   }
   if (signIns) {
     warnings.push(
