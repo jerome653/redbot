@@ -45,7 +45,7 @@ const { ensureRelay, relayFor, stopRelay, stopAllRelays } = await import('../pro
 const { saveVettedProxy, setRelayPort, loadAccountProxy, recentExitObservations } =
   await import('../db/proxies.js');
 const { saveProxyCredential } = await import('../proxy/credential.js');
-const { RELAY_PORT_FIRST, RELAY_PORT_LAST } = await import('../ports.js');
+const { RELAY_PORT_FIRST, RELAY_PORT_LAST, firstFreePortInRange } = await import('../ports.js');
 
 const MACHINE = 'test-machine';
 const HANDLE = 'Striking_Mousse6841';
@@ -260,7 +260,12 @@ test('a recorded port another program has taken is replaced rather than failed o
   /* Squat on the recorded port with something that is not us — the Lenovo Vantage case from
      src/ports.ts, one band up. */
   const squatter = createServer();
-  const held = RELAY_PORT_FIRST;
+  /* Squat a port that is ACTUALLY FREE, rather than assuming the first one is.
+     This suite hard-coded RELAY_PORT_FIRST and, on 2026-08-14, died in its own setup with
+     EADDRINUSE because an unrelated project's preview server held 9400 — taking the next test
+     down with it. The one test whose whole subject is "somebody else has this port" must not be
+     the test that cannot cope with somebody else having that port. */
+  const held = await firstFreePortInRange([], RELAY_PORT_FIRST, RELAY_PORT_LAST, 'relay port');
   await setRelayPort(getPool(), HANDLE, held, MACHINE);
   await new Promise<void>((r) => squatter.listen(held, '127.0.0.1', () => r()));
 
