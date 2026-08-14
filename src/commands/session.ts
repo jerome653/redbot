@@ -155,7 +155,7 @@ export async function session(opts?: { kind?: string; sub?: string }): Promise<n
     );
 
     if (plan.mayReply && collected.length) {
-      say.step('This session was allowed to end in a reply. Next: `redbot analyze`, then `redbot select`.');
+      say.step('This session was allowed to end in a reply. Next: `redbot opportunity`, then `redbot select`.');
     } else if (!plan.mayReply) {
       say.step('This session was read-only by plan. Nothing further to do.');
     }

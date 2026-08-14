@@ -45,6 +45,7 @@ import { config, DATA, selectedAccount } from '../config.js';
 import { checkWindow } from '../window.js';
 import { counters } from '../health.js';
 import type { Draft } from '../types.js';
+import { NOTHING_TO_DO, FAILED } from '../exit-codes.js';
 
 /**
  * Capture a structured reason for a decision.
@@ -82,12 +83,18 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
     : pending[pending.length - 1];
 
   if (!target) {
-    say.warn(draftIdArg ? `No draft with id ${draftIdArg}.` : 'No pending drafts. Run `redbot draft`.');
-    return 1;
+    if (draftIdArg) {
+      say.fail(`No draft with id ${draftIdArg}.`);
+      return FAILED;
+    }
+    say.warn('No pending drafts.');
+    say.step('Write one first:  redbot draft');
+    return NOTHING_TO_DO;
   }
+  /* Already decided is not a failure either — the work this asks for is already done. */
   if (target.status !== 'pending') {
     say.warn(`Draft ${target.id} is already "${target.status}".`);
-    return 1;
+    return NOTHING_TO_DO;
   }
 
   const thread = (await loadThreads()).find((t) => t.id === target.threadId);

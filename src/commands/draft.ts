@@ -29,6 +29,7 @@ import { config, selectedAccount } from '../config.js';
 import { trace } from '../trace.js';
 import { record, say } from '../log.js';
 import type { Draft } from '../types.js';
+import { NOTHING_TO_DO } from '../exit-codes.js';
 
 interface RawDraft {
   contribute?: unknown;
@@ -48,8 +49,11 @@ export async function draft(threadIdArg?: string): Promise<number> {
   const assessments = await loadAssessments();
 
   if (!assessments.length) {
-    say.warn('No opportunity assessments on record. Run `redbot opportunity` first.');
-    return 1;
+    /* Nothing assessed is nothing to draft — not a failure. This is the console's "write"
+       button, so returning 1 painted it red for an install that simply had not scored yet. */
+    say.warn('No opportunity assessments on record.');
+    say.step('Score what has been collected first:  redbot opportunity');
+    return NOTHING_TO_DO;
   }
 
   const drafted = new Set((await loadDrafts()).map((d) => d.threadId));

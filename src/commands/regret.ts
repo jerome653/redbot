@@ -27,6 +27,7 @@ import {
 import { ask, choose } from '../ask.js';
 import { record, say } from '../log.js';
 import type { Draft } from '../types.js';
+import { NOTHING_TO_DO, FAILED } from '../exit-codes.js';
 
 const HOURS = 3_600_000;
 
@@ -54,7 +55,7 @@ export async function regret(draftIdArg?: string): Promise<number> {
   const published = (await loadDrafts()).filter((d) => d.status === 'published');
   if (!published.length) {
     say.warn('Nothing has been published, so there is nothing to stand behind yet.');
-    return 1;
+    return NOTHING_TO_DO;
   }
 
   const existing = await loadRegrets();
@@ -63,8 +64,9 @@ export async function regret(draftIdArg?: string): Promise<number> {
 
   const targets = draftIdArg ? published.filter((d) => d.id === draftIdArg) : published;
   if (!targets.length) {
-    say.warn(`No published draft with id ${draftIdArg}.`);
-    return 1;
+    /* Named and not found — a mistake, not an empty room. */
+    say.fail(`No published draft with id ${draftIdArg}.`);
+    return FAILED;
   }
 
   let asked = 0;

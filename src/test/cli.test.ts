@@ -39,6 +39,33 @@ test('a positional before any flag is kept', () => {
   assert.deepEqual(positional, ['d_1']);
 });
 
+/**
+ * THE FORWARD CHECK, WHICH IS THE ONE THAT WAS MISSING.
+ *
+ * The test below pins that no BOOLEAN flag is in the set. Nothing pinned the other direction —
+ * that every flag which READS a value is in it — and that is the asymmetry D-10 came through:
+ * `--country US` on `redbot proxy vet` left "US" in `positional`, where the first positional is
+ * an account HANDLE, and a handle is what triggers a bind. A parser that quietly re-purposes a
+ * flag's value as a command's argument is a write-path bug wearing a typo's clothes.
+ *
+ * Four more had accumulated by the 2026-08-14 audit: --admin-token-file, --batch, --label and
+ * --share-from. Listing them here would fix today and rot tomorrow, so this derives the set from
+ * the source instead: every `flagValue('x')` call site must have 'x' in VALUE_FLAGS. Add a new
+ * value flag and forget the set, and this fails naming it.
+ */
+test('every flag that reads a value is declared as one', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const src = readFileSync(fileURLToPath(new URL('../cli.ts', import.meta.url).href.replace('/dist/', '/src/')), 'utf8');
+
+  const read = [...src.matchAll(/flagValue\('([a-z-]+)'\)/g)].map((m) => m[1]!);
+  assert.ok(read.length > 10, `expected to find the flagValue call sites, saw ${read.length}`);
+
+  const undeclared = [...new Set(read)].filter((f) => !VALUE_FLAGS.has(f)).sort();
+  assert.deepEqual(undeclared, [],
+    `these read a value but are not in VALUE_FLAGS, so their values leak into positionals: ${undeclared.join(', ')}`);
+});
+
 test('boolean flags are never in the value-flag set', () => {
   for (const boolFlag of ['quick', 'once', 'force', 'all', 'json', 'list', 'verify', 'override']) {
     assert.equal(VALUE_FLAGS.has(boolFlag), false, `${boolFlag} must not take a value`);

@@ -12,6 +12,7 @@ import { runCertification } from '../argus/pipeline.js';
 import { reviewPackage, generateArgusReports } from '../argus/reports.js';
 import { record, say } from '../log.js';
 import { autoBackup } from '../backup.js';
+import { NOTHING_TO_DO, FAILED } from '../exit-codes.js';
 
 export async function certifyCmd(draftIdArg?: string, opts?: { override?: boolean }): Promise<number> {
   say.head('redbot certify — Argus');
@@ -21,8 +22,14 @@ export async function certifyCmd(draftIdArg?: string, opts?: { override?: boolea
   const target = draftIdArg ? drafts.find((d) => d.id === draftIdArg) : pending[pending.length - 1];
 
   if (!target) {
-    say.warn(draftIdArg ? `No draft with id ${draftIdArg}.` : 'No pending drafts to certify.');
-    return 1;
+    /* Asking for a draft BY NAME and not finding it is a mistake worth hearing about. Having
+       no pending drafts at all is not — and this is the console's "check" button. */
+    if (draftIdArg) {
+      say.fail(`No draft with id ${draftIdArg}.`);
+      return FAILED;
+    }
+    say.warn('No pending drafts to certify.');
+    return NOTHING_TO_DO;
   }
 
   const thread = (await loadThreads()).find((t) => t.id === target.threadId);

@@ -166,6 +166,16 @@ export const VALUE_FLAGS = new Set([
   // so both must be here or their values leak back into `positional` — the same parser bug
   // this set was created to fix.
   'search', 'why',
+  /**
+   * Found by the 2026-08-14 audit, all four the same D-10 shape.
+   *
+   * `redbot push --batch 50` left "50" as the first positional, which `push` reads as its
+   * SUBCOMMAND — so the flag's value silently became the verb. `redbot tokens --label x`,
+   * `--share-from` and `--admin-token-file` do the same to `tokens`. The forward direction is
+   * now derived from the source by a test, so the next one cannot be forgotten instead of
+   * remembered.
+   */
+  'batch', 'label', 'share-from', 'admin-token-file',
   // `redbot vault set <name> --scope <operator>`. This one currently works either way, because
   // `vault` reads its positionals before the flag — but that is an accident of argument order,
   // not a property of the parser, and the next command to take --scope would not be so lucky.

@@ -57,6 +57,7 @@ import {
 } from '../warming.js';
 import { counters } from '../health.js';
 import type { Draft, Thread } from '../types.js';
+import { NOTHING_TO_DO, FAILED } from '../exit-codes.js';
 
 interface RawWarm { comment?: unknown; why?: unknown; decline?: unknown }
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
@@ -83,7 +84,7 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
   const account = selectedAccount();
   if (!account) {
     say.fail('No account selected. Warming is per-account — set REDBOT_ACCOUNT.');
-    return 1;
+    return FAILED;
   }
 
   /* ---------- 1. may this account act at all right now? ---------- */
@@ -99,7 +100,8 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
   if (!pace.ok) {
     for (const i of pace.issues) say.fail(`  [${i.rule}] ${i.detail}`);
     say.step('Nothing was drafted. Warming is a marathon — this is the pace holding, not a failure.');
-    return 1;
+    /* And now the exit code agrees with that sentence, which it did not for the pace's whole life. */
+    return NOTHING_TO_DO;
   }
 
   /* ---------- 2. which threads are worth a comment ---------- */
@@ -136,7 +138,8 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
     const maxAnswers = policy.warmingMaxAnswers.value;
     say.warn(`No thread is young enough with few enough answers. Collect again closer to the hour —`);
     say.warn(`warming needs threads under ${maxAge}h with at most ${maxAnswers} answers, and a batch collected hours ago has none left.`);
-    return 1;
+    /* A corpus with nothing young enough is nothing to do, not a fault in warming. */
+    return NOTHING_TO_DO;
   }
 
   const pick = candidates[0]!;

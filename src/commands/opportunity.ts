@@ -103,11 +103,14 @@ export function prefilter(
  * that survived the mechanical prefilter. They used to return 1, indistinguishable from a crash,
  * and the console — which judges a run purely by its exit code — showed six runs of "scoring did
  * not work" for a day on which scoring was never reached. The message is carried up separately now
- * (tools/product/run-outcome.mjs); this code exists so a caller can branch on the DISTINCTION
- * without parsing English. Still non-zero: nothing downstream ran, and a script must not treat
- * that as success.
+ * (tools/product/run-outcome.mjs).
+ *
+ * The constant moved to src/exit-codes.ts once the audit found the same shape in a dozen other
+ * commands: it was never specific to scoring, and one command owning the vocabulary is why nobody
+ * else used it. Re-exported here because callers and tests already import it from this module.
  */
-export const NOTHING_TO_DO = 2;
+export { NOTHING_TO_DO } from '../exit-codes.js';
+import { NOTHING_TO_DO } from '../exit-codes.js';
 
 export async function opportunity(opts?: { force?: boolean; limit?: number; only?: string[]; all?: boolean }): Promise<number> {
   say.head('redbot opportunity');

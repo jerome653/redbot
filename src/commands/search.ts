@@ -35,6 +35,7 @@ import { record, say } from '../log.js';
 import { isQuestionShaped } from '../select.js';
 import { assessCompetence } from '../competence.js';
 import type { Thread } from '../types.js';
+import { NOTHING_TO_DO } from '../exit-codes.js';
 
 export const candidatesPath = join(DATA, 'search-candidates.json');
 
@@ -105,8 +106,9 @@ async function preview(query: string, max: number, time: SearchWindow): Promise<
 
     const listings = await collectListings(s.page, max, sel.searchScope);
     if (!listings.length) {
+      /* An empty result is an answer, not a fault — and this is the console's search button. */
       say.warn('The search returned nothing that looks like a post link.');
-      return 1;
+      return NOTHING_TO_DO;
     }
 
     const candidates: Candidate[] = listings.map((l, i) => {

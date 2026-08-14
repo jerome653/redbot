@@ -13,6 +13,7 @@ import { generateAll } from '../reports.js';
 import { computeInsights } from '../insights.js';
 import { loadThreads, loadAssessments } from '../store.js';
 import { say } from '../log.js';
+import { NOTHING_TO_DO } from '../exit-codes.js';
 
 /* ------------------------------------------------------------------ */
 
@@ -191,8 +192,9 @@ export async function reportCmd(): Promise<number> {
 export async function selectCmd(showAll = false): Promise<number> {
   const candidates = rankCandidates(await loadThreads(), await loadAssessments());
   if (!candidates.length) {
-    say.warn('Nothing assessed yet. Run `redbot read` then `redbot opportunity`.');
-    return 1;
+    say.warn('Nothing assessed yet.');
+    say.step('Collect and score first:  redbot read <subreddit>  then  redbot opportunity');
+    return NOTHING_TO_DO;
   }
 
   const eligible = candidates.filter((c) => c.eligible);
@@ -212,8 +214,9 @@ export async function selectCmd(showAll = false): Promise<number> {
 
   say.info('');
   if (!eligible.length) {
+    /* Its own sentence calls this a valid outcome; the exit code used to call it a failure. */
     say.warn('No thread passes every criterion. That is a valid outcome — read more rather than relaxing one.');
-    return 1;
+    return NOTHING_TO_DO;
   }
   const top = eligible[0]!;
   say.ok(`Pilot pick: ${top.threadId} — ${top.title.slice(0, 60)}`);
