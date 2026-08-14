@@ -2960,6 +2960,42 @@ const server = createServer((req, res) => {
         );
         return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
+      /**
+       * The switch on a source row.
+       *
+       * It used to be a browser preference. `localStorage['redbot.src.<kind>.<id>']` decided what
+       * a collect visited, while `sources.enabled` — which is what /api/state, the CLI, doctor
+       * and the seed file all report — was consulted only as a default for a key not yet
+       * written. One machine, two answers, and the quieter one drove the run.
+       */
+      if (url.pathname === '/api/sources/enable') {
+        const kind = body.kind === 'search' ? 'search' : 'subreddit';
+        const r = await sourcesApi.switchSource(kind, String(body.value || ''), body.enabled !== false);
+        return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
+      /**
+       * Take the switches a browser was holding into the record, once, on upgrade.
+       *
+       * Without this, moving the truth to the database silently switches ON every source the
+       * operator had switched off — the collector would start visiting places they had stopped
+       * watching, with no action from them. A key naming a source that no longer exists is
+       * REPORTED, never re-created: those keys outlived their sources (they are keyed by name),
+       * and re-creating one would resurrect a switch nobody set on a source somebody deleted.
+       */
+      if (url.pathname === '/api/sources/adopt-toggles') {
+        const toggles = Array.isArray(body.toggles) ? body.toggles : [];
+        const applied = [], ignored = [], refused = [];
+        for (const t of toggles) {
+          const kind = t?.kind === 'search' ? 'search' : 'subreddit';
+          const value = String(t?.value || '');
+          if (!value) continue;
+          const r = await sourcesApi.switchSource(kind, value, t?.enabled !== false);
+          if (r.ok) applied.push(r.value);
+          else if (/Not on the list/.test(r.error || '')) ignored.push(value);
+          else refused.push({ value, error: r.error });
+        }
+        return send(200, JSON.stringify({ ok: refused.length === 0, applied, ignored, refused }));
+      }
       if (url.pathname === '/api/sources/remove') {
         const kind = body.kind === 'search' ? 'search' : 'subreddit';
         const r = await sourcesApi.removeSource(kind, String(body.value || ''));

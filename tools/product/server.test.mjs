@@ -678,6 +678,82 @@ test('a source can be removed through the console', async () => {
   assert.match(again.body.error, /Not on the list/);
 });
 
+/* ------------------------------------------------------------------ *
+ * The switch on a source row — a record, not a browser preference
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every source carried TWO answers to "is this one live", and the quieter one won.
+ *
+ * The console wrote its switches to `localStorage` (`redbot.src.<kind>.<id>`) and treated the
+ * database's `enabled` column as merely the default for a key not yet written. Collect filtered
+ * on the browser's copy; `/api/state`, the CLI, doctor and the seed file all reported the
+ * column. So a source could read ON in every place a person or a test would look while being
+ * skipped on every run — measured on this install 2026-08-14: all four sources `enabled = 1` in
+ * the database, two subreddits held at `0` in the renderer's store, plus two orphan keys for
+ * searches deleted months earlier that would have re-applied themselves to any source added
+ * under the same name.
+ */
+test('the switch on a source is recorded where the collector reads it', async () => {
+  await pool.query("DELETE FROM sources WHERE value IN ('SwitchTestSub')");
+  assert.equal((await sourcePost('add', { kind: 'subreddit', value: 'SwitchTestSub' })).status, 200);
+
+  const off = await sourcePost('enable', { kind: 'subreddit', value: 'SwitchTestSub', enabled: false });
+  assert.equal(off.status, 200, `switching off was refused: ${JSON.stringify(off.body)}`);
+  const row = await pool.query('SELECT enabled FROM sources WHERE kind = $1 AND value = $2',
+                               ['subreddit', 'SwitchTestSub']);
+  assert.equal(row.rows[0]?.enabled, false, 'the switch must land in the record');
+
+  // The screen reads what the collector reads — one answer, from one place.
+  const s = await (await fetch(`http://127.0.0.1:${PORT}/api/state`)).json();
+  assert.equal(s.collect.subreddits.find((x) => x.name === 'SwitchTestSub')?.enabled, false);
+
+  const back = await sourcePost('enable', { kind: 'subreddit', value: 'SwitchTestSub', enabled: true });
+  assert.equal(back.status, 200);
+
+  const ghost = await sourcePost('enable', { kind: 'subreddit', value: 'NoSuchSourceHere', enabled: false });
+  assert.equal(ghost.status, 400, 'switching something absent must not create it');
+  assert.match(ghost.body.error, /Not on the list/);
+  const made = await pool.query('SELECT 1 FROM sources WHERE value = $1', ['NoSuchSourceHere']);
+  assert.equal(made.rowCount, 0);
+});
+
+test('the toggles a browser was holding are adopted once, and orphans are named not applied', async () => {
+  // Upgrade path: the state the operator last set must survive, or switching to the record
+  // silently starts collecting from sources they had switched off.
+  //
+  // Its own row, its own cleanup: leaning on what the test above left behind means one failure
+  // up there reports as two down here, and the second one names the wrong defect.
+  //
+  // Note what is NOT done here: the row is not deleted and re-added. `addSource` refuses a value
+  // still listed in the seed file even when the table has no row for it — clearing one store and
+  // not the other is the trap `forgetAccount` exists for, and it would fail this test on a defect
+  // that is not this one.
+  const add = await sourcePost('add', { kind: 'subreddit', value: 'SwitchTestSub' });
+  assert.ok(add.status === 200 || /already on the list/.test(add.body.error || ''),
+    `the source under test could not be established: ${JSON.stringify(add.body)}`);
+  assert.equal((await sourcePost('enable', { kind: 'subreddit', value: 'SwitchTestSub', enabled: true })).status,
+    200, 'start from ON, so the adoption below is what turns it off');
+
+  const r = await sourcePost('adopt-toggles', {
+    toggles: [
+      { kind: 'subreddit', value: 'SwitchTestSub', enabled: false },
+      { kind: 'search', value: 'a search deleted long ago', enabled: false }
+    ]
+  });
+  assert.equal(r.status, 200, `adoption was refused: ${JSON.stringify(r.body)}`);
+  assert.deepEqual(r.body.applied, ['SwitchTestSub'], 'the live source takes the browser state');
+  assert.deepEqual(r.body.ignored, ['a search deleted long ago'],
+    'a key whose source is gone is reported, never re-created');
+
+  const row = await pool.query('SELECT enabled FROM sources WHERE value = $1', ['SwitchTestSub']);
+  assert.equal(row.rows[0]?.enabled, false);
+  const ghost = await pool.query('SELECT 1 FROM sources WHERE value = $1', ['a search deleted long ago']);
+  assert.equal(ghost.rowCount, 0);
+
+  await pool.query("DELETE FROM sources WHERE value = 'SwitchTestSub'");
+});
+
 /** Is this handle in accounts? The record, not the seed file. */
 async function inDatabase(handle) {
   const r = await pool.query('SELECT handle, debug_port, profile_dir FROM accounts WHERE handle = $1', [handle]);
@@ -2158,6 +2234,36 @@ test('the collect buttons name the feed they read, and it is one a reply can sti
   /* The commit half stays as it is: picking is what keeps ancient threads out of the corpus. */
   assert.match(src, /'collect-search':\s*\{\s*args:\s*\(o\)\s*=>\s*\['search',\s*'--commit'/,
     'collect-search must still commit only what a person picked');
+});
+
+/**
+ * The console must not keep a second opinion about which sources are live.
+ *
+ * This is the shape half of the defect pinned in `/api/sources/enable` above: it is not enough
+ * that a switch now writes to the record if the collect panel still consults the browser. The
+ * one thing that must never come back is a `localStorage` read DECIDING what gets collected —
+ * so the filter is pinned to the record's own field, and the legacy keys may only be read by
+ * the code that adopts them into the record and then deletes them.
+ */
+test('what the collector visits is read from the record, never from a browser preference', () => {
+  const ui = readFileSync(join(HERE, 'index.html'), 'utf8');
+
+  assert.ok(!/\bsrcOn\s*\(/.test(ui),
+    'srcOn() read the switch out of localStorage and defaulted to the record — it must be gone');
+
+  assert.match(ui, /s\.subreddits\.filter\(x=>x\.enabled\)/,
+    'the subreddits a run visits must be filtered on the record');
+  assert.match(ui, /s\.searches\.filter\(x=>x\.enabled\)/,
+    'the searches a run visits must be filtered on the record');
+
+  /* The legacy keys survive in one place only: the one-time adoption that retires them. */
+  const legacy = ui.split('\n')
+    .map((line, i) => [i + 1, line])
+    .filter(([, line]) => /redbot\.src\./.test(line) && !/^\s*(\*|\/\/)/.test(line));
+  for (const [n, line] of legacy) {
+    assert.ok(/adoptLegacyToggles|LEGACY_SRC_RE/.test(line),
+      `index.html:${n} still reaches for a redbot.src.* key outside the adoption: ${line.trim()}`);
+  }
 });
 
 /**

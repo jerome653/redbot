@@ -14,7 +14,7 @@
  */
 import { say } from '../log.js';
 import {
-  loadSources, addSource, removeSource, importSources, exportSources, countSourcesInDb,
+  loadSources, addSource, removeSource, switchSource, importSources, exportSources, countSourcesInDb,
   sourcesPath, SourcesError
 } from '../sources.js';
 import { closePool, dbUnavailableReason } from '../db.js';
@@ -87,6 +87,28 @@ async function remove(value: string | undefined, isSearch: boolean): Promise<num
   return 0;
 }
 
+/**
+ * Switch one on or off.
+ *
+ * `list` has printed `on`/`off` since it was written, but nothing here could ever WRITE it:
+ * `add` sets it true and `import` copies whatever the seed file said. The only switch an
+ * operator had was the console's, which kept its answer in the browser rather than the record —
+ * so the column this command reads was, in practice, write-once. It matters most exactly when
+ * the console is not available, which is the same moment the seed-file fallback starts being
+ * consulted, and a fallback nobody can correct is not much of one.
+ */
+async function switchCmd(value: string | undefined, isSearch: boolean, on: boolean): Promise<number> {
+  if (!value) {
+    say.fail(`Which one? \`redbot sources ${on ? 'on' : 'off'} <name-or-query>\``);
+    return 1;
+  }
+  const r = await switchSource(isSearch ? 'search' : 'subreddit', value, on);
+  if (!r.ok) { say.fail(r.error ?? `could not switch that source ${on ? 'on' : 'off'}`); return 1; }
+  say.ok(`${r.kind === 'search' ? `Search "${r.value}"` : `r/${r.value}`} is ${on ? 'on' : 'off'}.`);
+  if (!on) say.step('It keeps its place and its reason — this is not a removal.');
+  return 0;
+}
+
 async function importCmd(): Promise<number> {
   say.head('redbot sources import');
   const reason = dbUnavailableReason();
@@ -123,6 +145,8 @@ export async function sources(
     if (sub === undefined || sub === 'list') return await list();
     if (sub === 'add')    return await add(target, isSearch, opts.why);
     if (sub === 'rm' || sub === 'remove') return await remove(target, isSearch);
+    if (sub === 'on')  return await switchCmd(target, isSearch, true);
+    if (sub === 'off') return await switchCmd(target, isSearch, false);
     if (sub === 'import') return await importCmd();
     if (sub === 'export') return await exportCmd();
     say.fail(`Unknown: "${sub}". One of: list, add, rm, import, export.`);

@@ -24,7 +24,7 @@ const DATA = mkdtempSync(join(tmpdir(), 'redbot-sources-'));
 process.env.REDBOT_DATA = DATA;
 
 const {
-  addSource, removeSource, loadSources, enabledSources, loadSourcesFile,
+  addSource, removeSource, switchSource, loadSources, enabledSources, loadSourcesFile,
   readSourcesFile, importSources, exportSources, sourcesPath, SourcesError
 } = await import('../sources.js');
 const { getPool, closePool } = await import('../db.js');
@@ -194,6 +194,53 @@ test('only switched-on sources are collected, and off ones keep their reason', a
   const off = sources.find((s) => s.value === 'SourcesTestTwo');
   assert.equal(off?.enabled, false);
   assert.equal(off?.why, 'turned off later');
+});
+
+/**
+ * THE SWITCH IS A RECORD, NOT A BROWSER PREFERENCE.
+ *
+ * The console kept every source's on/off state in `localStorage` under `redbot.src.<kind>.<id>`
+ * and used the database's `enabled` column only as the DEFAULT for a key that was not there
+ * yet. Collect then filtered by the browser's copy — so a source the database, the CLI and the
+ * seed file all reported as ON was silently skipped, and nothing server-side could see why.
+ * That is how a collect ran 1 of 4 sources in seven seconds and reported success.
+ *
+ * These pin the API half: one place writes the state, and the seed file follows it so the
+ * offline fallback is not stale the moment a switch is touched.
+ */
+test('switching a source off is recorded, and the seed file follows it', async () => {
+  await clear();
+  assert.equal((await addSource('subreddit', 'SourcesTestSub', 'why it is watched')).ok, true);
+
+  const off = await switchSource('subreddit', 'SourcesTestSub', false);
+  assert.equal(off.ok, true, `switching off was refused: ${off.error}`);
+  assert.equal(off.storedIn, 'database');
+
+  const { subs } = await enabledSources();
+  assert.ok(!subs.includes('SourcesTestSub'), 'a source switched off must not be collected');
+
+  // Off, not deleted, and the reason survives — the same guarantee removeSource does not give.
+  const { sources } = await loadSources();
+  assert.equal(sources.find((s) => s.value === 'SourcesTestSub')?.enabled, false);
+  assert.equal(sources.find((s) => s.value === 'SourcesTestSub')?.why, 'why it is watched');
+
+  // The fallback must agree with the record. A seed file still saying `enabled: true` sends the
+  // collector somewhere the operator switched off the moment the database is unreachable.
+  const file = JSON.parse(readFileSync(sourcesPath(), 'utf8'));
+  assert.equal(file.subreddits.find((s: { name: string }) => s.name === 'SourcesTestSub').enabled, false);
+
+  const on = await switchSource('subreddit', 'SourcesTestSub', true);
+  assert.equal(on.ok, true);
+  assert.ok((await enabledSources()).subs.includes('SourcesTestSub'), 'and back on again');
+});
+
+test('switching something that is not on the list changes nothing and says so', async () => {
+  await clear();
+  const r = await switchSource('subreddit', 'SourcesTestThree', false);
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? '', /Not on the list/);
+  // A refusal must not create the row it refused to find.
+  assert.equal((await loadSources()).sources.some((s) => s.value === 'SourcesTestThree'), false);
 });
 
 test('enabledSources propagates a corrupt file rather than collecting nothing quietly', async () => {

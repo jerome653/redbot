@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import { DATA } from './config.js';
 import { getPool, dbUnavailableReason } from './db.js';
 import {
-  upsertSources, loadSourcesFromDb, getSource, deleteSource, countSources,
+  upsertSources, loadSourcesFromDb, getSource, deleteSource, countSources, setSourceEnabled,
   type SourceRecord, type SourceKind
 } from './db/sources.js';
 
@@ -261,6 +261,48 @@ export async function editSource(
 
   writeSeedFile(await loadSourcesFromDb(getPool()));
   return { ok: true, kind, value: newValue, storedIn: 'database' };
+}
+
+/**
+ * Switch a source on or off.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS EXISTS, WHEN THE COLUMN ALREADY DID.
+ *
+ * `sources.enabled` has always been the collector's filter (`enabledSources` above), but the
+ * console never wrote it. Its switches lived in the browser's `localStorage` under
+ * `redbot.src.<kind>.<id>`, and the column was read only as the DEFAULT for a key that was not
+ * there yet — so the moment anybody touched a switch, the browser held one answer and the
+ * database, the CLI, `redbot doctor` and the seed file held another. Collect obeyed the browser.
+ * Everything that reports obeyed the record. A source could therefore read as ON everywhere a
+ * person or a test would look while being skipped on every run, which is what turned a collect
+ * into "looked through 4 places" over one place. The state was also keyed by NAME and outlived
+ * the source: remove a search and its OFF key stayed behind, so re-adding that name months
+ * later brought back a switch nobody set.
+ *
+ * One writer, one reader. The seed file is mirrored on the same call for the same reason every
+ * other mutation here mirrors it — a fallback that disagrees with the record is worse than no
+ * fallback, because it only ever gets used when nothing else can be consulted.
+ */
+export async function switchSource(
+  kind: SourceKind, rawValue: string, enabled: boolean
+): Promise<MutationResult> {
+  const value = String(rawValue ?? '').trim().replace(/^\/?r\//i, '');
+  if (!value) return { ok: false, error: 'Nothing to switch.' };
+
+  try { loadSourcesFile(); }
+  catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+
+  const reason = dbUnavailableReason();
+  if (reason) return { ok: false, error: `The database is not available, so this cannot be recorded.\n${reason}` };
+
+  /* Refuse rather than create. A switch is a change to something that exists; inventing the row
+     here would let a typo in the console add a source under the guise of turning one off. */
+  const changed = await setSourceEnabled(getPool(), kind, value, enabled);
+  if (!changed) return { ok: false, error: 'Not on the list.' };
+
+  writeSeedFile(await loadSourcesFromDb(getPool()));
+  return { ok: true, kind, value, storedIn: 'database' };
 }
 
 /** Remove a source from the record, and from the seed file with it. */

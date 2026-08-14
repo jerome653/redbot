@@ -49,7 +49,7 @@ redbot — Reddit engagement assistant
                                  who can run redbot, and whose Claude login pays
     redbot accounts [list|use <handle>|import|export]
                                  who redbot may post as (the database is the record)
-    redbot sources [add|rm|import|export]
+    redbot sources [add|rm|on|off|import|export]
                                  where redbot looks for threads (the database is the record)
     redbot vault [list|check]    what secrets are stored, encrypted, in the database
     redbot vault set <name>      store one — piped in, never typed as an argument

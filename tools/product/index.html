@@ -2512,12 +2512,50 @@ function doAction(job,opts){
 /* set while a job runs, so runNow can push the command's own output into the panel */
 let LAST_DETAIL=null;
 
-const srcKey=(kind,id)=>`redbot.src.${kind}.${id}`;
-const srcOn=(kind,id,dflt)=>{
-  try{const v=localStorage.getItem(srcKey(kind,id)); if(v!==null)return v==='1'}catch{}
-  return !!dflt;
-};
-const srcSet=(kind,id,on)=>{try{localStorage.setItem(srcKey(kind,id),on?'1':'0')}catch{}};
+/**
+ * WHICH SOURCES ARE LIVE IS THE RECORD'S ANSWER, AND ONLY THE RECORD'S.
+ *
+ * These switches used to be kept in this browser under `redbot.src.<kind>.<id>`, with the
+ * database's `enabled` column read only as the default for a key not yet written. Collect
+ * filtered on the browser's copy while /api/state, the CLI, `redbot doctor` and the seed file
+ * all reported the column — so a source could read ON everywhere a person would look and be
+ * skipped on every run. Measured on this install 2026-08-14: four sources enabled in the
+ * database, two subreddits held at 0 here, and two keys still naming searches deleted long ago.
+ *
+ * The keys are read exactly once more, by the adoption below, and then deleted. What the
+ * operator last set is preserved — switching the authority must not switch sources back ON —
+ * but a key whose source is gone is reported and dropped rather than re-created, because it
+ * would otherwise re-apply itself to any future source added under the same name.
+ */
+let ADOPTED_LEGACY_SRC=false;
+const LEGACY_SRC_RE=/^redbot\.src\.(sub|q)\.(.+)$/;
+function legacySrcToggles(){
+  const out=[];
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i);
+      const m=k&&LEGACY_SRC_RE.exec(k);
+      if(m)out.push({key:k,kind:m[1]==='q'?'search':'subreddit',value:m[2],enabled:localStorage.getItem(k)==='1'});
+    }
+  }catch{}
+  return out;
+}
+async function adoptLegacyToggles(){
+  const held=legacySrcToggles();
+  if(!held.length)return null;
+  let res;
+  try{
+    res=await fetch('/api/sources/adopt-toggles',{
+      method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({toggles:held.map(({kind,value,enabled})=>({kind,value,enabled}))})
+    }).then(r=>r.json());
+  }catch{return null}
+  /* A refusal leaves every key where it is. Deleting them on a write that did not land is how
+     the operator's setting disappears with nothing to read it back from. */
+  if(!res||res.ok===false)return res||null;
+  try{for(const t of held)localStorage.removeItem(t.key)}catch{}
+  return res;
+}
 
 /**
  * Which account collection runs as.
@@ -2606,12 +2644,23 @@ function collecting(root){
       const row=el('div','src-row');
       const sw=el('button','sw');
       sw.type='button';
-      sw.setAttribute('aria-pressed',String(srcOn(kind,id,it.enabled)));
-      sw.setAttribute('aria-label',`${srcOn(kind,id,it.enabled)?'Stop':'Start'} looking in ${id}`);
-      sw.onclick=()=>{
+      const paint=(on)=>{
+        sw.setAttribute('aria-pressed',String(on));
+        sw.setAttribute('aria-label',`${on?'Stop':'Start'} looking in ${id}`);
+      };
+      paint(it.enabled!==false);
+      /* The switch follows the RECORD, so it cannot show a state the collector will not obey:
+         it moves after the write lands, and a write that fails says so and leaves it alone. */
+      sw.onclick=async()=>{
         const now=sw.getAttribute('aria-pressed')!=='true';
-        srcSet(kind,id,now);sw.setAttribute('aria-pressed',String(now));
-        renderRun();
+        sw.disabled=true;
+        const r=await fetch('/api/sources/enable',{
+          method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({kind:kind==='sub'?'subreddit':'search',value:id,enabled:now})
+        }).then(x=>x.json()).catch(()=>({ok:false,error:'the console could not be reached'}));
+        sw.disabled=false;
+        if(!r.ok){toast(`That switch did not stick — ${r.error||'the record refused it'}`);return}
+        it.enabled=now;paint(now);renderRun();
       };
       row.append(sw);
       const mid=el('div');
@@ -2906,8 +2955,8 @@ function collecting(root){
 
   function renderRun(){
     btns.textContent='';
-    const subs=s.subreddits.filter(x=>srcOn('sub',x.name,x.enabled));
-    const qs=s.searches.filter(x=>srcOn('q',x.query,x.enabled));
+    const subs=s.subreddits.filter(x=>x.enabled);
+    const qs=s.searches.filter(x=>x.enabled);
     /**
      * A SUBREDDIT IS COLLECTED HERE. A SEARCH IS ONLY LOOKED AT.
      *
@@ -6848,6 +6897,21 @@ function argusRecord(){
 async function load(){
   const res=await fetch(`/api/state?reviewOffset=${REVIEW_OFFSET}`);
   S=await res.json();
+  /* Once per browser, on the first load after the upgrade: hand the switches this browser was
+     holding to the record, then read the state back so what is painted is what will run. It is
+     announced rather than done quietly — the operator's list of live sources is changing hands
+     and the count of what could not be matched is the only place those lost keys are ever
+     mentioned. */
+  if(!ADOPTED_LEGACY_SRC){
+    ADOPTED_LEGACY_SRC=true;
+    const ad=await adoptLegacyToggles();
+    if(ad&&((ad.applied||[]).length||(ad.ignored||[]).length)){
+      S=await (await fetch(`/api/state?reviewOffset=${REVIEW_OFFSET}`)).json();
+      const gone=(ad.ignored||[]).length;
+      toast(`Source switches moved onto the record — ${(ad.applied||[]).length} kept`
+        +(gone?`, ${gone} named nothing that still exists`:''),6000);
+    }
+  }
   await loadOperators();
   /**
    * The install-time read happens HERE, before anything is painted, and not later.
