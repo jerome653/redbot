@@ -144,7 +144,7 @@ export async function firstFreePortInRange(
   );
 }
 
-/** `--user-data-dir=C:\x` or `--user-data-dir="C:\x with spaces"`. Both shapes are real. */
+/** The `--user-data-dir` out of a command line, in any of the three shapes below. */
 export function userDataDirFrom(commandLine: string | null): string | null {
   if (!commandLine) return null;
   /**
