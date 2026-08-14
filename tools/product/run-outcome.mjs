@@ -50,6 +50,47 @@ function cap(text) {
 }
 
 /**
+ * `opportunity` exits with this when there was simply nothing to work on — no threads collected,
+ * or nothing left after the prefilter. It is deliberately non-zero because nothing downstream
+ * ran, and it is NOT a failure.
+ *
+ * The constant existed in src/commands/opportunity.ts from the day that exit was written, so a
+ * caller could branch without parsing English. Nothing ever branched. `runAction` judged runs by
+ * `ok: code === 0`, so an empty corpus came back as a failed run, and the collect chain's
+ * `if(!sc.ok) throw` painted an entire successful collect red — over a message telling a desktop
+ * operator to go and run a terminal command. Reported 2026-08-14.
+ *
+ * It is redeclared here rather than imported because this module is plain JS the console loads
+ * directly, and dist/ may not be built when it does. The two are pinned together by a test.
+ */
+export const NOTHING_TO_DO = 2;
+
+/** The line that is the point: the last one flagged as a problem, else the last one said. */
+function chosenLine(out, err) {
+  /* stderr last: when a command complains and then carries on printing, the complaint is the
+     point. Within each stream the natural order already puts the final word last. */
+  const lines = [...String(out).split('\n'), ...String(err).split('\n')]
+    .map((l) => l.replace(/\r$/, ''))
+    .filter(usable);
+  const flagged = lines.filter(isFlagged);
+  return flagged.length ? flagged[flagged.length - 1] : lines[lines.length - 1];
+}
+
+/**
+ * What to tell the operator when a run did nothing, having failed at nothing.
+ *
+ * @param {{code: number|null, out?: string, err?: string}} run
+ * @returns {string|null} the command's own sentence, or null when it said nothing usable
+ */
+export function runNote({ code, out = '', err = '' }) {
+  if (code !== NOTHING_TO_DO) return null;
+  const chosen = chosenLine(out, err);
+  /* No invention. A caller knows it was a nothing-to-do run from the flag; a sentence made up
+     here would be the console speaking in the CLI's voice about something it did not observe. */
+  return chosen === undefined ? null : cap(undecorate(chosen));
+}
+
+/**
  * @param {{code: number|null, stopped: boolean, out?: string, err?: string}} run
  * @returns {string|null} the sentence to show, or null when there is nothing to report
  */
@@ -57,20 +98,14 @@ export function runError({ code, stopped, out = '', err = '' }) {
   /* Asked to stop is not failed — the screen should say Stopped, not show red. */
   if (stopped) return 'Stopped.';
   if (code === 0) return null;
+  /* Nothing to do is not a failure. Its sentence is still worth showing, and runNote carries it. */
+  if (code === NOTHING_TO_DO) return null;
 
   /* A killed child reports null. That is the 20-minute timer, and "exited with code null" would
      be a worse lie than silence. The timeout fix owns that message; this one does not guess. */
   if (code === null || code === undefined) return null;
 
-  /* stderr last: when a command complains and then carries on printing, the complaint is the
-     point. Within each stream the natural order already puts the final word last. */
-  const lines = [...String(out).split('\n'), ...String(err).split('\n')]
-    .map((l) => l.replace(/\r$/, ''))
-    .filter(usable);
-
-  const flagged = lines.filter(isFlagged);
-  const chosen = flagged.length ? flagged[flagged.length - 1] : lines[lines.length - 1];
-
+  const chosen = chosenLine(out, err);
   if (chosen === undefined) return `redbot exited with code ${code}.`;
   return cap(undecorate(chosen));
 }

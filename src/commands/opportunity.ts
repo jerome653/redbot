@@ -114,7 +114,12 @@ export async function opportunity(opts?: { force?: boolean; limit?: number; only
 
   const threads = await loadThreads();
   if (!threads.length) {
-    say.warn('No threads collected. Run `redbot session` or `redbot read` first.');
+    /* The FACT goes on the flagged line and the terminal-only advice on an unflagged step.
+       run-outcome.mjs reports the flagged line, so the desktop console — where there is no
+       terminal and the collect button is right there — no longer repeats an instruction to go
+       and type a command. Someone at a prompt still gets it, one line down. */
+    say.warn('No threads have been collected yet.');
+    say.step('Collect some first:  redbot read <subreddit>   (or `redbot session`)');
     return NOTHING_TO_DO;
   }
 

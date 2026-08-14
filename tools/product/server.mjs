@@ -49,7 +49,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { exitPosture } from './exit-posture.mjs';
 import { fleetProblems } from './fleet-posture.mjs';
-import { runError } from './run-outcome.mjs';
+import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -1427,8 +1427,16 @@ function runAction(key, opts) {
       /* The child already said why. Carrying its own last flagged line up to the response is what
          stops the front end reaching for `|| 'scoring did not work'` — see run-outcome.mjs. */
       const error = runError({ code, stopped, out, err });
+      /* NOTHING TO DO IS NOT A FAILURE. `ok: code === 0` alone made an empty corpus a failed run:
+         opportunity exits NOTHING_TO_DO when there is nothing to score, the front end threw on
+         `!ok`, and a collect that worked was reported red over a message that was only ever a
+         statement of fact. The flag is what a caller branches on; the note is what it says. */
+      const nothing = !stopped && code === NOTHING_TO_DO;
+      const note = nothing ? runNote({ code, out, err }) : null;
       resolve({
-        ok: code === 0, code, stopped, ms: Date.now() - started,
+        ok: code === 0 || nothing, code, stopped, ms: Date.now() - started,
+        ...(nothing ? { nothing: true } : {}),
+        ...(note ? { note } : {}),
         ...(error ? { error } : {}),
         output: (out + err).slice(-24000), command: `redbot ${args.join(' ')}`
       });

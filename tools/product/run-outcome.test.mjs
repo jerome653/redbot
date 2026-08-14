@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runError } from './run-outcome.mjs';
+import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 
 test('a run that succeeded has no error', () => {
   assert.equal(runError({ code: 0, stopped: false, out: 'all good\n', err: '' }), null);
@@ -31,10 +31,45 @@ test('THE REGRESSION: a prefilter stop reports the prefilter, not "scoring"', ()
     '     dropped 29: not a question',
     ''
   ].join('\n');
+  /* The reason is still the prefilter's own sentence — but it is now carried by runNote, because
+     exit 2 is `nothing to do` and that is not a failure. See the block below. */
+  assert.equal(runError({ code: 2, stopped: false, out, err }), null,
+    'exit 2 means nothing ran, not that something broke');
   assert.equal(
-    runError({ code: 2, stopped: false, out, err }),
+    runNote({ code: 2, out, err }),
     'Nothing survives the prefilter. Collect fresher threads rather than relaxing it.'
   );
+});
+
+/**
+ * NOTHING TO DO IS NOT A FAILURE, AND THE CONSOLE SPENT THIS WHOLE TIME SAYING IT WAS.
+ *
+ * `opportunity` returns NOTHING_TO_DO = 2 from both of its nothing-to-do exits — the constant was
+ * added so a caller could branch without parsing English. No caller ever did: the console judged
+ * every run by `ok: code === 0`, so an empty corpus came back as a failed run and the collect
+ * chain threw on it, painting a whole successful collect red. Reported by an operator on
+ * 2026-08-14 as an error: "No threads collected. Run `redbot session` or `redbot read` first."
+ *
+ * The command was right. The frame around it was wrong.
+ */
+test('nothing to do is reported as a note, and is never an error', () => {
+  const err = '  !   No threads have been collected yet.\n';
+  assert.equal(runError({ code: NOTHING_TO_DO, stopped: false, out: '', err }), null);
+  assert.equal(runNote({ code: NOTHING_TO_DO, out: '', err }), 'No threads have been collected yet.');
+});
+
+test('a real failure has no note, and a success has neither', () => {
+  const err = '  X   the database could not be reached\n';
+  assert.equal(runNote({ code: 1, out: '', err }), null, 'a note must never soften a failure');
+  assert.equal(runError({ code: 1, stopped: false, out: '', err }), 'the database could not be reached');
+  assert.equal(runNote({ code: 0, out: 'fine', err: '' }), null);
+  assert.equal(runError({ code: 0, stopped: false, out: 'fine', err: '' }), null);
+});
+
+test('a run that stopped short with nothing to say still reads as nothing to do', () => {
+  // Never invent a sentence here: the caller renders "nothing to do" from the flag either way.
+  assert.equal(runNote({ code: NOTHING_TO_DO, out: '', err: '' }), null);
+  assert.equal(runError({ code: NOTHING_TO_DO, stopped: false, out: '', err: '' }), null);
 });
 
 test('a flagged problem wins over a later ordinary step', () => {

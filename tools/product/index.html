@@ -3005,6 +3005,11 @@ function collecting(root){
       say('Working out which are worth answering…');
       const sc=await runNow({key:'score'});
       if(!sc.ok)throw new Error(sc.error||'scoring did not work');
+      /* A collect that found nothing to score is a finished collect, not a failed one. This used
+         to arrive as ok:false and throw, so a run that opened Chrome, read every source and wrote
+         its threads reported in red — and the sentence it showed told a desktop operator to go and
+         run a terminal command. The scoring line is reported, and the collect still says Done. */
+      const nothingScored=sc.nothing?` Nothing to score — ${sc.note||'the prefilter kept nothing'}`:'';
       /* The numbers on the rows above this button are what the run just changed. Reloaded here
          rather than left to doAction's own reload afterwards, so they are already right when
          the "Done" line lands instead of one repaint later. */
@@ -3012,7 +3017,8 @@ function collecting(root){
       refreshCounts();
       /* Two numbers, because two different things happened and one number hid that for good. */
       return `Done — collected from ${subs.length} subreddit${subs.length===1?'':'s'}.`
-        +(qs.length?` ${qs.length} search${qs.length===1?'':'es'} looked but collected nothing — open one and press “Find & pick” to choose what goes in.`:'');
+        +(qs.length?` ${qs.length} search${qs.length===1?'':'es'} looked but collected nothing — open one and press “Find & pick” to choose what goes in.`:'')
+        +nothingScored;
     });
 
     btns.append(actionButton(`Collect from ${total} source${total===1?'':'s'}`,go));

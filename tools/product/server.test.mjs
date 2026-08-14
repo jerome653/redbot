@@ -2237,6 +2237,30 @@ test('the collect buttons name the feed they read, and it is one a reply can sti
 });
 
 /**
+ * A run that had nothing to do must not come back as a run that failed.
+ *
+ * `NOTHING_TO_DO` is declared twice on purpose — run-outcome.mjs is plain JS the console loads
+ * with no build step, and importing it from dist/ would make the console depend on a compile.
+ * Two declarations of the same number is exactly how they drift, so they are pinned to each
+ * other here, and the wiring that consumes them is pinned to the source.
+ */
+test('nothing-to-do is one number, and the console branches on it instead of failing', async () => {
+  const { NOTHING_TO_DO: consoleSide } = await import('./run-outcome.mjs');
+  const { NOTHING_TO_DO: cliSide } = await import(`file://${join(ROOT, 'dist', 'commands', 'opportunity.js')}`);
+  assert.equal(consoleSide, cliSide, 'the console and the CLI must mean the same thing by exit 2');
+
+  const src = readFileSync(join(HERE, 'server.mjs'), 'utf8');
+  assert.match(src, /ok:\s*code === 0 \|\| nothing/,
+    'a nothing-to-do run must be ok — `ok: code === 0` alone is what painted an empty corpus red');
+  assert.match(src, /const nothing = !stopped && code === NOTHING_TO_DO/,
+    'the flag a caller branches on must come from the constant, not a literal');
+
+  const ui = readFileSync(join(HERE, 'index.html'), 'utf8');
+  assert.match(ui, /sc\.nothing\?/,
+    'the collect chain must render the nothing-to-score case rather than throwing on it');
+});
+
+/**
  * The console must not keep a second opinion about which sources are live.
  *
  * This is the shape half of the defect pinned in `/api/sources/enable` above: it is not enough
