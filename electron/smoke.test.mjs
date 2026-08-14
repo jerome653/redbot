@@ -443,3 +443,83 @@ test('the checklist renders no literal markup', async () => {
   assert.doesNotMatch(text, /<span/, 'raw HTML is being shown to the operator as text');
   assert.doesNotMatch(text, /&lt;|&amp;/, 'double-escaped entities are being shown as text');
 });
+
+/**
+ * THE DEFECT THAT ONLY EXISTS BETWEEN BOOTS, AND THEREFORE HAD NO TEST.
+ *
+ * The window loads `http://127.0.0.1:<port>/`, so the port IS the origin, and everything the
+ * console remembers about how an operator works lives under it: which account collects, which
+ * account SENDS, the zoom, whether the walkthrough has been seen, which update was dismissed.
+ * The app used to bind :0 — any free port — so every launch produced a different origin and an
+ * empty localStorage, and the previous launch's settings were stranded where nothing would read
+ * them again. index.html called that store "per-install"; it was per-BOOT.
+ *
+ * Every existing test passed throughout, because each one runs a single boot. This is the shape
+ * of test that can see it: launch the app, write a setting, close it, launch it AGAIN against the
+ * same userData, and read the setting back.
+ *
+ * The control matters as much as the assertion. "The same port twice" could be the operating
+ * system handing out the same number rather than the app remembering it — so the record is then
+ * deleted and the port MUST move. Measured 2026-08-14: 59325 -> 60872 with the record removed,
+ * and identical across a restart with it kept.
+ *
+ * No Chrome is launched (REDBOT_NO_AUTO_BROWSER) and the userData is a throwaway, so this touches
+ * neither the operator's install nor any browser.
+ */
+describe('a restart keeps the window\'s origin, and therefore the operator\'s settings', () => {
+  const KEY = 'redbot.smokePersistence';
+  let dir;
+
+  const launch = async () => {
+    const a = await electron.launch({
+      args: ['.', `--user-data-dir=${dir}`],
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        REDBOT_DATA: join(dir, 'data'),
+        REDBOT_DB: join(dir, 'data', 'redbot.db'),
+        REDBOT_VAULT_KEY: Buffer.alloc(32, 7).toString('base64'),
+        REDBOT_NO_DIALOGS: '1',
+        REDBOT_NO_AUTO_BROWSER: '1'
+      }
+    });
+    const p = await a.firstWindow();
+    await p.waitForLoadState('domcontentloaded');
+    return { a, p };
+  };
+
+  before(() => { dir = mkdtempSync(join(tmpdir(), 'redbot-restart-')); });
+
+  test('a setting written before a restart is still there after it', async () => {
+    const one = await launch();
+    const first = await one.p.evaluate((k) => {
+      localStorage.setItem(k, 'a setting the operator chose');
+      return location.origin;
+    }, KEY);
+    await one.a.close();
+
+    const two = await launch();
+    const after = await two.p.evaluate((k) => ({ origin: location.origin, kept: localStorage.getItem(k) }), KEY);
+    await two.a.close();
+
+    assert.equal(after.origin, first,
+      'a different origin is a different localStorage — this is the defect, not a detail');
+    assert.equal(after.kept, 'a setting the operator chose',
+      'the operator\'s setting did not survive a restart');
+  });
+
+  test('THE CONTROL: with the remembered port deleted, the origin moves', async () => {
+    const one = await launch();
+    const first = await one.p.evaluate(() => location.origin);
+    await one.a.close();
+
+    rmSync(join(dir, 'console-port.json'), { force: true });
+
+    const two = await launch();
+    const second = await two.p.evaluate(() => location.origin);
+    await two.a.close();
+
+    assert.notEqual(second, first,
+      'the port repeated with nothing on file — the test above proves the OS, not the app');
+  });
+});
