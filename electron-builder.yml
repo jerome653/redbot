@@ -23,6 +23,7 @@ files:
   - electron/preload.cjs
   - electron/vault-key.mjs
   - electron/updater.mjs           # in-place updates, driven only by the button
+  - electron/console-port.mjs      # the console's port, kept — it is the window's ORIGIN
   - tools/product/**/*             # the console: server + the single-file UI
   - db/sqlite/migrate.mjs          # the schema, and the runner that applies it
   - db/sqlite/migrations/**/*

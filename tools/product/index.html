@@ -7042,10 +7042,13 @@ async function load(){
   /* THE WALKTHROUGH NO LONGER OPENS ITSELF (2026-08-01).
    *
    * It used to open on a first visit, keyed on `redbot.seenGuide`. Two things were wrong with that
-   * in the desktop app. The flag lives in the renderer's localStorage, which is per-install — so a
-   * reinstall, and every operator who has just been handed the app, meets a full-screen overlay
-   * before they have seen the thing it describes. And it landed in front of the one screen they
-   * had opened the app to look at, which is the definition of an interruption.
+   * in the desktop app. The flag lives in the renderer's localStorage, which this comment used to
+   * call "per-install" — it is per-ORIGIN, and until 3.4.1 the app bound a random port every launch,
+   * so the origin changed on every boot and the flag was really per-BOOT. A reinstall, a restart,
+   * and every operator who has just been handed the app all met a full-screen overlay before they
+   * had seen the thing it describes. And it landed in front of the one screen they had opened the
+   * app to look at, which is the definition of an interruption.
+   * (electron/console-port.mjs keeps the port now, so this store survives a restart at last.)
    *
    * It is not removed, it is unasked-for. The ? button and the ? key still open it, and opening it
    * from a screen still highlights that screen's section — which is the moment somebody actually

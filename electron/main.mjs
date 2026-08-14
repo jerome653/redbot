@@ -39,13 +39,13 @@
  */
 import { app, BrowserWindow, shell, dialog, safeStorage, Menu, ipcMain } from 'electron';
 import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { ensureVaultKey } from './vault-key.mjs';
 import { createUpdater } from './updater.mjs';
+import { consolePort as chooseConsolePort } from './console-port.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -106,7 +106,8 @@ function boot_log(line) {
  * DO NOT hardcode this when packaged — `userData` is derived from it.
  *
  * A build published as `redbot dev` (a separate `appId`, its own install directory and shortcut)
- * would have its name overwritten here and land on `%APPDATA%edbot` — the LIVE app's data.
+ * would have its name overwritten here and land on `%APPDATA%
+edbot` — the LIVE app's data.
  * Two apps, one database, and the only symptom would be dev work appearing in the live console.
  * That is the failure this whole side-by-side split exists to prevent, so the packaged name wins.
  *
@@ -259,18 +260,6 @@ function wireUpdater(consolePort) {
   guard('redbot:update-check', () => updater.check());
   guard('redbot:update-apply', () => updater.apply());
   guard('redbot:update-snapshot', () => updater.snapshot());
-}
-
-/** A port the OS says is free. Bind :0, read it back, release it — the same trick the tests use. */
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.on('error', reject);
-    s.listen(0, '127.0.0.1', () => {
-      const { port } = s.address();
-      s.close(() => resolve(port));
-    });
-  });
 }
 
 /**
@@ -539,8 +528,13 @@ async function boot() {
   boot_log(`dirs        ${report.created.length} created · ${report.present.length} present`);
   for (const n of report.notes) boot_log(`note        ${n}`);
 
-  const port = await freePort();
-  boot_log(`port        ${port}`);
+  /* The SAME port as last time when it is still free — the window loads this as its origin, and
+     everything the console remembers about how this operator works is scoped to that origin.
+     See electron/console-port.mjs; a fresh port every boot silently emptied all of it. */
+  const chosen = await chooseConsolePort(app.getPath('userData'));
+  const port = chosen.port;
+  boot_log(`port        ${port}${chosen.reused ? ' (kept from last boot)' : ''}`);
+  if (chosen.note) boot_log(`note        ${chosen.note}`);
   serverChild = await startServer(port, process.env);
   boot_log('console     listening');
 
