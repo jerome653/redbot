@@ -1,0 +1,114 @@
+# tinyproxy — the US exit, as redbot needs it
+#
+# ---------------------------------------------------------------------------
+# WHY AN HTTP PROXY AND NOT A VPN, WHEN A VPN IS WHAT THIS MACHINE IS FOR
+#
+# redbot's relay speaks HTTP proxy and nothing else: it is built on node:http and hand-writes
+# `CONNECT <host:port> HTTP/1.1` to its upstream (src/proxy/relay.ts). `UpstreamProxy` is
+# {host, port, username, password} — there is no protocol field, so there is no SOCKS path and
+# no tunnel path. The tailnet carries the connection; this daemon is what waits at the end of it.
+#
+# That is also why Tailscale's exit-node feature is NOT used. An exit node routes the whole
+# machine, which would give every account one shared exit and leave `manager.ts` nothing
+# per-account to pin. This is a private wire to ONE port.
+#
+# ---------------------------------------------------------------------------
+# REPLACE THREE THINGS, THEN NOTHING ELSE
+#
+#   100.64.0.2   -> this machine's tailnet address        (`tailscale ip -4`)
+#   100.64.0.3   -> the operator machine's tailnet address
+#   <PASSWORD>   -> a long random password, generated, not chosen
+#
+# Then run tools/exit/verify-exit.sh before telling anyone it is up.
+
+# ---------------------------------------------------------------------------
+# BINDING — the line that decides whether this is a private exit or an open proxy.
+#
+# Tinyproxy's default is the wildcard address: "By default, Tinyproxy listens for connections on
+# all available interfaces (i.e. it listens on the wildcard address 0.0.0.0)". On a home network
+# that default means every device in the house — and anything that reaches the router — can use
+# this to browse the internet as this household. Bind to the tailnet address ONLY.
+#
+# redbot keeps the same rule on its own side and states the reason: its relay "never binds
+# anything but 127.0.0.1. A relay reachable from the LAN is an open proxy carrying someone
+# else's traffic out through an IP we are paying to keep clean."
+Listen 100.64.0.2
+Port 8888
+
+# ---------------------------------------------------------------------------
+# ACCESS — second lock, behind the tailnet.
+#
+# "If there are no Allow or Deny lines, then all clients are allowed. Otherwise, the default
+# action is to deny access." So this single line flips the default to deny, and only the
+# operator's node gets through. Belt and braces with `Listen`: if `Listen` is ever edited wrong,
+# this still refuses the house.
+Allow 100.64.0.3/32
+
+# ---------------------------------------------------------------------------
+# AUTHENTICATION — not optional, in both directions.
+#
+# redbot's side: the relay "never starts without a credential", and `proxy vet` refuses when any
+# of REDBOT_PROXY_HOST/PORT/USER/PASS is missing. An unauthenticated upstream cannot be used by
+# this product even though it would technically work.
+#
+# This side: a port with no password is one routing mistake away from being an open relay on
+# someone's home connection. Two locks are cheap; the failure is not.
+#
+# VERIFY THE SYNTAX ON THE INSTALLED VERSION. The official documentation gives
+# `BasicAuth user password` (space-separated); at least one secondary source gives
+# `BasicAuth user:password`, and there is an open upstream issue titled "BasicAuth still not
+# working" (tinyproxy#510). verify-exit.sh proves it empirically, which is the only proof that
+# counts: an unauthenticated request MUST come back 407. If it does not, stop and switch to
+# 3proxy rather than shipping an open proxy.
+BasicAuth redbot <PASSWORD>
+
+# ---------------------------------------------------------------------------
+# CONNECT — the method that carries essentially everything.
+#
+# Chrome sends CONNECT for every https:// origin, so without 443 nothing works at all. Listing
+# it explicitly also closes the default: "If no ConnectPort line is found, then all ports are
+# allowed", which would let this tunnel to any service on any port.
+ConnectPort 443
+
+# ---------------------------------------------------------------------------
+# QUIET — do not announce what this is.
+#
+# Via and X-Tinyproxy headers advertise a proxy hop to every origin. Reddit reading a Via header
+# is a stronger tell than the address itself: it turns "a US household" into "a US household
+# running a proxy".
+DisableViaHeader Yes
+XTinyproxy No
+
+# ---------------------------------------------------------------------------
+# LOGGING — as little as does the job.
+#
+# This machine belongs to somebody who is doing us a favour. Their disk should not fill with a
+# record of our browsing, and a connection log is the one artefact here that could embarrass
+# both sides. Info level, no ConnectionLog of full URLs.
+LogLevel Warning
+# LogFile "<the log path your package already set — check the config it shipped>"
+
+# Modest limits — this serves one browser, not a household.
+MaxClients 20
+Timeout 600
+
+# ---------------------------------------------------------------------------
+# EGRESS SCOPING — optional, and it protects the HOST more than it protects us.
+#
+# With a filter file in place this connection cannot be used for anything but Reddit, even by
+# accident, even by us. That is a promise worth being able to make to the person whose internet
+# this is.
+#
+# UNVERIFIED against a live redbot collect: scoping too tightly may block an asset domain the
+# page needs. Start with these lines COMMENTED OUT, get one successful collect through the exit,
+# then enable and re-test. Do not tighten and walk away.
+#
+# Filter "<absolute path to the file below, beside the config your package shipped>"
+# FilterExtended On
+# FilterDefaultDeny Yes
+#
+# allowed-domains.txt, as a starting point:
+#   (^|\.)reddit\.com$
+#   (^|\.)redd\.it$
+#   (^|\.)redditstatic\.com$
+#   (^|\.)redditmedia\.com$

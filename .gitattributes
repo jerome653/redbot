@@ -18,3 +18,8 @@
 # copies needs one re-checkout of these paths to pick the change up.
 db/sqlite/migrations/*.sql text eol=lf
 db/sqlite/*.mjs            text eol=lf
+
+# The exit kit's shell script runs on the HOST's machine, which is Linux or macOS. A CRLF
+# checkout there fails on the shebang line before a single check runs — and it would fail on
+# somebody else's computer, during a favour, which is the worst place to debug a line ending.
+tools/exit/*.sh            text eol=lf
