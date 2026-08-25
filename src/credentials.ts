@@ -25,9 +25,10 @@ export const ANTHROPIC_API_KEY = 'anthropic_api_key';
  *
  * OPTIONAL, and nothing in redbot's run path reads it — it powers one convenience only: listing
  * that account's US proxies on the Setup screen so the exit form can be auto-filled instead of
- * typed. The settled exit vendor is Proxy-Cheap static residential (PROXY-VENDOR-DECISION.md),
- * not Webshare — whose paid ISP tier carries a 20-IP minimum. This key is a shortcut for whoever
- * already has a Webshare account, never a dependency.
+ * typed. No exit vendor is chosen yet; PROXY-VENDOR-DECISION.md carries the measured comparison
+ * and recommends Proxy-Cheap static residential over Webshare, whose paid ISP tier carries a
+ * 20-IP minimum. This key is a shortcut for whoever already has a Webshare account, never a
+ * dependency.
  */
 export const WEBSHARE_API_KEY = 'webshare_api_key';
 
