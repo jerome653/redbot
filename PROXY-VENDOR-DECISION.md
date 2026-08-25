@@ -1,8 +1,15 @@
 # DECISION — which exit vendor, and why
 
-**Date:** 2026-08-25 · **Status:** settled, reversible
+**Date:** 2026-08-25 · **Status:** RECOMMENDED, not yet chosen. Nothing bought.
 **Cited by:** `src/credentials.ts`, `src/proxy/webshare.ts`
 **Supersedes:** the IPRoyal preference recorded in those code comments, which was never purchased.
+
+> **On the word "settled".** An earlier draft of this file called the recommendation settled. It
+> is not: Jerome has not picked, and said so. What is settled is the *analysis* — the table below
+> is measured and the reasoning under it holds. The choice is open, and open is the honest state
+> to record, because a document that says "settled" about a decision nobody made is how the
+> IPRoyal line this file replaces became load-bearing in the first place. Same failure, one
+> iteration later, would be worse.
 
 ---
 
@@ -18,11 +25,15 @@ Re-checked here, and the answer changed.
 
 ---
 
-## The decision
+## The recommendation
 
 **Buy Proxy-Cheap static residential (ISP), one dedicated IP per account, US, month-to-month.**
 
-Second choice **MarsProxies**. IPRoyal is not the pick.
+Second choice **MarsProxies**. On the evidence below IPRoyal should not be the pick, though it is
+the one the code currently names.
+
+This is a recommendation with the analysis behind it, not an instruction and not a record of a
+choice already made. Overriding it costs nothing — see *Reversing this* at the end.
 
 Where a consenting US household is available, that is preferred over any paid vendor for that one
 account, at $0 — see `PROXY-TAILNET-EXIT-PLAN-2026-08-25.md`. The two are not exclusive; binding is
