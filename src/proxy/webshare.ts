@@ -5,8 +5,9 @@
  * This is a CONVENIENCE, not part of any run path. Nothing here signs an account in, opens a
  * browser, or decides an exit; it turns a stored API key into a list of candidate addresses the
  * operator still has to run through the same six-hour vet as a hand-typed one. The settled exit
- * vendor is IPRoyal ISP (PROXY-VENDOR-DECISION.md) — a Webshare key is a shortcut for whoever
- * already has one, and its cheap pool is datacenter-classified, which the vet is there to catch.
+ * vendor is Proxy-Cheap static residential (PROXY-VENDOR-DECISION.md) — a Webshare key is a
+ * shortcut for whoever already has one, and its cheap pool is datacenter-classified, which the
+ * vet is there to catch.
  *
  * The API is documented at https://apidocs.webshare.io — `GET /api/v2/proxy/list/` returns, per
  * proxy: id, username, password, proxy_address, port, valid, last_verification, country_code,
