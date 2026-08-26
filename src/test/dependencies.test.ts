@@ -33,7 +33,7 @@ const healthy = {
     'ProgramFiles(x86)': PROGRAM_FILES_X86,
     LOCALAPPDATA: LOCAL_APPDATA
   } as NodeJS.ProcessEnv,
-  nodeVersion: '22.13.0',
+  nodeVersion: '24.18.0',
   provider: 'cli' as const,
   exists: (p: string) => p === CHROME_MACHINE,
   resolveModule: (m: string) => `/node_modules/${m}/index.js`,
@@ -52,10 +52,12 @@ test('parseNodeVersion reads the two numbers that matter', () => {
 });
 
 test('nodeVersionOk holds the floor, and a newer major clears it', () => {
-  assert.equal(nodeVersionOk('22.13.0'), true, 'exactly the floor is enough');
-  assert.equal(nodeVersionOk('22.14.0'), true);
-  assert.equal(nodeVersionOk('24.1.0'), true, 'a newer major clears it');
-  assert.equal(nodeVersionOk('22.12.9'), false, 'one minor below the floor fails');
+  assert.equal(nodeVersionOk('24.0.0'), true, 'exactly the floor is enough');
+  assert.equal(nodeVersionOk('24.18.0'), true, 'the runtime Electron 43 actually ships');
+  assert.equal(nodeVersionOk('25.1.0'), true, 'a newer major clears it');
+  /* 22 was the floor until 2026-08-26 and is now below it — src/proxy/align.ts needs an API 22
+     does not have, and on 22 its timezone refusal fails open rather than loudly. */
+  assert.equal(nodeVersionOk('22.13.0'), false, 'the old floor no longer passes');
   assert.equal(nodeVersionOk('20.19.0'), false, 'an older major fails');
 });
 
@@ -173,7 +175,7 @@ test('an old Node fails the floor and points at the right fix', async () => {
   const ds = await checkDependencies({ ...healthy, nodeVersion: '20.11.0' });
   const node = byId(ds, 'node');
   assert.equal(node.ok, false);
-  assert.match(node.detail, /older than the 22\.13/);
+  assert.match(node.detail, /older than the 24\.0/);
   assert.match(node.fix.hint, /installed desktop app carries its own Node/);
 });
 

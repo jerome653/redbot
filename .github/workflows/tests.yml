@@ -1,0 +1,57 @@
+# The suite, run by something other than memory.
+#
+# Until 2026-08-26 this repository had no CI at all. 1076 tests existed and ran when somebody
+# thought to run them — which meant every merge was verified by whoever opened the pull request,
+# using their own machine, and nothing recorded that it had happened.
+#
+# WINDOWS, DELIBERATELY. redbot is a Windows product: electron-builder.yml builds `win` targets
+# and nothing else, src/browser.ts attaches to a Chrome the operator runs from a Windows path, and
+# the console resolves `chromeBinary()` the same way. A green ubuntu run would certify a platform
+# this app is never installed on. The runner is slower and costs more minutes; the repository is
+# public, so those minutes are free.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run irrelevant — stop it rather than pay for it.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # NODE 24, WHICH IS WHAT THE APP ACTUALLY RUNS.
+      #
+      # The first run of this workflow pinned 22.x, because `engines` said >=22.13, and five
+      # proxy-alignment tests failed. They were right to. `timezoneMatchesCountry` reads the
+      # runtime's own IANA mapping through `Intl.Locale.prototype.getTimeZones`, which does not
+      # exist on Node 22 — so on 22 it answers `unknown` for every zone, and the refusal that
+      # stops a browser announcing Asia/Manila from a US address quietly stops refusing.
+      #
+      # The shipped runtime is Electron 43's Node 24.18.0 (boot.log), so 24 is the truth and
+      # `engines` has been corrected to match it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: npm
+
+      - run: npm ci
+
+      # Two suites drive a REAL browser (composer-usable, composer-detection) because the facts
+      # they assert — what `isEditable()` throws on, what a collapsed composer reports — are the
+      # browser's, not a mock's. Only chromium is needed and only the binary; redbot itself never
+      # launches a browser.
+      - name: install the browser those two suites need
+        run: npx playwright install chromium
+
+      - run: npm test

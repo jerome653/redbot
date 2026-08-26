@@ -46,9 +46,16 @@ import { join } from 'node:path';
  *
  * A literal rather than a read of package.json, because this also has to answer inside the packaged
  * app where that file is in an asar — and `src/test/dependencies.test.ts` asserts the two agree, so
- * a bump in one that is not mirrored here fails the suite rather than drifting quietly.
+ * a bump in one that is not mirrored here fails the suite rather than drifting quietly. It did its
+ * job on 2026-08-26: the floor moved in package.json and this line did not, and CI said so.
+ *
+ * 24, not 22.13, since 2026-08-26. `src/proxy/align.ts` reads the runtime's IANA mapping through
+ * `Intl.Locale.prototype.getTimeZones`, which Node 22 does not have — and without it the timezone
+ * check answers `unknown` for every zone, so the refusal that stops a browser announcing one part
+ * of the world from an address in another silently stops refusing. The shipped runtime is Electron
+ * 43's Node 24.18.0; the floor now says so.
  */
-export const MIN_NODE = { major: 22, minor: 13 };
+export const MIN_NODE = { major: 24, minor: 0 };
 
 export interface Dependency {
   /** Stable id; the console keys rows on it. */

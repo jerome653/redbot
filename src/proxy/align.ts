@@ -93,6 +93,12 @@ export class AlignmentError extends Error {
  * Node 24.18.0 and on the Electron 43 build this app ships (also 24.18.0). A hand-kept list of US
  * zones would be a second source of truth that goes stale the next time IANA moves one.
  *
+ * IT IS A NODE 24 API, AND THAT IS A REQUIREMENT, NOT A PREFERENCE. Measured on CI 2026-08-26:
+ * on Node 22.x the method is absent, this function answers `unknown` for `America/New_York` in
+ * the US, and `alignmentRefusal` therefore stops refusing — a browser announcing Asia/Manila
+ * from a US address would launch. `package.json` engines says >=24.0.0 for this reason; it used
+ * to say >=22.13, which permitted the runtime on which the check fails open.
+ *
  * Three answers, not two. `unknown` is what a runtime without the API, or a country the runtime
  * does not know, must produce — and the caller has to decide what to do about it rather than
  * being handed a confident `false`.
