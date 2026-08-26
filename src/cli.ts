@@ -38,6 +38,7 @@ import {
 } from './commands/status.js';
 import { say } from './log.js';
 import { provision, describeProvision } from './provision.js';
+import { beginRunLog, endRunLog } from './run-log.js';
 import { pathToFileURL } from 'node:url';
 
 const USAGE = `
@@ -473,10 +474,15 @@ const invokedDirectly =
   import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
+  /* A terminal run leaves the same record a console run does — see src/run-log.ts. It is opened
+     before main() so the run's first line is captured, and closed on both exits so a failed run
+     is as readable as a successful one. */
+  beginRunLog(process.argv.slice(2));
   main()
-    .then((code) => process.exit(code))
+    .then((code) => { endRunLog(code); process.exit(code); })
     .catch((e) => {
       say.fail(e instanceof Error ? e.message : String(e));
+      endRunLog(1);
       process.exit(1);
     });
 }
