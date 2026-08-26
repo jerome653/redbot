@@ -99,7 +99,12 @@ WHY-NOT-DEPLOYABLE.md
 tools/operator/run-history.jsonl
 
 # Electron build output and captures — generated, large, and machine-specific.
-release/
+#
+# ANCHORED. Without the leading slash this pattern matches a directory called `release` at ANY
+# depth, and on 2026-08-26 it silently swallowed `tools/release/` — a `git add` of a new tool
+# refused it as ignored, and an `add -f` would have been the wrong answer. Only the build output
+# at the repository root is generated.
+/release/
 electron/.shots/
 .pkgboot*/
 .provtest/
