@@ -161,6 +161,9 @@ export const VALUE_FLAGS = new Set([
   // `positional` and become the QUERY — the same parser bug this set exists to fix.
   'account', 'state', 'at', 'after', 'attempts', 'note', 'sort', 'time',
   'permalink', 'direction', 'target', 'query', 'subreddit', 'title', 'body',
+  // `--approval-id` carries the console's single-use SEND token to `post`. Omitted here it would
+  // leak into `positional` and, worse, be read by `post` as the SUBREDDIT — the D-10 class.
+  'approval-id',
   'draft', 'thread', 'comment',
   // `redbot sources add --search "<query>" --why "<reason>"`. Both take a value in space form,
   // so both must be here or their values leak back into `positional` — the same parser bug
@@ -335,7 +338,7 @@ async function main(): Promise<number> {
     /* Communities, not threads — `search` finds posts. Same preview/commit contract. */
     case 'subreddits': return subreddits(positional[0], flagValue('commit'));
     /* The second write path. Title and body come from the person — see commands/post.ts. */
-    case 'post':    return post(positional[0], { title: flagValue('title'), body: flagValue('body') });
+    case 'post':    return post(positional[0], { title: flagValue('title'), body: flagValue('body'), approvalId: flagValue('approval-id') });
     case 'draft':   return draft(positional[0]);
     case 'reply':   return reply(positional[0], { quick: flags.has('--quick') });
     case 'history': return history(positional[0]);

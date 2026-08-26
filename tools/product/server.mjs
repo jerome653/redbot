@@ -997,7 +997,12 @@ const ACTIONS = {
    * duplicate post is something a moderator has to clean up.
    */
   '__post':         { args: (o) => ['post', String(o.subreddit || ''), '--title', String(o.title || ''),
-                                    ...(o.body ? ['--body', String(o.body)] : [])],
+                                    ...(o.body ? ['--body', String(o.body)] : []),
+                                    /* The console already took a typed SEND; this hands `post` the
+                                       token so it does not demand a SECOND confirmation from a pipe
+                                       it cannot read. Without it every console "New post" dead-ended
+                                       at the interactive prompt (found in UAT 2026-08-16). */
+                                    ...(o.approvalId ? ['--approval-id', String(o.approvalId)] : [])],
                       label: 'create the post', needsBrowser: true, stoppable: false },
   '__reply':        { args: (o) => ['reply', String(o.draftId || '')],           label: 'send the reply',       needsBrowser: true, stoppable: false }
 };
@@ -1828,6 +1833,7 @@ async function launchChrome(handle, { background = false } = {}) {
   /* `let`, because a port held by another program is moved off below and the record changes. */
   let a = accounts.find((x) => x.handle === handle);
   if (!a) return { ok: false, error: `${handle} is not set up.` };
+
   const bin = chromeBinary();
   if (!bin) return { ok: false, error: 'Chrome could not be found in the usual place. Set CHROME_PATH and try again.' };
 
@@ -2422,7 +2428,7 @@ async function publishPost(body) {
   writeFileSync(tokenPath, JSON.stringify(
     { draftId: id, decision: 'approved', note: body.reason || '', at: new Date().toISOString() }, null, 2), 'utf8');
 
-  return runAction('__post', { subreddit, title, body: text, account: body.account })
+  return runAction('__post', { subreddit, title, body: text, account: body.account, approvalId: id })
     .then((r) => {
       /* The run never started, so the authorisation must not outlive the attempt. */
       if (!r.ok) { try { if (existsSync(tokenPath)) rmSync(tokenPath, { force: true }); } catch { /* best effort */ } }
@@ -3165,6 +3171,7 @@ const server = createServer((req, res) => {
         const r = await exitRemove(body);
         return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
+
       /* Gives a shared account a folder and a port on THIS machine. The step after it is still
          a human signing in — the session cannot travel, so nothing here pretends it can. */
       /**
