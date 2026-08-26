@@ -30,11 +30,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # `engines` in package.json is >=22.13. Pinning the major and letting the minor float is
-      # what the operator machines do too.
+      # NODE 24, WHICH IS WHAT THE APP ACTUALLY RUNS.
+      #
+      # The first run of this workflow pinned 22.x, because `engines` said >=22.13, and five
+      # proxy-alignment tests failed. They were right to. `timezoneMatchesCountry` reads the
+      # runtime's own IANA mapping through `Intl.Locale.prototype.getTimeZones`, which does not
+      # exist on Node 22 — so on 22 it answers `unknown` for every zone, and the refusal that
+      # stops a browser announcing Asia/Manila from a US address quietly stops refusing.
+      #
+      # The shipped runtime is Electron 43's Node 24.18.0 (boot.log), so 24 is the truth and
+      # `engines` has been corrected to match it.
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.x'
+          node-version: '24.x'
           cache: npm
 
       - run: npm ci
