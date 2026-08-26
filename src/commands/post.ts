@@ -72,6 +72,18 @@ export async function post(subreddit: string | undefined, opts?: PostOpts): Prom
   const s = await attach();
   try {
     /* ---------- 1. who are we, actually ---------- */
+    /**
+     * Identity is read on a REDDIT page, not the blank tab attach() opens.
+     *
+     * `whoAmI` reads Reddit's own `shreddit-app[user-logged-in]` flag from the DOM, so on
+     * about:blank it can only answer "not signed in" — and this command checked it there, before
+     * navigating anywhere, so it refused EVERY post on a signed-in account. `reply` never hit this
+     * because it opens the thread first (reply.ts) and whoAmI runs on that page. Found in UAT
+     * 2026-08-16 — the post said "Not signed in" while /api/me.json named the account. Navigate,
+     * then ask; publishPost still does its own submit-page navigation afterwards.
+     */
+    await s.page.goto('https://www.reddit.com/', { waitUntil: 'domcontentloaded', timeout: 45_000 })
+      .catch(() => { /* a slow first paint is not a reason to refuse — whoAmI reports what it sees */ });
     const identity = await whoAmI(s.page);
     if (!identity?.loggedIn || !identity.username) {
       say.fail('Not signed in on the live page — refusing to post as an unknown account.');

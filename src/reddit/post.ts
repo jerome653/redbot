@@ -52,19 +52,41 @@ export async function publishComment(page: Page, permalink: string, body: string
     await page.goto(permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await pause();
 
-    // The composer is sometimes collapsed behind a trigger button.
-    const editorBefore = await firstUsable(page, sel.commentEditor);
-    if (!editorBefore) {
-      const trigger = await firstVisible(page, sel.commentBoxTrigger);
+    /**
+     * Open the lazy composer.
+     *
+     * MEASURED LIVE 2026-08-16: the top comment composer is mounted COLLAPSED at 0×0 inside a
+     * visible `comment-composer-host`, and clicking that host expands it. Two traps, both hit in
+     * the reply UAT and both handled here:
+     *   1. `firstUsable(commentEditor)` returns the HIDDEN editor — it does not hard-require
+     *      visibility — so gating the expand on "is there an editor" silently skipped the expand
+     *      and the later click failed on an invisible element. The gate is now a REAL isVisible().
+     *   2. The host renders a beat after the page, so a single `firstVisible` misses it — it is
+     *      retried, and after the click the editor is POLLED until it is genuinely visible.
+     */
+    const editorSel = sel.commentEditor[0]!;
+    let editorVisible = await page.locator(editorSel).first().isVisible().catch(() => false);
+    if (!editorVisible) {
+      let trigger = null;
+      for (let i = 0; i < 6 && !trigger; i++) {
+        trigger = await firstVisible(page, sel.commentBoxTrigger);
+        if (!trigger) await sleep(700);
+      }
       if (!trigger) {
         return { ok: false, error: 'comment composer not found — logged out, or thread locked?' };
       }
-      await trigger.click();
-      await pause();
+      await trigger.scrollIntoViewIfNeeded().catch(() => { /* already in view */ });
+      await trigger.click().catch(() => { /* a host that is itself the composer needs no click */ });
+      for (let i = 0; i < 10 && !editorVisible; i++) {
+        await sleep(500);
+        editorVisible = await page.locator(editorSel).first().isVisible().catch(() => false);
+      }
     }
 
     const editor = await firstUsable(page, sel.commentEditor);
-    if (!editor) return { ok: false, error: 'comment editor did not open, or opened read-only' };
+    if (!editor || !(await editor.isVisible().catch(() => false))) {
+      return { ok: false, error: 'comment editor did not open, or opened read-only' };
+    }
 
     await editor.click();
     await sleep(400);
@@ -159,6 +181,50 @@ export interface SubmitResult {
  * the error says — it does not silently click the first option.
  * ---------------------------------------------------------------------------
  */
+/**
+ * Confirm a submit by the account's OWN submitted feed, for when Reddit navigated off the post.
+ *
+ * MEASURED 2026-08-16: a successful text submit left the browser on `/r/<sub>/` (the subreddit
+ * index), never `/r/<sub>/comments/<id>/` — so a URL-only confirmation reports a landed post as
+ * "unknown", and the only safe response to unknown is NOT to resubmit (a duplicate cannot be taken
+ * back). The submitted feed is the authority: it lists this account's posts newest-first, so the
+ * one just made is at the top. Returns the absolute permalink when found, else null.
+ *
+ * The username comes from the signed-in session's own `/api/me.json`, exactly as src/browser.ts
+ * reads it — this is the browser's own cookie'd endpoint, not the authenticated API redbot avoids.
+ */
+async function confirmViaSubmitted(page: Page, wantedLower: string): Promise<string | null> {
+  const name = await page.evaluate(async () => {
+    try {
+      const r = await fetch('/api/me.json', { credentials: 'include' });
+      if (!r.ok) return null;
+      const j = (await r.json()) as { data?: { name?: string } };
+      return j?.data?.name ?? null;
+    } catch { return null; }
+  }).catch(() => null);
+  if (!name) return null;
+
+  await page.goto(`${config.redditBase}/user/${name}/submitted/`, {
+    waitUntil: 'domcontentloaded', timeout: 45_000
+  }).catch(() => {});
+
+  const probe = wantedLower.slice(0, 30);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await sleep(1500);
+    const permalink = await page.evaluate((p: string) => {
+      for (const el of Array.from(document.querySelectorAll('shreddit-post'))) {
+        const t = (el.getAttribute('post-title') ?? '').toLowerCase();
+        if (p.length > 0 && t.includes(p)) return el.getAttribute('permalink');
+      }
+      return null;
+    }, probe).catch(() => null);
+    if (permalink) {
+      return permalink.startsWith('http') ? permalink : config.redditBase + permalink;
+    }
+  }
+  return null;
+}
+
 export async function publishPost(
   page: Page,
   subreddit: string,
@@ -230,6 +296,14 @@ export async function publishPost(
         const heading = (await page.locator(sel.postTitle[0]!).first().textContent().catch(() => '')) ?? '';
         if (heading.trim().toLowerCase().includes(wanted.slice(0, 30))) landed = now;
       }
+    }
+
+    /* Reddit often lands the browser on the SUBREDDIT INDEX after a submit, not the post — so a
+       landed post fails the /comments/ check above. Confirm from the account's submitted feed
+       before ever reporting "unknown", which is the reading that risks a duplicate resubmit. */
+    if (!landed) {
+      const viaFeed = await confirmViaSubmitted(page, wanted).catch(() => null);
+      if (viaFeed) landed = viaFeed;
     }
 
     if (!landed) {

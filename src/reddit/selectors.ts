@@ -34,6 +34,15 @@ export const sel = {
 
   /** Comment composer on a post detail page. */
   commentBoxTrigger: [
+    /**
+     * MEASURED LIVE 2026-08-16: on a post page the top comment composer is lazy-loaded inside a
+     * VISIBLE `comment-composer-host` bar, while the `shreddit-composer` itself renders collapsed
+     * at 0×0 until that host is clicked. So `firstUsable(commentEditor)` finds a hidden editor and
+     * refuses, and nothing typed — the "element is not visible" the reply UAT hit. Clicking the
+     * host expands the composer, after which the editor and submit selectors below become usable.
+     * This host is FIRST because it is the one reliably-visible entry point on the current UI.
+     */
+    'comment-composer-host',
     'button[aria-label*="Add a comment" i]',
     'faceplate-tracker[noun="comment"] button',
     'div[data-testid="comment-submission-form-richtext"]',
