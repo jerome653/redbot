@@ -4,15 +4,16 @@
  * Browses a subreddit, opens each post, collects it into data/threads.json.
  * Works with a saved session; falls back to logged-out reading if there is none.
  */
-import { attach, isBrowserUp, isBlocked, NoBrowserError } from '../browser.js';
+import { attach, isBrowserUp, isBlocked, isRateLimited, NoBrowserError } from '../browser.js';
 import {
   openSubreddit, collectPermalinks, collectThread, feedSort, DEFAULT_FEED_SORT
 } from '../reddit/scrape.js';
+import { collectRun } from '../reddit/collect-run.js';
 import { sel } from '../reddit/selectors.js';
 import { config } from '../config.js';
+import { sleep } from '../pacing.js';
 import { saveThreads } from '../store.js';
 import { record, say } from '../log.js';
-import type { Thread } from '../types.js';
 
 /**
  * `sort` matters more than it looks, and it used to default to `hot`, which is where warming
@@ -50,10 +51,23 @@ export async function read(subreddit: string | undefined, limit?: number, sort?:
     return 1;
   }
   const s = await attach();
-  const threads: Thread[] = [];
 
   try {
     await openSubreddit(s.page, name, feed);
+
+    /* Arriving into a 429 is different from meeting one halfway down the list: there is nothing
+       collected to keep, and every link we are about to open would meet the same wall. Back off
+       once — the budget the config has described since DEFECT-02 — and only then give up. */
+    for (let attempt = 0; await isRateLimited(s.page); attempt++) {
+      await record('ratelimit', `429 opening r/${name}`, { subreddit: name, status: 'blocked' });
+      if (attempt >= config.budget.maxRateLimitRetries) {
+        say.fail(`Rate-limited on r/${name}. Nothing collected; try again in a few minutes.`);
+        return 1;
+      }
+      say.warn(`Rate-limited. Waiting ${Math.round(config.budget.rateLimitBackoffMs / 1000)}s before one retry…`);
+      await sleep(config.budget.rateLimitBackoffMs);
+      await openSubreddit(s.page, name, feed);
+    }
 
     // A block page renders as a normal document, so collection would otherwise scrape an
     // interstitial and count it as "0 threads" while hammering Reddit. `isBlocked` was imported
@@ -69,37 +83,40 @@ export async function read(subreddit: string | undefined, limit?: number, sort?:
     const links = await collectPermalinks(s.page, max, sel.feedScope);
     say.step(`Found ${links.length} post links.`);
 
-    let skipped = 0;
-    for (const [i, link] of links.entries()) {
-      // One unreachable thread must not end the run — isolate every fetch.
-      try {
-        const t = await collectThread(s.page, link, 'read');
-        if (t) {
-          threads.push(t);
-          say.step(`  [${i + 1}/${links.length}] ${t.title.slice(0, 70)}`);
-        } else {
-          skipped++;
-          say.step(`  [${i + 1}/${links.length}] skipped — no title found`);
-        }
-      } catch (e) {
-        skipped++;
-        const why = e instanceof Error ? e.message.slice(0, 60) : String(e);
-        say.step(`  [${i + 1}/${links.length}] skipped — ${why}`);
-      }
-    }
-    if (skipped) say.warn(`${skipped} thread(s) skipped and not counted.`);
+    /* The loop lives in reddit/collect-run.ts, which is where a 429 stopped being a skip. */
+    const out = await collectRun(links, {
+      fetch: (link) => collectThread(s.page, link, 'read'),
+      rateLimited: () => isRateLimited(s.page),
+      onRateLimit: (link, hit) => record('ratelimit', `429 while collecting r/${name}`, {
+        subreddit: name, threadUrl: link, status: 'blocked', hit
+      }),
+      onThread: (t, i, total) => say.step(`  [${i + 1}/${total}] ${t.title.slice(0, 70)}`),
+      onSkip: (_l, i, total, why) => say.step(`  [${i + 1}/${total}] skipped — ${why}`),
+      onBackoff: (ms) => say.warn(`Rate-limited. Waiting ${Math.round(ms / 1000)}s before one retry…`)
+    });
 
-    const added = await saveThreads(threads);
-    say.ok(`Collected ${threads.length} threads (${added} new). Next: redbot analyze`);
+    if (out.skipped) say.warn(`${out.skipped} thread(s) skipped and not counted.`);
+    if (out.stoppedEarly) {
+      say.warn(`Rate-limited — stopped with ${out.notAttempted} post(s) unopened rather than hammering Reddit.`);
+    }
+
+    const added = await saveThreads(out.threads);
+    say.ok(`Collected ${out.threads.length} threads (${added} new). Next: redbot analyze`);
     /* The sort is recorded because `insights` splits a "too old" drop into a FEED cause and a
-       STALE cause, and "which feed did this batch come from" is the evidence for that split. */
-    await record('read', `r/${name}: ${threads.length} threads, ${added} new`, {
-      subreddit: name, collected: threads.length, added, sort: feed
+       STALE cause, and "which feed did this batch come from" is the evidence for that split.
+       `rateLimited` rides along so a thin batch can be told from a throttled one afterwards. */
+    await record('read', `r/${name}: ${out.threads.length} threads, ${added} new`, {
+      subreddit: name, collected: out.threads.length, added, sort: feed,
+      ...(out.rateLimitHits ? { rateLimitHits: out.rateLimitHits, stoppedEarly: out.stoppedEarly } : {})
     });
     return 0;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     say.fail(msg);
+    /* A navigation that dies ON a 429 arrives here as ERR_HTTP_RESPONSE_CODE_FAILURE and used to
+       be filed as a generic error — invisible to the two counters that read `ratelimit` rows. */
+    const throttled = await isRateLimited(s.page).catch(() => false);
+    if (throttled) await record('ratelimit', `429 during read of r/${name}`, { subreddit: name, status: 'blocked' });
     await record('error', `read r/${name} failed: ${msg}`);
     return 1;
   } finally {
