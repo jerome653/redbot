@@ -1407,6 +1407,11 @@ function runAction(key, opts) {
     // would let a caller point redbot at a debugger they control and harvest every scraped
     // thread. config.ts additionally refuses any non-loopback REDBOT_CDP as defence in depth.
 
+    /* The console writes this run's log itself, just below. The CLI would otherwise write a
+       SECOND one for the same run (src/run-log.ts) and every console action would appear twice
+       in the history it is about to read back. */
+    env.REDBOT_RUN_LOG = 'console';
+
     runLogStart(key, `redbot ${args.join(' ')}`);
     const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), ...args], {
       cwd: SPAWN_CWD, env, stdio: ['ignore', 'pipe', 'pipe']
