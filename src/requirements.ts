@@ -58,6 +58,7 @@ import {
   loadAccounts, selectedAccount, config, NoAccountError, operatorRecord, anthropicKey,
   deepseekKey, operatorSignedIn
 } from './config.js';
+import type { LlmProvider } from './config.js';
 import { isBrowserUp } from './browser.js';
 
 export type Tier = 'blocking' | 'advisory';
@@ -94,8 +95,27 @@ const unmet = (
  * stale constantly — a browser gets closed, a port gets taken by another program, a key gets
  * rotated, an account gets removed. A stored "setup complete" flag would let the app open onto a
  * broken install and say nothing, which is what the previous first-run signal did.
+ *
+ * WHY THE PROVIDER IS AN ARGUMENT AND NOT JUST `config.llm.provider`.
+ *
+ * `config.llm.provider` is resolved from `REDBOT_LLM` once, at module load. In `redbot doctor`
+ * that is exactly right — the environment IS the choice for that process. In the console server
+ * it is wrong, and measured wrong: the server is long-lived, the Setup screen's picker writes to
+ * `selectedProvider`, and that value is forwarded to spawned CHILDREN (`env.REDBOT_LLM =
+ * selectedProvider`) while this function kept reading the server's own unset variable.
+ *
+ * The visible consequence, driven on a real Linux console: pick "a DeepSeek API key", store a
+ * key, and the banner still read "Setup is not finished — Model access", with the detail "no
+ * Claude operator is selected". The key was stored, the provider was selected, the runs would
+ * have used DeepSeek, and the screen went on asking for a Claude login nothing was going to use.
+ *
+ * This is the same defect `/api/dependencies` had — it read `configApi.config.llm.provider` while
+ * runs read the picker — and the same fix: let the caller say which provider it means.
  */
-export async function checkRequirements(): Promise<Requirement[]> {
+export async function checkRequirements(
+  opts: { provider?: LlmProvider } = {}
+): Promise<Requirement[]> {
+  const provider = opts.provider ?? config.llm.provider;
   const out: Requirement[] = [];
 
   /**
@@ -135,7 +155,7 @@ export async function checkRequirements(): Promise<Requirement[]> {
    * `operatorRecord()` takes that name rather than discovering it. */
   let llm: Requirement;
   try {
-    if (config.llm.provider === 'api') {
+    if (provider === 'api') {
       // Resolves from ANTHROPIC_API_KEY or the vault; throws when neither can answer.
       const key = await anthropicKey().catch(() => '');
       llm = key
@@ -143,7 +163,7 @@ export async function checkRequirements(): Promise<Requirement[]> {
         : unmet('llm', 'Model access', 'blocking',
           'the provider is set to "api" but no API key is stored or set',
           { screen: 'setup', hint: 'Store a key on the Setup screen, or switch the provider to the Claude CLI.' });
-    } else if (config.llm.provider === 'deepseek') {
+    } else if (provider === 'deepseek') {
       /**
        * A key, and nothing else. No operator, no CLI, no sign-in — the DeepSeek path never
        * touches `data/operators/`, so requiring one here would put a red row on an install that
