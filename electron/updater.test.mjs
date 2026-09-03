@@ -65,6 +65,9 @@ function make(opts = {}) {
     allowDev: opts.allowDev ?? false,
     /* Absent by default, so every existing test keeps exercising the unguarded path. */
     ...(opts.isBusy ? { isBusy: opts.isBusy } : {}),
+    /* Same rule: only passed when a test is about the platform, so nothing else changes. */
+    ...(opts.platform ? { platform: opts.platform } : {}),
+    ...(opts.env ? { env: opts.env } : {}),
     broadcast: (s) => seen.push(s.phase)
   });
   return { updater, fake, seen };
@@ -371,4 +374,96 @@ test('explainError turns the errors people actually hit into plain sentences', (
 
   /* Anything unrecognised keeps its own words rather than becoming "update failed". */
   assert.equal(explainError(new Error('something specific and searchable')), 'something specific and searchable');
+});
+
+/* ---------------------------------------------------------------- Linux, and the null answer */
+
+/**
+ * THE DEFECT THIS FILE'S NEWEST TESTS EXIST FOR.
+ *
+ * `AppUpdater.checkForUpdates()` RESOLVES WITH NULL when the updater is not active on this
+ * installation — read from the installed electron-updater 6.8.9, `AppUpdater.js:253`:
+ *
+ *     if (!this.isUpdaterActive()) { return Promise.resolve(null); }
+ *
+ * It is not an error and it does not reject. The check used to read `result?.updateInfo?.version`
+ * straight off that null, get null, compute `newer = false`, and settle in the `phase: 'none'`
+ * arm — which the console renders as "You are on the latest." An installation that could not
+ * update itself at all therefore gave the most reassuring answer available, WORD FOR WORD the
+ * same answer a genuinely current machine gives. Nothing on the screen could tell them apart.
+ *
+ * On Linux this is the default rather than an edge: `main.js:50` builds an `AppImageUpdater` for
+ * every non-Windows, non-macOS platform, and `AppImageUpdater.js:18` reports inactive whenever
+ * `APPIMAGE` is unset — a .deb install, an unpacked directory, `npx electron .` from a clone.
+ */
+const nullCheck = () => ({ fakeOpts: { onCheck: () => null } });
+
+test('a null from checkForUpdates is never reported as "you are on the latest"', async () => {
+  const { updater } = make({ ...nullCheck(), platform: 'linux', env: {} });
+  const r = await updater.check();
+
+  assert.equal(r.ok, false, 'an installation that cannot update has not succeeded at checking');
+  assert.equal(r.phase, 'unavailable');
+  assert.notEqual(r.phase, 'none', 'phase "none" is the up-to-date answer and must not be reused here');
+  assert.equal(r.newer, false);
+  assert.match(r.reason, /AppImage/, 'the reason must name the actual cause, not a generic failure');
+});
+
+test('the reason distinguishes an AppImage-less run, a Snap, and everything else', async () => {
+  const linux = await make({ ...nullCheck(), platform: 'linux', env: {} }).updater.check();
+  assert.match(linux.reason, /APPIMAGE is unset/);
+
+  const snap = await make({ ...nullCheck(), platform: 'linux', env: { SNAP: '/snap/redbot' } }).updater.check();
+  assert.match(snap.reason, /snapd/, 'a Snap is updated by snapd and saying "download the AppImage" is wrong');
+
+  const mac = await make({ ...nullCheck(), platform: 'darwin', env: {} }).updater.check();
+  assert.match(mac.reason, /macOS/);
+});
+
+test('a running AppImage is NOT told it needs an AppImage', async () => {
+  /* The env var is what electron-updater itself keys on, so it is what this keys on. With it set
+     the updater is active, the fake answers normally, and the ordinary path must be untouched. */
+  const { updater } = make({ platform: 'linux', env: { APPIMAGE: '/home/j/redbot-3.5.1-x64.AppImage' } });
+  const r = await updater.check();
+  assert.equal(r.phase, 'available', 'a live AppImage checks for updates like any other install');
+  assert.equal(r.newer, true);
+});
+
+test('apply() refuses the same way rather than reporting a successful no-op', async () => {
+  /**
+   * The second half of the same defect, and the worse half: `apply()` reached its
+   * `if (!newer) return { ok: true, installed: false }` arm and logged "nothing newer to
+   * install" — an OK result, on a machine where installing was never possible.
+   */
+  const { updater, fake } = make({ ...nullCheck(), platform: 'linux', env: {} });
+  const r = await updater.apply();
+
+  assert.equal(r.ok, false, 'a refusal must not be reported as ok');
+  assert.equal(r.phase, 'unavailable');
+  assert.equal(fake.calls.download, 0, 'nothing may be downloaded');
+  assert.deepEqual(fake.calls.install, [], 'and nothing may be installed');
+});
+
+test('the Windows path is unchanged by any of this', async () => {
+  /* The null branch must not have moved the ordinary answer. A real check still resolves with an
+     updateInfo, and that still means available/none as before. */
+  const { updater } = make({ platform: 'win32', env: {} });
+  const r = await updater.check();
+  assert.equal(r.phase, 'available');
+  assert.equal(r.latest, '2.0.0');
+
+  const current = make({ platform: 'win32', env: {}, currentVersion: '2.0.0' });
+  const same = await current.updater.check();
+  assert.equal(same.phase, 'none', 'genuinely up to date is still "none"');
+  assert.equal(same.reason, null, 'and carries no reason, because nothing is wrong');
+});
+
+test('explainError names the two AppImage failures', () => {
+  const oldFile = new Error('APPIMAGE env is not defined');
+  oldFile.code = 'ERR_UPDATER_OLD_FILE_NOT_FOUND';
+  assert.match(explainError(oldFile), /did not start from one/,
+    'the raw text reads like a variable to set; it is not');
+
+  assert.match(explainError(new Error('Cannot find redbot-3.5.1-x64.AppImage')),
+    /no Linux AppImage/);
 });

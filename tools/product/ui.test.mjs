@@ -105,6 +105,27 @@ async function open(opts = {}) {
     });
   }
 
+  /**
+   * The desktop update bridge, faked.
+   *
+   * `UPDATES` is `window.redbotDesktop.updates` (index.html:5123) and is null in a browser, so the
+   * whole desktop update path — the one the Update button drives in the packaged app — is
+   * unreachable from this suite without standing the object up. Installed as an init script so it
+   * exists before the page's own top-level code reads it, which it does once, at load.
+   */
+  if (opts.desktopUpdates) {
+    await context.addInitScript((state) => {
+      const answer = async () => state;
+      window.redbotDesktop = {
+        updates: {
+          snapshot: answer, check: answer, apply: answer,
+          /* The real name is onStatus (index.html:5282); a wrong one here is a TypeError at load. */
+          onStatus: () => () => {}
+        }
+      };
+    }, opts.desktopUpdates);
+  }
+
   const page = await context.newPage();
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -2800,5 +2821,59 @@ test('Pull accounts asks for the ticked accounts and no others', async () => {
     const receipt = await page.locator('#dialogBody').textContent();
     assert.match(receipt, /2 account\(s\) pulled/);
     assert.match(receipt, /1 account\(s\) on the shared list were left/);
+  } finally { await context.close(); }
+});
+
+/* ================================================================== *
+ * Updating — and the answer a machine that cannot update gives
+ * ================================================================== */
+
+test('an installation that cannot self-update is never told it is on the latest', async () => {
+  /**
+   * THE DEFECT THIS PINS, at the exact line where it reached a person.
+   *
+   * electron-updater resolves `checkForUpdates()` with NULL — not an error — when its updater is
+   * inactive (AppUpdater.js:253). On Linux that is every run not started from an AppImage, which
+   * `AppImageUpdater.js:18` keys on `process.env.APPIMAGE`. electron/updater.mjs now turns that
+   * into `phase: 'unavailable'` with a reason, but the button handler still had three arms —
+   * error, available, and everything else — so 'unavailable' landed in "everything else" and
+   * toasted "You are on the latest." A machine that could not update itself gave the most
+   * reassuring sentence on the screen, identical to a genuinely current one.
+   *
+   * Asserted on the TOAST, because the toast is the whole of what the button says.
+   */
+  const { context, page } = await open({
+    desktopUpdates: {
+      phase: 'unavailable', current: '3.5.1', latest: null, newer: false, percent: 0,
+      supported: true,
+      reason: 'in-place update needs the AppImage build, and this process did not start from one '
+        + '(APPIMAGE is unset). Download the new AppImage from the release page.'
+    }
+  });
+  try {
+    await page.click('#updateBtn');
+    /* `#toast` is the app's one announcement element (index.html:1810). It is cleared after
+       1.9s, so the text is read the moment it is non-empty rather than after a fixed wait. */
+    await page.waitForFunction(() => (document.querySelector('#toast')?.textContent || '').trim().length > 0,
+      null, { timeout: 10_000 });
+    const toastText = await page.textContent('#toast');
+
+    assert.match(toastText, /AppImage/, 'the toast must name the actual cause');
+    assert.doesNotMatch(toastText, /on the latest/i,
+      'a machine that cannot update must never be told it is up to date');
+  } finally { await context.close(); }
+});
+
+test('a genuinely up-to-date desktop install still says so', async () => {
+  /* The control for the test above: 'none' must keep its reassuring answer, or the fix has simply
+     moved the lie somewhere else. */
+  const { context, page } = await open({
+    desktopUpdates: { phase: 'none', current: '3.5.1', latest: '3.5.1', newer: false, percent: 0, supported: true, reason: null }
+  });
+  try {
+    await page.click('#updateBtn');
+    await page.waitForFunction(() => (document.querySelector('#toast')?.textContent || '').trim().length > 0,
+      null, { timeout: 10_000 });
+    assert.match(await page.textContent('#toast'), /on the latest/i);
   } finally { await context.close(); }
 });

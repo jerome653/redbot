@@ -94,8 +94,17 @@ test('drafts and unparseable tags are ignored', () => {
   assert.equal(pickLatest([release('v9.9.9', { draft: true }), release('v0.2.0')])?.tag, 'v0.2.0');
 });
 
+/**
+ * PLATFORM IS PASSED EXPLICITLY FROM HERE DOWN.
+ *
+ * These assertions are about the Windows installer, and they used to rely on `process.platform`
+ * being win32 — true on this machine and on the windows-latest runner, and false the moment
+ * anybody runs the suite on Linux, where they would fail for a reason that has nothing to do with
+ * what they test. A test whose result depends on an ambient value is not testing what its name
+ * says. The platform is now an argument, so each one states which platform it is about.
+ */
 test('the installer asset is found, and only https urls survive', () => {
-  const ok = pickLatest([release('v0.2.0')]);
+  const ok = pickLatest([release('v0.2.0')], 'win32');
   assert.equal(ok?.download?.name, 'redbot-Setup-0.1.0.exe');
   assert.equal(ok?.download?.size, 102657779);
   assert.match(ok!.download!.url, /^https:\/\/github\.com\//);
@@ -104,21 +113,76 @@ test('the installer asset is found, and only https urls survive', () => {
   const evil = pickLatest([release('v0.2.0', {
     html_url: 'javascript:alert(1)',
     assets: [{ name: 'x.exe', browser_download_url: 'javascript:alert(2)', size: 1 }]
-  })]);
+  })], 'win32');
   assert.equal(evil?.download, null, 'a non-https asset is dropped, not offered');
   assert.equal(evil?.url, 'https://github.com/jerome653/redbot/releases',
     'a non-https release link falls back to the releases page');
 
   const insecure = pickLatest([release('v0.2.0', {
     assets: [{ name: 'x.exe', browser_download_url: 'http://example.com/x.exe', size: 1 }]
-  })]);
+  })], 'win32');
   assert.equal(insecure?.download, null, 'plain http is not good enough for an executable');
 });
 
 test('a release with no .exe is still reported, just without a download', () => {
-  const picked = pickLatest([release('v0.2.0', { assets: [{ name: 'notes.txt', browser_download_url: 'https://x/y', size: 1 }] })]);
+  const picked = pickLatest(
+    [release('v0.2.0', { assets: [{ name: 'notes.txt', browser_download_url: 'https://x/y', size: 1 }] })], 'win32');
   assert.equal(picked?.tag, 'v0.2.0');
   assert.equal(picked?.download, null);
+});
+
+/* ---------------------------------------------------------------- which asset, on which machine */
+
+/**
+ * THE DEFECT THESE PIN. The asset filter was `/\.exe$/i`, unconditionally, justified by a comment
+ * saying Windows is the only platform this app packages for. That is a fact about the BUILD. The
+ * platform the CHECK RUNS ON is a different fact, and merging the two meant a Linux console
+ * offered `redbot-Setup-3.5.1.exe` beneath a button reading "Download the installer" — handing
+ * somebody a file their machine cannot execute, with nothing on screen saying so.
+ */
+const multi = (tag: string) => release(tag, {
+  assets: [
+    { name: 'redbot-Setup-0.2.0.exe', browser_download_url: 'https://github.com/j/r/redbot-Setup-0.2.0.exe', size: 103 },
+    { name: 'redbot-0.2.0-x64.AppImage', browser_download_url: 'https://github.com/j/r/redbot-0.2.0-x64.AppImage', size: 120 },
+    { name: 'latest-linux.yml', browser_download_url: 'https://github.com/j/r/latest-linux.yml', size: 1 }
+  ]
+});
+
+test('each platform is offered the asset it can actually run', () => {
+  assert.equal(pickLatest([multi('v0.2.0')], 'win32')?.download?.name, 'redbot-Setup-0.2.0.exe');
+  assert.equal(pickLatest([multi('v0.2.0')], 'linux')?.download?.name, 'redbot-0.2.0-x64.AppImage');
+});
+
+test('Linux is never handed the Windows installer', () => {
+  /* The whole release, with only a .exe in it — every release published before the linux target
+     existed. The honest answer is no download, not the wrong one. */
+  const picked = pickLatest([release('v0.2.0')], 'linux');
+  assert.equal(picked?.tag, 'v0.2.0', 'the release is still reported');
+  assert.equal(picked?.download, null, 'but nothing runnable is offered');
+  assert.equal(picked?.url, 'https://github.com/jerome653/redbot/releases/tag/v0.2.0',
+    'and the release page is still reachable');
+});
+
+test('an unknown platform matches nothing rather than falling back to Windows', () => {
+  assert.equal(pickLatest([multi('v0.2.0')], 'freebsd')?.download, null);
+  assert.equal(pickLatest([multi('v0.2.0')], 'darwin')?.download, null,
+    'no .dmg in this release, so macOS gets no download either');
+});
+
+test('checkForUpdate carries the platform through to the asset choice', async () => {
+  const payload = [multi('v9.9.9')];
+  const onLinux = await checkForUpdate({
+    fetchImpl: respond(200, payload), current: '0.1.0', platform: 'linux'
+  });
+  assert.equal(onLinux.ok, true);
+  assert.equal((onLinux as { release: { download: { name: string } } }).release.download.name,
+    'redbot-0.2.0-x64.AppImage');
+
+  const onWindows = await checkForUpdate({
+    fetchImpl: respond(200, payload), current: '0.1.0', platform: 'win32'
+  });
+  assert.equal((onWindows as { release: { download: { name: string } } }).release.download.name,
+    'redbot-Setup-0.2.0.exe');
 });
 
 test('a newer release is reported as newer', async () => {

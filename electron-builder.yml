@@ -124,6 +124,38 @@ win:
 nsisWeb:
   artifactName: ${productName}-Web-Setup-${version}.${ext}
 
+# LINUX — APPIMAGE ONLY, AND THAT IS A CONSTRAINT RATHER THAN A PREFERENCE.
+#
+# electron-updater decides what it can update from the PACKAGE TYPE, not from a setting. Read from
+# the installed copy of 6.8.9:
+#
+#   - `main.js:50` — every platform that is not win32 or darwin gets an `AppImageUpdater`, unless
+#     `resources/package-type` names `deb` or `rpm`, in which case it gets those updaters.
+#   - `AppImageUpdater.js:18` — `isUpdaterActive()` returns FALSE when `process.env.APPIMAGE` is
+#     unset, which is every run that did not start from an AppImage file.
+#   - `AppImageUpdater.js:32` — the download looks for an asset whose name ends `.AppImage`, and
+#     explicitly excludes `rpm`, `deb` and `pacman`.
+#
+# So an AppImage is the one Linux target where the in-app Update button can complete. A `.deb`
+# would install and run fine and its update button could never do anything — DebUpdater shells out
+# to a package manager and needs a privileged prompt this app does not raise.
+#
+# `latest-linux.yml` is written alongside the AppImage and MUST be uploaded with it, for the same
+# reason `latest.yml` must be on the Windows release: it carries the version and the SHA512 the
+# download is verified against. A release without it fails the check with a 404 that reads like an
+# authentication problem — electron/updater.mjs `explainError` already names that case.
+#
+# NOT BUILT ON WINDOWS. electron-builder produces Linux targets from Linux, or from Windows only
+# through Docker/WSL. This block makes the target EXIST; producing and publishing the artifact is a
+# separate act on a machine that can.
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: Network
+  synopsis: Assists a human engaging on Reddit through a real browser session
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
 nsis:
   oneClick: false                  # let a person choose the install directory
   perMachine: false                # per-user: no elevation, and userData is per-user anyway
