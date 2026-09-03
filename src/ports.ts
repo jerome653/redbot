@@ -19,7 +19,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { existsSync, openSync, closeSync } from 'node:fs';
+import { existsSync, openSync, closeSync, readFileSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { DATA } from './config.js';
 import { resolveProfileDir } from './profiles.js';
@@ -312,19 +312,140 @@ const inFlight = new Map<string, Promise<PortLookup>>();
 export function inspectPorts(ports: number[]): Promise<PortLookup> {
   const wanted = [...new Set(ports.filter((p) => Number.isInteger(p) && p > 0))].sort((a, b) => a - b);
   if (!wanted.length) return Promise.resolve({ owners: new Map(), reason: null });
-  if (process.platform !== 'win32') {
+  if (process.platform !== 'win32' && process.platform !== 'linux') {
     return Promise.resolve({
       owners: new Map(),
-      reason: `the process table is only read on Windows, and this is ${process.platform}`
+      reason: `the process table is only read on Windows and Linux, and this is ${process.platform}`
     });
   }
 
   const key = wanted.join(',');
   const running = inFlight.get(key);
   if (running) return running;
-  const started = inspectPortsNow(wanted, key);
+  /* Same de-duplication and the same cache key on both platforms — the branch is only about
+     HOW the process table is read, never about how often. */
+  const started = process.platform === 'linux'
+    ? inspectPortsLinux(wanted, key)
+    : inspectPortsNow(wanted, key);
   inFlight.set(key, started);
   return started;
+}
+
+/**
+ * The same four facts, read the way Linux exposes them.
+ *
+ * WHY THIS EXISTS. `inspectPorts` answered every non-Windows platform with an empty map and
+ * "the process table is only read on Windows", and every caller treats an unidentifiable port
+ * as not-ours. On a Linux install that produced, verbatim: "Something is answering on 9223
+ * (Chrome/152.0.7977.75), but redbot could not confirm it is this account's browser." The
+ * browser was that account's. Nothing had looked.
+ *
+ * `ss -lntpH` gives the listener and its pid in one call — the Linux equivalent of the single
+ * CIM query above, and for the same reason: one process, not one per port. The pid is then
+ * resolved through /proc, which is a file read rather than another process:
+ *
+ *   /proc/<pid>/comm     the process name
+ *   /proc/<pid>/cmdline  the full argv, NUL-separated (NOT space-separated — splitting on
+ *                        spaces would break every --user-data-dir with a space in it, which is
+ *                        exactly the value this whole lookup exists to compare)
+ *
+ * A pid whose /proc entry cannot be read is still reported, with nulls: the port IS owned by
+ * something, and saying "owned, unidentified" is different from saying nothing is there.
+ * `userDataDirFrom` then parses the same command line the Windows path feeds it, so both
+ * platforms identify a browser by exactly the same rule.
+ */
+function inspectPortsLinux(wanted: number[], key: string): Promise<PortLookup> {
+  return new Promise<PortLookup>((done) => {
+    const out: string[] = [];
+    const err: string[] = [];
+    let settled = false;
+    const finish = (owners: Map<number, PortOwner>, reason: string | null) => {
+      if (settled) return;
+      settled = true;
+      inFlight.delete(key);
+      done({ owners, reason });
+    };
+
+    /* -H drops the header, -n keeps ports numeric, -p names the owning process. No shell: the
+       arguments are fixed and the ports are filtered in this process, not interpolated. */
+    const ss = spawn('ss', ['-lntpH'], { windowsHide: true });
+
+    const timer = setTimeout(() => {
+      try { ss.kill(); } catch { /* gone */ }
+      finish(new Map(), 'the lookup took longer than 20s and was stopped');
+    }, 20_000);
+
+    ss.stdout.on('data', (d: Buffer) => out.push(String(d)));
+    ss.stderr.on('data', (d: Buffer) => err.push(String(d)));
+    ss.on('error', (e) => {
+      clearTimeout(timer);
+      finish(new Map(), `ss could not be started (${e.message}) — install iproute2`);
+    });
+    ss.on('close', (code) => {
+      clearTimeout(timer);
+      const stderr = err.join('').trim().split(String.fromCharCode(10))[0]?.trim() ?? '';
+      if (code !== 0) {
+        return finish(new Map(), `ss exited with code ${code}${stderr ? `: ${stderr}` : ''}`);
+      }
+
+      const map = new Map<number, PortOwner>();
+      const want = new Set(wanted);
+      for (const line of out.join('').split(String.fromCharCode(10))) {
+        const owner = parseSsLine(line, want);
+        if (owner) map.set(owner.port, owner);
+      }
+      finish(map, null);
+    });
+  });
+}
+
+/**
+ * One `ss -lntpH` row into a PortOwner, or null when it is not a port we asked about.
+ *
+ * Exported for the tests: the format is fixed but fiddly — the local address column is
+ * `127.0.0.1:9223`, `*:9223`, `[::]:9223` or `[::1]:9223`, so the port is what follows the LAST
+ * colon, and the process column is `users:(("chrome",pid=1234,fd=8))` with more tuples appended
+ * when several fds share the socket.
+ */
+export function parseSsLine(line: string, want: Set<number>): PortOwner | null {
+  const cols = line.trim().split(/\s+/);
+  if (cols.length < 4) return null;
+  /* State Recv-Q Send-Q Local:Port Peer:Port [users:(...)] — the local address is column 4. */
+  const local = cols[3] ?? '';
+  const portText = local.slice(local.lastIndexOf(':') + 1);
+  const port = Number(portText);
+  if (!Number.isInteger(port) || !want.has(port)) return null;
+
+  const pidMatch = /pid=(\d+)/.exec(line);
+  if (!pidMatch) {
+    /* Listening, but the pid is not visible — reading another user's socket owner needs root.
+       The port is genuinely taken, so it is reported as owned by an unidentifiable process. */
+    return { port, pid: 0, process: null, commandLine: null, userDataDir: null };
+  }
+  const pid = Number(pidMatch[1]);
+  const nameMatch = /users:\(\("([^"]+)"/.exec(line);
+  const cmd = readProcCmdline(pid);
+  return {
+    port,
+    pid,
+    process: nameMatch?.[1] ?? readProcComm(pid),
+    commandLine: cmd,
+    userDataDir: userDataDirFrom(cmd)
+  };
+}
+
+/** /proc/<pid>/cmdline, NUL-separated, rejoined with spaces. Null when it cannot be read. */
+function readProcCmdline(pid: number): string | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+    const parts = raw.split(String.fromCharCode(0)).filter(Boolean);
+    return parts.length ? parts.join(' ') : null;
+  } catch { return null; }
+}
+
+/** /proc/<pid>/comm — the short process name. Null when it cannot be read. */
+function readProcComm(pid: number): string | null {
+  try { return readFileSync(`/proc/${pid}/comm`, 'utf8').trim() || null; } catch { return null; }
 }
 
 function inspectPortsNow(wanted: number[], key: string): Promise<PortLookup> {
