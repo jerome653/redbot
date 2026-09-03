@@ -1504,6 +1504,62 @@ test('a DeepSeek key is stored under its own name, and never in the Anthropic sl
   }
 });
 
+test('switching to a key path clears Model access — the screen agrees with the runs', async () => {
+  /**
+   * THE DEFECT THIS PINS, and it survived every unit test until the console was DRIVEN on Linux.
+   *
+   * `/api/setup` called `checkRequirements()` with no argument, so it answered for
+   * `config.llm.provider` — this server process's own REDBOT_LLM, resolved once at module load
+   * and normally unset, i.e. `cli`. Meanwhile the picker's value was being forwarded to every
+   * spawned run as `env.REDBOT_LLM`. The two disagreed, and the screen was the one that was wrong:
+   * pick DeepSeek, store a key, and the banner still said "Setup is not finished — Model access",
+   * detail "no Claude operator is selected", for a login no run was ever going to use.
+   *
+   * Asserted through the HTTP surface rather than on `checkRequirements` directly, because the
+   * bug was not IN that function — it was in what the route asked it.
+   */
+  const post = (path, body) => fetch(`http://127.0.0.1:${PORT}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+  const llmRow = async () => {
+    const s = await getJson('/api/setup');
+    return (s.requirements || []).find((r) => r.id === 'llm') || null;
+  };
+
+  const before = await getJson('/api/setup');
+  if (!before.vault.ok) {
+    /* No REDBOT_VAULT_KEY here — a key cannot be stored, so the flip cannot be shown. Assert the
+       closed state rather than a false green, as the sibling vault tests do. */
+    assert.equal(before.deepseekKeyStored, false);
+    return;
+  }
+
+  try {
+    await post('/api/llm/provider', { provider: 'deepseek' });
+    const noKey = await llmRow();
+    assert.ok(noKey, 'Model access must always be reported');
+    assert.equal(noKey.ok, false, 'no key yet, so it is genuinely unmet');
+    assert.match(noKey.detail, /no API key is stored or set/,
+      'and the reason must be the missing KEY, not a missing Claude operator');
+    assert.doesNotMatch(noKey.detail, /Claude operator/);
+
+    const stored = await post('/api/vault/key', { value: 'sk-req-flip-3311', provider: 'deepseek' });
+    assert.equal(stored.status, 200, `store was refused: ${JSON.stringify(stored.body)}`);
+
+    const withKey = await llmRow();
+    assert.equal(withKey.ok, true,
+      `storing a DeepSeek key must clear Model access, got: ${withKey.detail}`);
+    assert.match(withKey.detail, /DeepSeek/);
+
+    const s = await getJson('/api/setup');
+    assert.ok(!(s.blocking || []).some((b) => b.id === 'llm'),
+      'and it must drop out of the blocking list the banner counts');
+  } finally {
+    await post('/api/vault/key/remove', { provider: 'deepseek' }).catch(() => {});
+    await post('/api/llm/provider', { provider: 'cli' }).catch(() => {});
+  }
+});
+
 test('the key routes refuse a provider that owns no key slot', async () => {
   const post = (path, body) => fetch(`http://127.0.0.1:${PORT}${path}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)

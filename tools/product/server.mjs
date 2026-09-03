@@ -1697,7 +1697,10 @@ async function setupStatus() {
   let requirementsError = null;
   if (requirementsApi) {
     try {
-      requirements = await requirementsApi.checkRequirements();
+      /* `llmProvider()`, NOT this process's own REDBOT_LLM — the same correction
+         `/api/dependencies` needed. The picker is what runs use; it must also be what the
+         requirement check asks about, or the screen demands a Claude login for a key path. */
+      requirements = await requirementsApi.checkRequirements({ provider: llmProvider() });
     } catch (e) {
       requirementsError = e && e.message ? e.message : String(e);
     }
