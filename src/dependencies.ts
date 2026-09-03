@@ -95,23 +95,52 @@ export function nodeVersionOk(raw: string, min = MIN_NODE): boolean {
 }
 
 /**
- * Where Chrome installs itself on Windows.
+ * Where Chrome installs itself, per platform.
  *
- * Three locations because there are genuinely three: the 64-bit and 32-bit machine-wide installs,
- * and the per-user install Chrome falls back to when somebody without admin rights installs it.
- * The per-user one is the one that gets missed, and it is common on managed laptops — exactly the
- * machines where an operator cannot install anything machine-wide.
+ * WINDOWS — three locations, because there are genuinely three: the 64-bit and 32-bit
+ * machine-wide installs, and the per-user install Chrome falls back to when somebody without
+ * admin rights installs it. The per-user one is the one that gets missed, and it is common on
+ * managed laptops — exactly the machines where an operator cannot install anything machine-wide.
+ *
+ * LINUX — added 2026-09-03, after a Linux install answered "Chrome could not be found in the
+ * usual place" with Chrome sitting at /opt/google/chrome/chrome. The list was Windows-only and
+ * the platform gate below skipped the check entirely off Windows, so nothing ever looked.
+ * `google-chrome` and `google-chrome-stable` in /usr/bin are the Debian package's symlinks into
+ * that same directory; chromium is listed after them because a Chromium is not a Chrome and
+ * should only be reached when no Chrome exists.
+ *
+ * macOS — the bundle path. Listed for completeness; nothing packages for it (electron-builder.yml
+ * has no `mac` block).
+ *
+ * TWO OVERRIDE NAMES, and that is deliberate rather than sloppy. `REDBOT_CHROME` is this
+ * module's own and stays first. `CHROME_PATH` is what `tools/product/server.mjs` read and, more
+ * to the point, what its error message TELLS people to set — so an operator who followed that
+ * instruction must not find it ignored. Both are honoured; REDBOT_CHROME wins when both are set.
  */
-export function chromeCandidates(env: NodeJS.ProcessEnv): string[] {
-  const rel = join('Google', 'Chrome', 'Application', 'chrome.exe');
-  const roots = [
-    env['ProgramFiles'], env['ProgramFiles(x86)'], env['LOCALAPPDATA']
-  ].filter((x): x is string => typeof x === 'string' && x.length > 0);
-  const out = roots.map((r) => join(r, rel));
-  /* An explicit override wins and is listed first, so a portable or non-standard install is
+export function chromeCandidates(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): string[] {
+  let out: string[];
+  if (platform === 'win32') {
+    const rel = join('Google', 'Chrome', 'Application', 'chrome.exe');
+    out = [env['ProgramFiles'], env['ProgramFiles(x86)'], env['LOCALAPPDATA']]
+      .filter((x): x is string => typeof x === 'string' && x.length > 0)
+      .map((r) => join(r, rel));
+  } else if (platform === 'darwin') {
+    out = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'];
+  } else {
+    out = [
+      '/opt/google/chrome/chrome',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/snap/bin/chromium'
+    ];
+  }
+  /* An explicit override wins and is listed FIRST, so a portable or non-standard install is
      reachable without patching this list. */
-  const override = env['REDBOT_CHROME'];
-  return override ? [override, ...out] : out;
+  const overrides = [env['REDBOT_CHROME'], env['CHROME_PATH']]
+    .filter((x): x is string => typeof x === 'string' && x.length > 0);
+  return [...overrides, ...out];
 }
 
 /** Find an executable on PATH without running it. `where` on Windows, `which` elsewhere. */
@@ -208,23 +237,33 @@ export async function checkDependencies(opts: DependencyOptions = {}): Promise<D
    * Installed, not running. redbot never launches it (src/browser.ts explains why Playwright
    * launching a browser gets served a Reddit block page), but it cannot attach to one that was
    * never installed either. */
-  if (platform === 'win32') {
-    const found = chromeCandidates(env).find((p) => { try { return exists(p); } catch { return false; } }) ?? null;
-    out.push(found
-      ? dep('chrome', 'Google Chrome', true, true, 'installed', found, { hint: '', url: null })
-      : dep('chrome', 'Google Chrome', true, false,
-        'no chrome.exe was found in the usual places — redbot attaches to your own Chrome and cannot work without one',
-        null,
-        {
-          hint: 'Install Chrome, then start it from the Accounts screen and sign in to Reddit once. Set REDBOT_CHROME if it lives somewhere unusual.',
-          url: 'https://www.google.com/chrome/'
-        }));
-  } else {
-    /* Windows is the only platform this packages for (src/ports.ts is win32-only). Saying so is
-       better than running a Windows path check on a Mac and reporting a confident "missing". */
-    out.push(dep('chrome', 'Google Chrome', true, true,
-      `not checked on ${platform} — redbot packages for Windows only`, null, { hint: '', url: null }));
-  }
+  /**
+   * CHECKED ON EVERY PLATFORM SINCE 2026-09-03.
+   *
+   * It used to run only under `platform === 'win32'`, and the other branch reported a green
+   * "not checked on linux — redbot packages for Windows only". Two things were wrong with that.
+   * It was a PASS for something never looked at, which is the one thing this module exists not to
+   * do — and it was answered on a Linux machine that DID have Chrome, at
+   * /opt/google/chrome/chrome, while the console's own Open-Chrome button failed with "Chrome
+   * could not be found in the usual place." A green dependency row and a button that cannot find
+   * the dependency, on the same install, at the same moment.
+   *
+   * The packaging argument was never the point: what platform electron-builder TARGETS says
+   * nothing about what platform the code is RUNNING on, and `chromeCandidates` now knows all
+   * three. The name in the failure text follows the platform for the same reason — `chrome.exe`
+   * is not what somebody on Linux is looking for.
+   */
+  const chromeName = platform === 'win32' ? 'chrome.exe' : 'a Chrome binary';
+  const found = chromeCandidates(env, platform).find((p) => { try { return exists(p); } catch { return false; } }) ?? null;
+  out.push(found
+    ? dep('chrome', 'Google Chrome', true, true, 'installed', found, { hint: '', url: null })
+    : dep('chrome', 'Google Chrome', true, false,
+      `no ${chromeName} was found in the usual places — redbot attaches to your own Chrome and cannot work without one`,
+      null,
+      {
+        hint: 'Install Chrome, then start it from the Accounts screen and sign in to Reddit once. Set REDBOT_CHROME (or CHROME_PATH) if it lives somewhere unusual.',
+        url: 'https://www.google.com/chrome/'
+      }));
 
   /* ---------- the Claude CLI ----------
    *

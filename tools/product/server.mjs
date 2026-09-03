@@ -1772,12 +1772,32 @@ async function setupStatus() {
   };
 }
 
+/**
+ * ONE LIST, SHARED WITH THE DEPENDENCY CHECK — it used to be a second, different one.
+ *
+ * This function held its own two hardcoded Windows paths and read `CHROME_PATH`, while
+ * `src/dependencies.ts` `chromeCandidates()` read three Windows paths and `REDBOT_CHROME`. Two
+ * call sites, one question, two answers — and on Linux both were wrong in different ways: the
+ * dependency row reported a green "not checked on linux", and this returned null, so the
+ * Accounts screen said "Chrome could not be found in the usual place. Set CHROME_PATH and try
+ * again" on a machine with Chrome at /opt/google/chrome/chrome. Measured 2026-09-03.
+ *
+ * The override was also LAST in this list, so on a machine that had Chrome at a standard path
+ * `CHROME_PATH` was silently ignored — an override that could not override. `chromeCandidates`
+ * puts it first, and honours both names.
+ *
+ * The fallback keeps this working when `dist/` has not been built: a console that cannot find
+ * its own compiled output should still be able to open a browser on Windows.
+ */
 function chromeBinary() {
-  const candidates = [
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    process.env.CHROME_PATH
-  ].filter(Boolean);
+  const candidates = dependenciesApi
+    ? dependenciesApi.chromeCandidates(process.env)
+    : [
+      process.env.REDBOT_CHROME,
+      process.env.CHROME_PATH,
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
+    ].filter(Boolean);
   return candidates.find((p) => existsSync(p)) || null;
 }
 

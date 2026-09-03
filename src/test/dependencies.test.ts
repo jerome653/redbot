@@ -81,7 +81,10 @@ test('MIN_NODE matches engines.node in package.json', () => {
 /* ---------------------------------------------------------------- chrome discovery */
 
 test('chromeCandidates covers machine-wide and per-user installs', () => {
-  const paths = chromeCandidates(healthy.env!);
+  /* Platform named explicitly. Without it this reads `process.platform`, which makes it a
+     Windows-only claim that merely happens to pass on a Windows runner — and it would fail on
+     Linux for a reason that has nothing to do with what it tests. */
+  const paths = chromeCandidates(healthy.env!, 'win32');
   assert.equal(paths.length, 3);
   assert.ok(paths.some((p) => p.includes('Program Files\\Google')), '64-bit install');
   assert.ok(paths.some((p) => p.includes('Program Files (x86)')), '32-bit install');
@@ -90,7 +93,7 @@ test('chromeCandidates covers machine-wide and per-user installs', () => {
 });
 
 test('REDBOT_CHROME overrides and is looked at first', () => {
-  const paths = chromeCandidates({ ...healthy.env, REDBOT_CHROME: 'D:\\portable\\chrome.exe' });
+  const paths = chromeCandidates({ ...healthy.env, REDBOT_CHROME: 'D:\\portable\\chrome.exe' }, 'win32');
   assert.equal(paths[0], 'D:\\portable\\chrome.exe');
   assert.equal(paths.length, 4);
 });
@@ -192,11 +195,26 @@ test('on the API-key path the Claude CLI is optional, not a blocker', async () =
 
 /* ---------------------------------------------------------------- other platforms */
 
-test('a non-Windows host says Chrome was not checked rather than claiming it is missing', async () => {
-  const ds = await checkDependencies({ ...healthy, platform: 'darwin', exists: () => false });
+test('a non-Windows host now CHECKS Chrome instead of waving it through', async () => {
+  /**
+   * THIS TEST PINNED THE DEFECT, and had to move with the fix rather than be deleted.
+   *
+   * It asserted `ok: true` with "not checked on darwin" — a PASS for something nothing had
+   * looked at, justified by "redbot packages for Windows only". What a build TARGETS says
+   * nothing about the platform the code is RUNNING on, and a Linux install proved it on
+   * 2026-09-03: a green dependency row, and an Open-Chrome button that could not find the
+   * Chrome that was installed. Absence is reported as absence on every platform now.
+   */
+  const ds = await checkDependencies({ ...healthy, platform: 'darwin', env: {}, exists: () => false });
   const chrome = byId(ds, 'chrome');
-  assert.equal(chrome.ok, true);
-  assert.match(chrome.detail, /not checked on darwin/);
+  assert.equal(chrome.ok, false, 'no Chrome on the machine is a real answer, not an excused one');
+  assert.doesNotMatch(chrome.detail, /not checked/);
+
+  const present = await checkDependencies({
+    ...healthy, platform: 'darwin', env: {},
+    exists: (p: string) => p.includes('Google Chrome.app')
+  });
+  assert.equal(byId(present, 'chrome').ok, true);
 });
 
 /* ---------------------------------------------------------------- shape */
@@ -220,4 +238,80 @@ test('every dependency carries the fields the console renders', async () => {
 test('nothing claims redbot needs Python', async () => {
   const ds = await checkDependencies(healthy);
   assert.equal(ds.some((d) => /python/i.test(d.id + d.label)), false);
+});
+
+/* ---------------------------------------------------------------- chrome, per platform */
+
+/**
+ * THE DEFECT THESE PIN, reported from a running Linux install on 2026-09-03:
+ *
+ *   "Chrome could not be found in the usual place. Set CHROME_PATH and try again."
+ *
+ * with Chrome sitting at /opt/google/chrome/chrome. `chromeCandidates` listed only Windows
+ * paths, and `checkDependencies` ran the check only under `platform === 'win32'` — the other
+ * branch reported a GREEN "not checked on linux — redbot packages for Windows only". So the
+ * dependency row passed for something nothing had looked at, while the console's own
+ * Open-Chrome button failed to find it, on the same install at the same moment.
+ */
+test('the candidate list follows the platform it is asked about', () => {
+  const win = chromeCandidates({ ProgramFiles: 'C:\PF', 'ProgramFiles(x86)': 'C:\PF86' }, 'win32');
+  assert.ok(win.every((p) => p.endsWith('chrome.exe')), win.join(' | '));
+
+  const linux = chromeCandidates({}, 'linux');
+  assert.ok(linux.includes('/opt/google/chrome/chrome'),
+    'the Debian package installs the real binary here — this is the path the report named');
+  assert.ok(linux.includes('/usr/bin/google-chrome'));
+  assert.ok(!linux.some((p) => p.includes('chrome.exe')),
+    'a Windows path on Linux is noise that can never match');
+
+  const mac = chromeCandidates({}, 'darwin');
+  assert.ok((mac[0] ?? '').includes('Google Chrome.app'));
+});
+
+test('a Chromium is only reached after every Chrome', () => {
+  const linux = chromeCandidates({}, 'linux');
+  const chrome = linux.findIndex((p) => p.includes('google-chrome'));
+  const chromium = linux.findIndex((p) => p.includes('chromium'));
+  assert.ok(chrome >= 0 && chromium >= 0);
+  assert.ok(chrome < chromium, 'a Chromium is not a Chrome; it must never be preferred over one');
+});
+
+test('an explicit override wins, and BOTH names are honoured', () => {
+  /* CHROME_PATH is the name the console's own error message tells people to set, so an
+     operator who followed that instruction must not find it ignored — which is what happened
+     when server.mjs listed it LAST behind two paths that existed. */
+  const viaRedbot = chromeCandidates({ REDBOT_CHROME: '/custom/a' }, 'linux');
+  assert.equal(viaRedbot[0], '/custom/a');
+
+  const viaChromePath = chromeCandidates({ CHROME_PATH: '/custom/b' }, 'linux');
+  assert.equal(viaChromePath[0], '/custom/b');
+
+  const both = chromeCandidates({ REDBOT_CHROME: '/custom/a', CHROME_PATH: '/custom/b' }, 'linux');
+  assert.deepEqual(both.slice(0, 2), ['/custom/a', '/custom/b'],
+    'REDBOT_CHROME wins, but CHROME_PATH is still tried before the guesses');
+
+  const win = chromeCandidates({ ProgramFiles: 'C:\PF', CHROME_PATH: 'C:\portable\chrome.exe' }, 'win32');
+  assert.equal(win[0], 'C:\portable\chrome.exe', 'an override that is not first is not an override');
+});
+
+test('Chrome is CHECKED on Linux, not waved through as "not checked"', async () => {
+  const deps = await checkDependencies({
+    ...healthy, platform: 'linux', env: {},
+    exists: (p) => p === '/opt/google/chrome/chrome'
+  });
+  const chrome = byId(deps, 'chrome');
+  assert.equal(chrome.ok, true);
+  assert.equal(chrome.found, '/opt/google/chrome/chrome', 'it must name what it found');
+  assert.doesNotMatch(chrome.detail, /not checked/,
+    'REGRESSION: a pass for something nothing looked at is the one thing this module must not do');
+});
+
+test('and a Linux machine with no Chrome is reported as missing, in words that fit the platform', async () => {
+  const deps = await checkDependencies({ ...healthy, platform: 'linux', env: {}, exists: () => false });
+  const chrome = byId(deps, 'chrome');
+  assert.equal(chrome.ok, false);
+  assert.equal(chrome.required, true);
+  assert.doesNotMatch(chrome.detail, /chrome\.exe/,
+    'nobody on Linux is looking for a file called chrome.exe');
+  assert.match(chrome.fix.hint, /CHROME_PATH/, 'the hint must name the variable that works');
 });

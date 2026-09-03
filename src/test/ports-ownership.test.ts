@@ -25,7 +25,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { profileInUse, sameDir, userDataDirFrom, orphanBrowsers } from '../ports.js';
+import { profileInUse, sameDir, userDataDirFrom, orphanBrowsers, parseSsLine } from '../ports.js';
 import type { PortOwner } from '../ports.js';
 
 const PROFILE = join('X:', 'data', 'chrome-profile-c');            // portable-exempt: synthetic fixture
@@ -210,5 +210,82 @@ describe('a browser of ours stays ours after its account is gone', () => {
     const owners = new Map([owner(9222, 9, `${ROOT_DIR}/CHROME-PROFILE-A`)]);
     assert.deepEqual(orphanBrowsers(owners, ROOT_DIR, ['chrome-profile-a']), [],
       'a claimed profile must not read as an orphan because Windows wrote it differently');
+  });
+});
+
+/* ---------------------------------------------------------------- the Linux process table */
+
+/**
+ * THE REPORTED DEFECT, second machine, 2026-09-03 — verbatim off the screen:
+ *
+ *   "Something is answering on 9223 (Chrome/152.0.7977.75), but redbot could not confirm it is
+ *    this account's browser — the process table is only read on Windows, and this is linux."
+ *
+ * The browser WAS that account's. `inspectPorts` returned an empty map for every non-Windows
+ * platform, and every caller treats an unidentifiable port as not-ours (correctly — that is the
+ * Lenovo Vantage rule this module exists for). So a correct Linux install could never reach
+ * `running`, and the Accounts screen could never let it be driven or stopped.
+ *
+ * `parseSsLine` is the Linux equivalent of the PowerShell parse: it turns one `ss -lntpH` row
+ * into the same PortOwner the Windows path produces, so ownership is decided by the same rule on
+ * both platforms — the owning process's own `--user-data-dir`.
+ */
+describe('parsing ss output', () => {
+  const want = new Set([9223]);
+
+  test('a normal listener yields the port, the pid and the process name', () => {
+    const row = 'LISTEN 0      511        127.0.0.1:9223       0.0.0.0:*    users:(("chrome",pid=4242,fd=8))';
+    const owner = parseSsLine(row, want);
+    assert.ok(owner, 'a row for a wanted port must parse');
+    assert.equal(owner!.port, 9223);
+    assert.equal(owner!.pid, 4242);
+    assert.equal(owner!.process, 'chrome');
+  });
+
+  test('the port is taken from the LAST colon, so IPv6 and wildcards work', () => {
+    for (const local of ['127.0.0.1:9223', '*:9223', '[::]:9223', '[::1]:9223', '0.0.0.0:9223']) {
+      const row = `LISTEN 0 511 ${local} 0.0.0.0:* users:(("chrome",pid=7,fd=8))`;
+      assert.equal(parseSsLine(row, want)?.port, 9223, `failed on ${local}`);
+    }
+  });
+
+  test('a port nobody asked about is ignored', () => {
+    const row = 'LISTEN 0 511 127.0.0.1:9999 0.0.0.0:* users:(("chrome",pid=7,fd=8))';
+    assert.equal(parseSsLine(row, want), null);
+  });
+
+  test('junk and short rows are null, never a half-built owner', () => {
+    assert.equal(parseSsLine('', want), null);
+    assert.equal(parseSsLine('LISTEN 0', want), null);
+    assert.equal(parseSsLine('not an ss row at all', want), null);
+  });
+
+  test('a listener whose pid is hidden is still reported as OWNED, not as free', () => {
+    /**
+     * `ss` omits the users:() column for a socket owned by another user unless it is run as
+     * root. The port is genuinely taken — reporting nothing there would let the allocator hand
+     * it out and let the status screen call it free, which is the opposite of fail-closed.
+     */
+    const row = 'LISTEN 0      511        127.0.0.1:9223       0.0.0.0:*';
+    const owner = parseSsLine(row, want);
+    assert.ok(owner, 'an unidentifiable listener is still a listener');
+    assert.equal(owner!.pid, 0);
+    assert.equal(owner!.process, null);
+    assert.equal(owner!.commandLine, null);
+    assert.equal(owner!.userDataDir, null,
+      'and with no command line there is no ownership claim — it cannot read as ours');
+  });
+
+  test('the userDataDir comes from the same parser the Windows path uses', () => {
+    /* This process's own cmdline is readable, so pid 1 stands in for "a pid /proc can answer
+       for". What matters is that the field is populated by userDataDirFrom, not reinvented. */
+    const row = `LISTEN 0 511 127.0.0.1:9223 0.0.0.0:* users:(("chrome",pid=${process.pid},fd=8))`;
+    const owner = parseSsLine(row, want);
+    assert.ok(owner);
+    assert.equal(owner!.pid, process.pid);
+    /* node's own command line carries no --user-data-dir, so the correct answer is null — and
+       that it is null rather than undefined is the contract PortOwner declares. */
+    assert.equal(owner!.userDataDir, null);
+    assert.equal(owner!.userDataDir, userDataDirFrom(owner!.commandLine));
   });
 });
