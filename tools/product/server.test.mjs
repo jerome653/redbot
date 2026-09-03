@@ -1282,7 +1282,13 @@ test('/api/setup reports each prerequisite separately, and never a secret value'
   assert.ok(s.vault && typeof s.vault.ok === 'boolean', 'vault status must be its own answer');
   assert.ok(Array.isArray(s.operators), 'operators must be a list, even when empty');
   assert.equal(s.apiKeyName, 'anthropic_api_key');
-  assert.ok(s.provider === 'cli' || s.provider === 'api', `provider must be cli or api, got ${s.provider}`);
+  /* Two vendors, two slots. One field standing in for both would make a stored Anthropic key
+     look like a working DeepSeek install, and step 4 would go green on a key it cannot use. */
+  assert.equal(s.deepseekKeyName, 'deepseek_api_key');
+  assert.equal(typeof s.deepseekKeyStored, 'boolean');
+  assert.equal(typeof s.deepseekKeyFromEnv, 'boolean');
+  assert.ok(['cli', 'api', 'deepseek'].includes(s.provider),
+            `provider must be cli, api or deepseek, got ${s.provider}`);
 
   /**
    * The whole point of the vault is that a stored secret does not come back out.
@@ -1409,12 +1415,110 @@ test('the LLM path can be switched, and only to a value redbot understands', asy
   assert.equal(api.status, 200);
   assert.equal((await (await fetch(`http://127.0.0.1:${PORT}/api/setup`)).json()).provider, 'api');
 
+  const ds = await set('deepseek');
+  assert.equal(ds.status, 200, `deepseek was refused: ${JSON.stringify(ds.body)}`);
+  assert.equal((await (await fetch(`http://127.0.0.1:${PORT}/api/setup`)).json()).provider, 'deepseek');
+
   const junk = await set('gpt');
   assert.equal(junk.status, 400, 'an unknown provider must be refused, not stored');
-  assert.equal((await (await fetch(`http://127.0.0.1:${PORT}/api/setup`)).json()).provider, 'api',
+  assert.equal((await (await fetch(`http://127.0.0.1:${PORT}/api/setup`)).json()).provider, 'deepseek',
                'a refused value must not have changed anything');
 
   await set('cli');   // leave it as found
+});
+
+test('the Claude CLI stops being a required dependency the moment a key path is selected', async () => {
+  /**
+   * THE DEFECT THIS PINS. `/api/dependencies` passed `configApi.config.llm.provider` — this
+   * server process's own REDBOT_LLM, read once at module load — so switching the provider on the
+   * Setup screen changed what the RUNS did (`env.REDBOT_LLM = selectedProvider`) and did not
+   * change what the screen CHECKED. Step 1 kept demanding the Claude CLI on an install that had
+   * a key and no CLI, and no amount of clicking "Check again" moved it, because the answer was
+   * also cached for two minutes.
+   *
+   * Asserted on the `required` flag rather than on `ok`: whether a CLI happens to be installed
+   * on the machine running this suite is not the subject.
+   */
+  const set = (provider) => fetch(`http://127.0.0.1:${PORT}/api/llm/provider`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider })
+  }).then((r) => r.json());
+  const claudeRow = async () => {
+    const d = await getJson('/api/dependencies');
+    return (d.dependencies || []).find((x) => x.id === 'claude-cli') || null;
+  };
+
+  try {
+    await set('cli');
+    const onCli = await claudeRow();
+    assert.ok(onCli, 'the dependency list must still mention the Claude CLI');
+    assert.equal(onCli.required, true, 'the CLI path runs every model call through the CLI');
+
+    await set('deepseek');
+    const onDeepseek = await claudeRow();
+    assert.equal(onDeepseek.required, false,
+                 'a DeepSeek install never shells out to Claude — a red row here is a false blocker');
+    assert.equal(onDeepseek.ok, true, 'and an unrequired dependency must not report as a problem');
+  } finally {
+    await set('cli').catch(() => {});
+  }
+});
+
+test('a DeepSeek key is stored under its own name, and never in the Anthropic slot', async () => {
+  const before = await getJson('/api/setup');
+  if (!before.vault.ok) {
+    /* No REDBOT_VAULT_KEY here — the store path cannot run. Assert the closed state rather than
+       a false green, the same way the Webshare test above does. */
+    assert.equal(before.deepseekKeyStored, false, 'no vault means no stored key');
+    return;
+  }
+
+  const post = (path, body) => fetch(`http://127.0.0.1:${PORT}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+
+  const anthropicBefore = before.apiKeyStored;
+
+  try {
+    const stored = await post('/api/vault/key', { value: 'sk-deepseek-test-5678', provider: 'deepseek' });
+    assert.equal(stored.status, 200, `store was refused: ${JSON.stringify(stored.body)}`);
+    assert.equal(stored.body.hint, '5678', 'the response carries only the 4-char hint');
+    assert.ok(!('value' in stored.body), 'the key itself must never be echoed');
+
+    const mid = await getJson('/api/setup');
+    assert.equal(mid.deepseekKeyStored, true, 'Setup must see the DeepSeek key');
+    assert.equal(mid.apiKeyStored, anthropicBefore,
+                 'storing a DeepSeek key must not touch the Anthropic slot — a mixed-up key is a 401 naming the wrong vendor');
+    assert.ok(mid.secrets.some((c) => c.name === 'deepseek_api_key'),
+              'it is filed under its own credential name');
+
+    const removed = await post('/api/vault/key/remove', { provider: 'deepseek' });
+    assert.equal(removed.status, 200);
+    assert.equal(removed.body.removed, true);
+
+    const after = await getJson('/api/setup');
+    assert.equal(after.deepseekKeyStored, false, 'and Setup must see it gone');
+    assert.equal(after.apiKeyStored, anthropicBefore, 'removing one vendor must not remove the other');
+  } finally {
+    await post('/api/vault/key/remove', { provider: 'deepseek' }).catch(() => {});
+  }
+});
+
+test('the key routes refuse a provider that owns no key slot', async () => {
+  const post = (path, body) => fetch(`http://127.0.0.1:${PORT}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+
+  /* 'cli' is a real provider with no key — accepting it would file a key under a name nothing
+     ever reads, and report success for storing something unusable. */
+  const cli = await post('/api/vault/key', { value: 'anything-at-all', provider: 'cli' });
+  assert.equal(cli.status, 400, 'the CLI path holds no key');
+
+  const junk = await post('/api/vault/key', { value: 'anything-at-all', provider: 'gpt' });
+  assert.equal(junk.status, 400);
+
+  const junkRemove = await post('/api/vault/key/remove', { provider: 'gpt' });
+  assert.equal(junkRemove.status, 400);
 });
 
 test('with two accounts a browser action is refused, not pointed at the default debug port', async () => {

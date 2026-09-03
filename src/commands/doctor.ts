@@ -311,17 +311,30 @@ export async function doctor(): Promise<number> {
    * The requirement above answers "is a model reachable"; this answers "and out of which
    * directory", which is what a person needs when it is not. Kept separate for that reason.
    */
-  try {
-    const dir = claudeConfigDir();
-    const exists = existsSync(dir);
-    add(
-      'llm config dir',
-      exists ? 'PASS' : 'WARN',
-      `${config.llm.provider} · operator "${config.llm.operator ?? '(unset)'}" · ${dir}${exists ? '' : ' (directory missing — sign in there first)'}`
-    );
-  } catch (e) {
-    add('llm config dir', e instanceof OperatorAuthError ? 'FAIL' : 'WARN',
-      e instanceof Error ? e.message.split('\n')[0]! : String(e));
+  /**
+   * ONLY THE CLI PATH HAS A CONFIG DIRECTORY. `claudeConfigDir()` throws OperatorAuthError when
+   * no operator is set (src/config.ts), and neither key-based provider sets one — so running
+   * this unconditionally reported a FAIL on a DeepSeek or Anthropic-key install that was
+   * working. The line still appears, and says where the credential comes from instead.
+   */
+  if (config.llm.provider === 'cli') {
+    try {
+      const dir = claudeConfigDir();
+      const exists = existsSync(dir);
+      add(
+        'llm config dir',
+        exists ? 'PASS' : 'WARN',
+        `${config.llm.provider} · operator "${config.llm.operator ?? '(unset)'}" · ${dir}${exists ? '' : ' (directory missing — sign in there first)'}`
+      );
+    } catch (e) {
+      add('llm config dir', e instanceof OperatorAuthError ? 'FAIL' : 'WARN',
+        e instanceof Error ? e.message.split('\n')[0]! : String(e));
+    }
+  } else {
+    const envVar = config.llm.provider === 'deepseek' ? 'DEEPSEEK_API_KEY' : 'ANTHROPIC_API_KEY';
+    add('llm credential', 'PASS',
+      `${config.llm.provider} · ${process.env[envVar] ? `${envVar} (environment)` : 'the vault, or ' + envVar}` +
+      ' · no Claude config directory is used on this path');
   }
 
   /* ---- browser ----

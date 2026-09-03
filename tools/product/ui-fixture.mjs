@@ -399,6 +399,11 @@ export const SETUP = {
   apiKeyName: 'anthropic_api_key',
   apiKeyStored: false,
   apiKeyFromEnv: false,
+  /* The DeepSeek slot is its own pair of answers, exactly as the server sends them — a fixture
+     that omitted them would let the screen read `undefined` as "no key" and pass either way. */
+  deepseekKeyName: 'deepseek_api_key',
+  deepseekKeyStored: false,
+  deepseekKeyFromEnv: false,
   provider: 'api',
   providerFromEnv: null,
   operators: [

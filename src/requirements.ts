@@ -56,7 +56,7 @@ import { ping } from './db.js';
 import { vaultUnavailableReason } from './vault.js';
 import {
   loadAccounts, selectedAccount, config, NoAccountError, operatorRecord, anthropicKey,
-  operatorSignedIn
+  deepseekKey, operatorSignedIn
 } from './config.js';
 import { isBrowserUp } from './browser.js';
 
@@ -143,6 +143,19 @@ export async function checkRequirements(): Promise<Requirement[]> {
         : unmet('llm', 'Model access', 'blocking',
           'the provider is set to "api" but no API key is stored or set',
           { screen: 'setup', hint: 'Store a key on the Setup screen, or switch the provider to the Claude CLI.' });
+    } else if (config.llm.provider === 'deepseek') {
+      /**
+       * A key, and nothing else. No operator, no CLI, no sign-in — the DeepSeek path never
+       * touches `data/operators/`, so requiring one here would put a red row on an install that
+       * runs perfectly. Whether the key has BALANCE is not knowable without spending: DeepSeek
+       * answers 402 at call time, and this check makes no request.
+       */
+      const key = await deepseekKey().catch(() => '');
+      llm = key
+        ? met('llm', 'Model access', 'blocking', 'a DeepSeek API key is available')
+        : unmet('llm', 'Model access', 'blocking',
+          'the provider is set to "deepseek" but no API key is stored or set',
+          { screen: 'setup', hint: 'Store a DeepSeek key on the Setup screen, or switch the provider to the Claude CLI.' });
     } else {
       /**
        * Three distinct failures, three distinct sentences — never collapsed into one.

@@ -168,7 +168,10 @@ async function open(opts = {}) {
     if (path === '/api/run/log') return json(route, runLog);
     if (path === '/api/run/history') return json(route, RUN_HISTORY);
     if (path === '/api/actions') return json(route, { running: null, actions: [] });
-    if (path === '/api/setup') return json(route, SETUP);
+    /* Overridable, like `opts.ports`: which provider is selected changes which half of step 4
+       is built, and that is a property of the payload, not something the page can be clicked into
+       while the fixture keeps answering with the same static object. */
+    if (path === '/api/setup') return json(route, opts.setup || SETUP);
     if (path === '/api/dependencies') return json(route, DEPENDENCIES);
     if (path === '/api/chrome/profiles') return json(route, CHROME_PROFILES);
     if (path === '/api/ports') return json(route, opts.ports || PORTS);
@@ -1939,6 +1942,121 @@ test('choosing the Claude-login path hides the API key form entirely', async () 
     await untilHit(calls, '/api/llm/provider');
     assert.equal(hit(calls, '/api/llm/provider')[0].body.provider, 'cli');
   } finally { await context.close(); }
+});
+
+test('DeepSeek is offered as a third path, and selecting it is what the server is told', async () => {
+  const { context, page, calls } = await open();
+  try {
+    await tab(page, 'setup');
+    await openStep(page, 'Sign in to the model');
+
+    const options = await page.$$eval(
+      'select[aria-label="How redbot reaches the model"] option', (os) => os.map((o) => o.value));
+    assert.deepEqual(options, ['cli', 'api', 'deepseek'],
+                     'all three providers must be reachable from the picker');
+
+    await page.selectOption('select[aria-label="How redbot reaches the model"]', 'deepseek');
+    await untilHit(calls, '/api/llm/provider');
+    assert.equal(hit(calls, '/api/llm/provider')[0].body.provider, 'deepseek');
+  } finally { await context.close(); }
+});
+
+test('on the DeepSeek path the key form is DeepSeek’s, and the write names that provider', async () => {
+  /**
+   * WHAT THIS CATCHES. The two key forms are one function with different arguments, so the field
+   * that distinguishes them is `provider` in the POST body — and omitting it is not a visible
+   * failure: the server defaults to Anthropic (that default is what keeps the older two-provider
+   * callers working), so a DeepSeek key would be sealed under `anthropic_api_key`, the screen
+   * would say "stored", and the first run would 401 naming the wrong vendor.
+   *
+   * The Anthropic field must also be ABSENT — one form on screen at a time, or a person cannot
+   * tell which vendor they are pasting a key into.
+   */
+  const SECRET = 'sk-deepseek-fixture-not-a-real-key-4242';
+  const { context, page, calls } = await open({
+    setup: { ...SETUP, provider: 'deepseek' }
+  });
+  try {
+    await tab(page, 'setup');
+    await openStep(page, 'Sign in to the model');
+
+    const txt = await page.textContent('#v-setup');
+    assert.match(txt, /DeepSeek API key/);
+    assert.match(txt, /no key stored/, 'an unstored DeepSeek key must be reported as missing');
+    assert.match(txt, /402/, 'the one failure the app cannot check for itself is said on screen');
+
+    assert.equal(await page.$('input[aria-label="Anthropic API key"]'), null,
+                 'the Anthropic form must not be on screen while DeepSeek is selected');
+
+    await page.fill('input[aria-label="DeepSeek API key"]', SECRET);
+    await page.click('text=Store it');
+    await untilHit(calls, '/api/vault/key');
+
+    const put = hit(calls, '/api/vault/key');
+    assert.equal(put.length, 1);
+    assert.equal(put[0].body.value, SECRET, 'the key travels in the POST body');
+    assert.equal(put[0].body.provider, 'deepseek',
+                 'without this the key is filed under the Anthropic name');
+
+    /* Same rule as the Anthropic path: the value must not survive in the DOM. */
+    await until(async () => await page.evaluate(
+      (s) => ![...document.querySelectorAll('input')].some((i) => i.value.includes(s)), SECRET),
+      'the key to be gone from every input on the page');
+    const leaked = await page.evaluate((s) => ({
+      inputs: [...document.querySelectorAll('input')].some((i) => i.value.includes(s)),
+      text: document.body.innerText.includes(s)
+    }), SECRET);
+    assert.equal(leaked.inputs, false);
+    assert.equal(leaked.text, false);
+  } finally { await context.close(); }
+});
+
+test('a key path does not leave the Setup screen demanding a Claude operator forever', async () => {
+  /**
+   * THE DEFECT THIS PINS. Steps 2 and 3 register and select an OPERATOR, which is a Claude login
+   * folder. A DeepSeek install never opens one — src/requirements.ts asks that path for a key and
+   * nothing else — so marking them required meant a fully working install permanently displayed
+   * unfinished required steps with nothing a person could do to clear them.
+   *
+   * Asserted through the step tags rather than an internal flag: "required" is a word on screen.
+   */
+  /**
+   * Read the tag off each step header: `.wiz-title` and `.tag` are siblings inside `.wiz-h`.
+   *
+   * The FIRST version of this walked every node for text starting with the step title and passed
+   * on nothing, because the fixture ships two registered operators and a selected one — so both
+   * steps were `done` and the word "required" was never on screen for EITHER provider. A control
+   * that cannot fail is not a control, which is why this payload has no operators at all: with
+   * `done` false, the tag is exactly the required/optional answer under test.
+   */
+  const tagsFor = async (page) => page.evaluate(() => {
+    const out = {};
+    for (const h of document.querySelectorAll('#v-setup .wiz-h')) {
+      const title = (h.querySelector('.wiz-title')?.textContent || '').trim();
+      const tag = (h.querySelector('.tag')?.textContent || '').trim();
+      if (title.startsWith('Register an operator')) out.register = tag;
+      if (title.startsWith('Choose who pays')) out.pays = tag;
+    }
+    return out;
+  });
+
+  const unset = { operators: [], selectedOperator: null, operatorReady: false };
+
+  const cli = await open({ setup: { ...SETUP, ...unset, provider: 'cli' } });
+  try {
+    await tab(cli.page, 'setup');
+    const t = await tagsFor(cli.page);
+    assert.equal(t.register, 'required', 'the CLI path genuinely needs an operator');
+    assert.equal(t.pays, 'required', 'and needs one selected to bill');
+  } finally { await cli.context.close(); }
+
+  const ds = await open({ setup: { ...SETUP, ...unset, provider: 'deepseek' } });
+  try {
+    await tab(ds.page, 'setup');
+    const t = await tagsFor(ds.page);
+    assert.equal(t.register, 'optional', 'a key path must not demand a Claude login folder');
+    assert.equal(t.pays, 'optional', 'nor a choice of which Claude login is billed');
+  } finally { await ds.context.close(); }
 });
 
 /* ================================================================== *
