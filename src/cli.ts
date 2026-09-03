@@ -138,7 +138,9 @@ Flow:  session/read -> opportunity -> select -> draft -> certify -> reply -> obs
 
 Environment:
   REDBOT_OPERATOR              which operator's Claude credentials to use
+  REDBOT_LLM                   cli (default) | api | deepseek — api and deepseek are METERED
   ANTHROPIC_API_KEY            required when REDBOT_LLM=api
+  DEEPSEEK_API_KEY             required when REDBOT_LLM=deepseek
   REDBOT_SEED                  replay a session's timings
 `;
 

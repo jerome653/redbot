@@ -5560,9 +5560,11 @@ function setup(){
   const depsDone    = DEPS && DEPS.ok && depsMissing===0 && machineOk;
   const hasOperator = (s.operators||[]).length>0;
   const chosen      = !!s.selectedOperator;
-  const modelDone   = s.provider==='api'
-    ? !!(s.apiKeyStored||s.apiKeyFromEnv)
-    : !!s.operatorReady;
+  /* Three providers, three different things "done" means. A stored key is what the two metered
+     paths turn on; the CLI path turns on a signed-in operator, which no key can substitute for. */
+  const modelDone   = s.provider==='api'      ? !!(s.apiKeyStored||s.apiKeyFromEnv)
+                    : s.provider==='deepseek' ? !!(s.deepseekKeyStored||s.deepseekKeyFromEnv)
+                    :                           !!s.operatorReady;
   const sync        = (s.sync&&s.sync.available)?s.sync:null;
   const endpointDone= !!(sync&&sync.url);
   const ingestDone  = !!(sync&&sync.pushToken&&sync.pushToken.present);
@@ -5629,15 +5631,31 @@ function setup(){
   });
 
   /* ============================ 2. register an operator ============================ */
+  /**
+   * REQUIRED ONLY ON THE CLI PATH. An operator IS a Claude login folder — the key providers
+   * never open one (src/requirements.ts asks them for a key and nothing else), so leaving this
+   * required meant a correctly configured DeepSeek or Anthropic-key install permanently read
+   * "2 required steps left" with nothing a person could do about it.
+   *
+   * Still shown, and still works: an operator scopes a stored key too (credentials.ts resolves
+   * operator scope before global), so registering one is useful on every path — just not needed.
+   */
+  const operatorNeeded = s.provider==='cli';
   steps.push({
     title:'Register an operator',
-    sub:'creates the folder that operator’s Claude login lives in',
-    required:true,
+    sub:operatorNeeded?'creates the folder that operator’s Claude login lives in'
+                      :'optional on a key path — an operator scopes a stored key',
+    required:operatorNeeded,
     done:hasOperator,
     build(b){
       b.append(el('div','tiny',
         'Every model call is billed to a Claude login. redbot refuses to use this machine’s '+
         'default login, so it keeps each operator’s login in its own folder.'));
+      if(!operatorNeeded){
+        b.append(el('div','tiny',
+          'This install calls the model with an API key, so no Claude login is needed. Register '+
+          'an operator only if you want two people on this machine to hold different keys.'));
+      }
 
       if((s.operators||[]).length){
         for(const o of s.operators){
@@ -5669,10 +5687,18 @@ function setup(){
   /* ============================ 3. choose who pays ============================ */
   steps.push({
     title:'Choose who pays for the thinking',
-    sub:'registering an operator does not select one',
-    required:true,
+    sub:operatorNeeded?'registering an operator does not select one'
+                      :'optional on a key path — the key owner pays',
+    /* Same reason as step 2: selecting an operator picks which CLAUDE LOGIN is billed, and a key
+       path bills the key instead. See the note above operatorNeeded. */
+    required:operatorNeeded,
     done:chosen,
     build(b){
+      if(!operatorNeeded){
+        b.append(el('div','tiny',
+          'Runs on this install are billed to the API key stored in step 4, not to a Claude '+
+          'login. Selecting an operator here only decides whose stored key is used first.'));
+      }
       if(!(s.operators||[]).length){
         b.append(el('div','tiny','Register an operator in step 2 first.'));
         return;
@@ -5712,7 +5738,9 @@ function setup(){
   /* ============================ 4. how redbot reaches the model ============================ */
   steps.push({
     title:'Sign in to the model',
-    sub:s.provider==='api'?'store an Anthropic API key':'sign in once, in a terminal',
+    sub:s.provider==='api'?'store an Anthropic API key'
+       :s.provider==='deepseek'?'store a DeepSeek API key'
+       :'sign in once, in a terminal',
     required:true,
     done:modelDone,
     build(b){
@@ -5720,48 +5748,85 @@ function setup(){
       const plab=el('span','tiny');plab.textContent='use';
       const psel=el('select','sel');
       psel.setAttribute('aria-label','How redbot reaches the model');
-      [['cli','the signed-in Claude login'],['api','an Anthropic API key']].forEach(([v,l])=>{
+      [['cli','the signed-in Claude login'],
+       ['api','an Anthropic API key'],
+       ['deepseek','a DeepSeek API key']].forEach(([v,l])=>{
         const o=el('option',null,l);o.value=v;if(v===s.provider)o.selected=true;psel.append(o);
       });
       psel.onchange=async()=>{
         const r=await fetch('/api/llm/provider',{method:'POST',headers:{'content-type':'application/json'},
           body:JSON.stringify({provider:psel.value})}).then(x=>x.json());
         if(!r.ok){toast(r.error||'could not change');return}
-        toast('Saved');await again();
+        /* The dependency list changes with the provider — the Claude CLI stops being required on
+           a key path — and step 1 reads a cache the server just cleared. Refetch, or the screen
+           keeps showing the answer for the provider that was selected a moment ago. */
+        toast('Saved');await loadDeps(true);await again();
       };
       prov.append(plab,psel);b.append(prov);
 
-      if(s.provider==='api'){
-        b.append(setupRow(s.apiKeyStored||s.apiKeyFromEnv?'ok':'bad','Anthropic API key',
-          s.apiKeyFromEnv?'set in this console’s environment — that wins over a stored key'
-            :(s.apiKeyStored?`stored, sealed, ending ${(s.secrets.find(x=>x.name===s.apiKeyName)||{}).hint||''}`
-                            :'no key stored — API calls will refuse')));
+      /**
+       * THE TWO KEY PATHS ARE THE SAME SCREEN with a different vendor, so they are one function.
+       * What differs is only: which slot the key goes in, what the placeholder looks like, and
+       * which of the server's two `…KeyStored` / `…KeyFromEnv` answers is being reported.
+       *
+       * `provider` is sent on every write. Omitting it means Anthropic server-side, which is what
+       * the two-provider version did — so an un-passed field here would quietly file a DeepSeek
+       * key under the Anthropic name and produce a 401 naming the wrong vendor.
+       */
+      const keyPanel=(opts)=>{
+        const stored=!!opts.stored, fromEnv=!!opts.fromEnv;
+        b.append(setupRow(stored||fromEnv?'ok':'bad',opts.label,
+          fromEnv?`set in this console’s environment — that wins over a stored key`
+            :(stored?`stored, sealed, ending ${(s.secrets.find(x=>x.name===opts.slotName)||{}).hint||''}`
+                    :'no key stored — API calls will refuse')));
+        if(opts.note)b.append(el('div','tiny',opts.note));
         if(!s.vault.ok){
           b.append(el('div','tiny','The vault must be openable before a key can be stored. '+esc((s.vault.reason||'').split('\n')[0])));
-        }else{
-          const keyRow=ctlRow();
-          const keyIn=setupInput('sk-ant-…','Anthropic API key',{password:true});
-          const keyBtn=actBtn('Store it',async()=>{
-            if(!keyIn.value.trim()){toast('Paste the key first');return}
-            const r=await fetch('/api/vault/key',{method:'POST',headers:{'content-type':'application/json'},
-              body:JSON.stringify({value:keyIn.value})}).then(x=>x.json());
-            /* Cleared whatever the answer: a key must not sit in a form field afterwards. */
-            keyIn.value='';
-            if(!r.ok){toast(r.error||'could not store');return}
-            toast(`Stored — ends ${r.hint}`);await again();
-          });
-          keyRow.append(keyIn,keyBtn);
-          if(s.apiKeyStored){
-            keyRow.append(actBtn('Remove stored key',async()=>{
-              const r=await fetch('/api/vault/key/remove',{method:'POST',headers:{'content-type':'application/json'},
-                body:JSON.stringify({})}).then(x=>x.json());
-              if(!r.ok){toast(r.error||'could not remove');return}
-              toast('Removed');await again();
-            },'danger'));
-          }
-          b.append(keyRow);
-          b.append(el('div','tiny','The key is sealed with AES-256-GCM before it reaches the database, and is never shown again — only the last four characters.'));
+          return;
         }
+        const keyRow=ctlRow();
+        const keyIn=setupInput(opts.placeholder,opts.label,{password:true});
+        const keyBtn=actBtn('Store it',async()=>{
+          if(!keyIn.value.trim()){toast('Paste the key first');return}
+          const r=await fetch('/api/vault/key',{method:'POST',headers:{'content-type':'application/json'},
+            body:JSON.stringify({value:keyIn.value,provider:opts.provider})}).then(x=>x.json());
+          /* Cleared whatever the answer: a key must not sit in a form field afterwards. */
+          keyIn.value='';
+          if(!r.ok){toast(r.error||'could not store');return}
+          toast(`Stored — ends ${r.hint}`);await again();
+        });
+        keyRow.append(keyIn,keyBtn);
+        if(stored){
+          keyRow.append(actBtn('Remove stored key',async()=>{
+            const r=await fetch('/api/vault/key/remove',{method:'POST',headers:{'content-type':'application/json'},
+              body:JSON.stringify({provider:opts.provider})}).then(x=>x.json());
+            if(!r.ok){toast(r.error||'could not remove');return}
+            toast('Removed');await again();
+          },'danger'));
+        }
+        b.append(keyRow);
+        b.append(el('div','tiny','The key is sealed with AES-256-GCM before it reaches the database, and is never shown again — only the last four characters.'));
+      };
+
+      if(s.provider==='api'){
+        keyPanel({
+          provider:'api', label:'Anthropic API key', placeholder:'sk-ant-…',
+          slotName:s.apiKeyName, stored:s.apiKeyStored, fromEnv:s.apiKeyFromEnv
+        });
+        return;
+      }
+
+      if(s.provider==='deepseek'){
+        keyPanel({
+          provider:'deepseek', label:'DeepSeek API key', placeholder:'sk-…',
+          slotName:s.deepseekKeyName, stored:s.deepseekKeyStored, fromEnv:s.deepseekKeyFromEnv,
+          /* Said on the screen because it is not recoverable from the app: DeepSeek answers
+             HTTP 402 when the account behind the key is out of funds, and no check here can
+             see that without spending. */
+          note:'This path is billed per call to whoever owns the key. A DeepSeek account with no '+
+               'balance answers every call with HTTP 402 — nothing is generated and nothing is '+
+               'charged, and redbot reports it in those words.'
+        });
         return;
       }
 

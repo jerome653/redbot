@@ -10,6 +10,16 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(HERE, '..');
 
 /**
+ * Which path a model call takes.
+ *
+ * 'cli' is the only one that spends nothing per call — it runs against an operator's existing
+ * Claude subscription. 'api' and 'deepseek' are METERED: every call is billed to whoever owns
+ * the key. Nothing selects them on its own; both require an explicit REDBOT_LLM or an explicit
+ * choice on the Setup screen.
+ */
+export type LlmProvider = 'cli' | 'api' | 'deepseek';
+
+/**
  * Where working state lives.
  *
  * `REDBOT_DATA` exists so a test can point the job store, the account directories and the logs
@@ -339,12 +349,19 @@ export const config = {
   aiDisclosureLine: 'Disclosure: this reply was drafted with AI assistance and reviewed by a person before posting.',
 
   /**
-   * 'cli' shells out to Claude Code (uses the operator's existing subscription, no key).
-   * 'api' uses the Anthropic API and needs ANTHROPIC_API_KEY.
-   * Override with REDBOT_LLM=api
+   * 'cli'      shells out to Claude Code (uses the operator's existing subscription, no key).
+   * 'api'      uses the Anthropic API and needs ANTHROPIC_API_KEY.
+   * 'deepseek' uses the DeepSeek API and needs DEEPSEEK_API_KEY.
+   * Override with REDBOT_LLM=api or REDBOT_LLM=deepseek
+   *
+   * An unrecognised REDBOT_LLM resolves to 'cli' rather than throwing — the same fail-to-the-
+   * subscription-path rule the two-provider version had, so a typo cannot silently start
+   * billing a metered vendor.
    */
   llm: {
-    provider: (process.env.REDBOT_LLM === 'api' ? 'api' : 'cli') as 'cli' | 'api',
+    provider: (process.env.REDBOT_LLM === 'api' ? 'api'
+      : process.env.REDBOT_LLM === 'deepseek' ? 'deepseek'
+      : 'cli') as LlmProvider,
     cliBin: process.env.REDBOT_CLAUDE_BIN ?? 'claude',
     cliTimeoutMs: 180_000,
 
@@ -383,8 +400,38 @@ export const config = {
 
     apiUrl: 'https://api.anthropic.com/v1/messages',
     version: '2023-06-01',
-    analyzeModel: 'claude-haiku-4-5-20251001',
-    draftModel: 'claude-sonnet-5',
+
+    /**
+     * DeepSeek, per https://api-docs.deepseek.com (read 2026-09-03).
+     *
+     * Base `https://api.deepseek.com`, endpoint `/chat/completions`, `Authorization: Bearer`,
+     * OpenAI-shaped body and response. A DIFFERENT WIRE FORMAT from Anthropic's, not a different
+     * host — which is why src/llm.ts has a third function rather than a second base URL.
+     */
+    deepseekUrl: 'https://api.deepseek.com/chat/completions',
+    deepseekAnalyzeModel: 'deepseek-v4-flash',
+    deepseekDraftModel: 'deepseek-v4-pro',
+
+    anthropicAnalyzeModel: 'claude-haiku-4-5-20251001',
+    anthropicDraftModel: 'claude-sonnet-5',
+
+    /**
+     * The model id every caller asks for, resolved for the SELECTED provider.
+     *
+     * Getters rather than constants because a model id is only meaningful to the endpoint it is
+     * sent to: posting `claude-haiku-4-5-20251001` to DeepSeek is a 400, and the reverse is too.
+     * Resolving here means `src/argus/pipeline.ts` records the model that actually served the
+     * call instead of the one a two-provider build assumed.
+     *
+     * The CLI path takes the Anthropic ids — `claude -p --model` is Claude either way.
+     */
+    get analyzeModel(): string {
+      return this.provider === 'deepseek' ? this.deepseekAnalyzeModel : this.anthropicAnalyzeModel;
+    },
+    get draftModel(): string {
+      return this.provider === 'deepseek' ? this.deepseekDraftModel : this.anthropicDraftModel;
+    },
+
     /** threads scored per CLI call — a call costs ~28 s, so batching is what makes this usable */
     analyzeBatchSize: 8,
     maxRetries: 3
@@ -663,7 +710,9 @@ export function claudeConfigDir(): string {
       'Then sign in once as that operator (opens Claude, run /login inside it):\n' +
       `  PowerShell:  $env:CLAUDE_CONFIG_DIR = "${join(DATA, 'operators', '<yourname>', 'claude')}"; claude\n` +
       `  bash:        CLAUDE_CONFIG_DIR="${join(DATA, 'operators', '<yourname>', 'claude')}" claude\n\n` +
-      'Or use the API instead:  REDBOT_LLM=api with ANTHROPIC_API_KEY.'
+      'Or use a key instead — both are METERED, and neither needs an operator:\n' +
+      '  REDBOT_LLM=api       with ANTHROPIC_API_KEY\n' +
+      '  REDBOT_LLM=deepseek  with DEEPSEEK_API_KEY'
     );
   }
 
@@ -717,6 +766,41 @@ export async function anthropicKey(): Promise<string> {
     'ANTHROPIC_API_KEY is not set.\n' +
     '  PowerShell:  $env:ANTHROPIC_API_KEY = "sk-ant-..."\n' +
     '  bash:        export ANTHROPIC_API_KEY=sk-ant-...' +
+    vaultNote
+  );
+}
+
+/**
+ * The DeepSeek API key: the environment first, then the vault.
+ *
+ * Same resolution order and the same three-way outcome as `anthropicKey()` — a stored key, a
+ * vault that cannot be opened (throws, and says so), or nothing set at all. Deliberately a
+ * SEPARATE credential name from the Anthropic one: they are different vendors with different
+ * balances, and one key standing in for the other would be a 401 whose message named the wrong
+ * account.
+ */
+export async function deepseekKey(): Promise<string> {
+  const fromEnv = process.env.DEEPSEEK_API_KEY;
+  if (fromEnv) return fromEnv;
+
+  const { deepseekKeyFromVault, vaultUnavailableReason } = await import('./credentials.js');
+  try {
+    const stored = await deepseekKeyFromVault(config.llm.operator);
+    if (stored) return stored;
+  } catch (e) {
+    throw new Error(
+      `DEEPSEEK_API_KEY is not in the environment, and the vault could not be read:\n  ${
+        e instanceof Error ? e.message : String(e)}`
+    );
+  }
+
+  const vaultNote = vaultUnavailableReason()
+    ? '\nThe vault is not available either: ' + vaultUnavailableReason()
+    : '\nOr store it once in the vault:  redbot vault set deepseek_api_key';
+  throw new Error(
+    'DEEPSEEK_API_KEY is not set.\n' +
+    '  PowerShell:  $env:DEEPSEEK_API_KEY = "sk-..."\n' +
+    '  bash:        export DEEPSEEK_API_KEY=sk-...' +
     vaultNote
   );
 }

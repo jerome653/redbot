@@ -128,8 +128,20 @@ claude
 
 Claude opens — type `/login`, sign in, close it. Stored for next time.
 
-*(Prefer a paid API key instead? Set `REDBOT_LLM=api` and `ANTHROPIC_API_KEY` and skip this.
-Use a fresh key — not the one found inside the Appilot APK, which should be revoked.)*
+*(Prefer a paid API key instead? Skip this step and pick one of two key paths. Both are
+**metered** — every call is billed to whoever owns the key — and neither needs an operator:*
+
+| `REDBOT_LLM` | key | models |
+|---|---|---|
+| `api` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5-20251001` · `claude-sonnet-5` |
+| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` · `deepseek-v4-pro` |
+
+*Either can also be set on the Settings screen — step 4, "Sign in to the model" — which stores
+the key sealed in the vault instead of in the environment. Use a fresh key — not the one found
+inside the Appilot APK, which should be revoked.)*
+
+A DeepSeek account with no balance answers `HTTP 402`: redbot reports it as insufficient
+balance and stops, rather than retrying. Nothing is generated and nothing is charged.
 
 ### 3. Build
 

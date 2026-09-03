@@ -40,6 +40,9 @@ import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { existsSync as fsExists, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+/* Type only — erased at compile. This module keeps taking every input by injection; it borrows
+   the union so a new provider cannot be added in config.ts without this file being told. */
+import type { LlmProvider } from './config.js';
 
 /**
  * The Node floor, mirroring `engines.node` in package.json.
@@ -130,7 +133,7 @@ export interface DependencyOptions {
   env?: NodeJS.ProcessEnv;
   nodeVersion?: string;
   /** Which model path is configured — the Claude CLI is only required for `cli`. */
-  provider?: 'cli' | 'api';
+  provider?: LlmProvider;
   exists?: (p: string) => boolean;
   /** Module resolution, so a test can simulate playwright being absent. */
   resolveModule?: (m: string) => string;

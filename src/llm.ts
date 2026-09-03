@@ -1,21 +1,28 @@
 /**
  * LLM access.
  *
- * Two providers, chosen by config.llm.provider:
+ * Three providers, chosen by config.llm.provider:
  *
  *   'cli' (default) — shells out to the Claude Code CLI in print mode. Uses the operator's
  *                     existing Claude subscription. No API key, no per-token billing.
  *                     Measured 2026-07-22: ~28 s per call, which is why analyze batches.
  *   'api'           — Anthropic Messages API. Needs ANTHROPIC_API_KEY. Faster per call.
+ *   'deepseek'      — DeepSeek chat-completions API. Needs DEEPSEEK_API_KEY.
  *
- * Neither ever writes a credential to disk.
+ * The last two are METERED — every call is billed to the key's owner. Neither they nor the CLI
+ * path ever writes a credential to disk.
+ *
+ * 'api' and 'deepseek' are two different WIRE FORMATS, not two hosts. Anthropic takes
+ * `x-api-key` + `anthropic-version` and answers with `content[]` blocks; DeepSeek takes
+ * `Authorization: Bearer` and answers with `choices[].message` (OpenAI shape). That is why
+ * there are two functions below and not one with a swapped base URL.
  */
 import { spawn } from 'node:child_process';
 import { mkdirSync, existsSync } from 'node:fs';
 import { delimiter as pathDelimiter, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
-import { config, anthropicKey, claudeConfigDir, operatorRecord } from './config.js';
+import { config, anthropicKey, deepseekKey, claudeConfigDir, operatorRecord } from './config.js';
 import { say } from './log.js';
 
 /** One announcement per process for a declared credential location. */
@@ -288,6 +295,95 @@ async function completeViaApi(opts: CompleteOpts): Promise<string> {
   throw lastError ?? new LlmError('exhausted retries');
 }
 
+/* ------------------------------------------------------------------ *
+ * Provider: DeepSeek API
+ * ------------------------------------------------------------------ */
+/**
+ * DeepSeek chat completions, per https://api-docs.deepseek.com (read 2026-09-03).
+ *
+ * THREE THINGS DIFFER FROM `completeViaApi`, and each is a documented property of the endpoint
+ * rather than a preference:
+ *
+ * 1. THE ANSWER IS `choices[0].message.content`. Reading `content[]` — the Anthropic shape —
+ *    yields undefined here, and `extractJson` would then throw "no JSON value in model
+ *    response" on every single call while the request itself succeeded.
+ *
+ * 2. `message.reasoning_content` IS NOT PART OF THE ANSWER. It is a separate nullable field
+ *    carrying chain-of-thought. Concatenating it would put unstructured prose in front of the
+ *    JSON every analyze/gap caller parses, and its braces would be picked up by `extractJson`'s
+ *    brace matcher before the real object started. Read `content`, and only `content`.
+ *
+ * 3. 402 "Insufficient Balance" IS A DOCUMENTED STATUS with no equivalent on the Anthropic path.
+ *    It is terminal — a retry cannot add funds — so it is thrown immediately, and the message
+ *    says what it is instead of surfacing as a bare `request failed 402`.
+ *
+ * The retry envelope is otherwise `completeViaApi`'s: 429 and 5xx back off and retry (503
+ * "Server Overloaded" lands in that range), everything else is thrown on the first answer.
+ */
+async function completeViaDeepseek(opts: CompleteOpts): Promise<string> {
+  const key = await deepseekKey();
+  const { prompt, model, maxTokens = 1600, temperature = 0.4 } = opts;
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= config.llm.maxRetries; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(config.llm.deepseekUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${key}`
+        },
+        body: JSON.stringify({
+          model, max_tokens: maxTokens, temperature, stream: false,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+    } catch (e) {
+      lastError = new LlmError(`network error: ${e instanceof Error ? e.message : String(e)}`);
+      await sleep(600 * attempt);
+      continue;
+    }
+
+    /* Terminal, and checked BEFORE the retry branch: 402 is not in the 5xx range today, but
+       putting it first means it stays terminal if that ever changes. */
+    if (res.status === 402) {
+      throw new LlmError(
+        'DeepSeek refused the call: insufficient balance on the account that owns this key ' +
+        '(HTTP 402). Nothing was generated and nothing was charged. Top the account up, or ' +
+        'switch the provider back to the Claude login on the Setup screen.',
+        402
+      );
+    }
+    if (res.status === 401) {
+      throw new LlmError(
+        'DeepSeek rejected the API key (HTTP 401). Check DEEPSEEK_API_KEY, or the key stored ' +
+        'on the Setup screen — an Anthropic key will not work here.',
+        401
+      );
+    }
+
+    if (res.status === 429 || res.status >= 500) {
+      lastError = new LlmError(`upstream ${res.status}`, res.status);
+      const retryAfter = Number(res.headers.get('retry-after')) * 1000;
+      await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 900 * attempt);
+      continue;
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new LlmError(`request failed ${res.status}: ${text.slice(0, 300)}`, res.status);
+    }
+
+    const json = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string | null; reasoning_content?: string | null } }>;
+    };
+    const out = (json.choices?.[0]?.message?.content ?? '').trim();
+    if (!out) throw new LlmError('empty completion');
+    return out;
+  }
+  throw lastError ?? new LlmError('exhausted retries');
+}
+
 /**
  * True once we have warned that a determinism request cannot be honoured on the CLI provider.
  * One warning per process is enough; a per-call warning would bury the pipeline output.
@@ -304,7 +400,7 @@ export async function complete(opts: CompleteOpts): Promise<string> {
    * deterministic; we can refuse to imply it is. Say so once, and point at the provider that can.
    */
   if (
-    config.llm.provider !== 'api' &&
+    config.llm.provider === 'cli' &&
     typeof opts.temperature === 'number' &&
     opts.temperature === 0 &&
     !warnedNonDeterministic
@@ -316,7 +412,15 @@ export async function complete(opts: CompleteOpts): Promise<string> {
       'ANTHROPIC_API_KEY for a deterministic run.'
     );
   }
-  return config.llm.provider === 'api' ? completeViaApi(opts) : completeViaCli(opts);
+  /**
+   * The condition above was `provider !== 'api'`, which was the same set as `=== 'cli'` while
+   * there were two providers. It is not any more: DeepSeek takes a `temperature` and sends it
+   * on the wire (see `completeViaDeepseek`), so the old form would have warned that a pass was
+   * not reproducible on the one new path where the value IS honoured.
+   */
+  if (config.llm.provider === 'api') return completeViaApi(opts);
+  if (config.llm.provider === 'deepseek') return completeViaDeepseek(opts);
+  return completeViaCli(opts);
 }
 
 /** Pull the first JSON value (object or array) out of a possibly-fenced response. */

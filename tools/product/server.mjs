@@ -1498,14 +1498,19 @@ const operatorsPath = join(DATA, 'operators', 'operators.json');
 let selectedOperator = process.env.REDBOT_OPERATOR || configApi.storedOperatorSelection();
 
 /**
- * Which LLM path a run takes: this machine's Claude login ('cli') or a stored API key ('api').
+ * Which LLM path a run takes: this machine's Claude login ('cli'), a stored Anthropic key
+ * ('api'), or a stored DeepSeek key ('deepseek').
  *
  * Starts from REDBOT_LLM so a shell that already chose keeps working with no click — the same
  * rule as `selectedOperator`. Forwarded to every child rather than mutated into this process's
  * own environment: a running child cannot be re-pointed, and pretending otherwise would make
  * the screen disagree with the run.
+ *
+ * An unrecognised value falls to 'cli', matching src/config.ts — the two must not disagree, or
+ * the screen would name one provider while the child ran another.
  */
-let selectedProvider = process.env.REDBOT_LLM === 'api' ? 'api' : 'cli';
+const PROVIDERS = ['cli', 'api', 'deepseek'];
+let selectedProvider = PROVIDERS.includes(process.env.REDBOT_LLM) ? process.env.REDBOT_LLM : 'cli';
 
 /** Last answer from the update check, so the page asking on every load costs one request a day. */
 /** Last dependency scan. Locating executables spawns processes; see the /api/dependencies route. */
@@ -1516,6 +1521,23 @@ let updateCache = { at: 0, value: null };
 /** Last dashboard reachability answer. Short-lived: it is a liveness reading, not a fact. */
 let syncHealthCache = { at: 0, value: null };
 const llmProvider = () => selectedProvider;
+
+/**
+ * Which vault slot a key-storing request means.
+ *
+ * OMITTED MEANS ANTHROPIC, so every caller written against the two-provider route keeps working
+ * unchanged — the field is additive. An unrecognised value returns null and the route answers
+ * 400: writing a DeepSeek key into the Anthropic slot because a spelling was off would be a
+ * silent credential mix-up, and the 401 it caused would name the wrong vendor.
+ *
+ * 'cli' is not a slot — that path holds no key at all.
+ */
+function keySlot(provider) {
+  const want = provider === undefined || provider === null ? 'api' : String(provider);
+  if (want === 'api') return vaultApi ? vaultApi.ANTHROPIC_API_KEY : 'anthropic_api_key';
+  if (want === 'deepseek') return vaultApi ? vaultApi.DEEPSEEK_API_KEY : 'deepseek_api_key';
+  return null;
+}
 
 function readOperators() {
   let all;
@@ -1658,6 +1680,7 @@ async function setupStatus() {
 
   const operators = readOperators();
   const apiKeyName = vaultApi ? vaultApi.ANTHROPIC_API_KEY : 'anthropic_api_key';
+  const deepseekKeyName = vaultApi ? vaultApi.DEEPSEEK_API_KEY : 'deepseek_api_key';
 
   /**
    * The shared requirement set — the thing the first-boot gate turns on.
@@ -1696,17 +1719,24 @@ async function setupStatus() {
       pendingMigrations: (dbHealth && dbHealth.pendingMigrations) || []
     },
     vault: { ok: !vaultReason, reason: vaultReason, keyId: fingerprint },
-    secrets, secretsError, apiKeyName,
+    secrets, secretsError, apiKeyName, deepseekKeyName,
     /* Whether a key is on file at all — the one fact the "which provider" choice turns on. */
     apiKeyStored: secrets.some((s) => s.name === apiKeyName),
+    /* The same fact for the DeepSeek path. Separate slot, separate answer: a stored Anthropic
+       key says nothing about whether a DeepSeek call can be made. */
+    deepseekKeyStored: secrets.some((s) => s.name === deepseekKeyName),
     /* Whether a Webshare key is stored — the one fact the OPTIONAL exit-autofill step turns on.
        A boolean, never the value: the key is used only server-side by /api/webshare/proxies. */
     webshareKeyStored: secrets.some((s) => s.name === (vaultApi ? vaultApi.WEBSHARE_API_KEY : 'webshare_api_key')),
     /* The environment's key wins over the vault (src/config.ts anthropicKey), so say when one
        is set — otherwise storing a vault key and seeing no change is baffling. */
     apiKeyFromEnv: Boolean(process.env.ANTHROPIC_API_KEY),
+    /* Same rule for DeepSeek: src/config.ts deepseekKey() reads the environment before the
+       vault, so a set variable overrides a stored key and the screen has to say so. */
+    deepseekKeyFromEnv: Boolean(process.env.DEEPSEEK_API_KEY),
     provider: llmProvider(),
-    providerFromEnv: process.env.REDBOT_LLM === 'api' ? 'api' : null,
+    providerFromEnv: PROVIDERS.includes(process.env.REDBOT_LLM) && process.env.REDBOT_LLM !== 'cli'
+      ? process.env.REDBOT_LLM : null,
     /**
      * Dashboard sync, reported the same way secrets always are here: whether a token EXISTS and
      * its last four characters, never the value. `installId` is not a secret — it is the
@@ -2622,10 +2652,14 @@ const server = createServer((req, res) => {
 
       if (url.pathname === '/api/llm/provider') {
         const want = String(body.provider || '');
-        if (want !== 'cli' && want !== 'api') {
-          return send(400, JSON.stringify({ ok: false, error: 'provider must be "cli" or "api"' }));
+        if (!PROVIDERS.includes(want)) {
+          return send(400, JSON.stringify({ ok: false, error: 'provider must be "cli", "api" or "deepseek"' }));
         }
         selectedProvider = want;
+        /* The dependency answer is provider-dependent (the Claude CLI row) and is cached for
+           two minutes. Without this, switching to a key path left step 1 red for that long —
+           the same staleness the `provider: llmProvider()` fix above was about. */
+        depsCache = { at: 0, value: null };
         return send(200, JSON.stringify({ ok: true, provider: selectedProvider }));
       }
 
@@ -2650,9 +2684,12 @@ const server = createServer((req, res) => {
         // A sanity ceiling, not a format rule: redbot does not get to decide what a key looks like.
         if (value.length > 4096) return send(400, JSON.stringify({ ok: false, error: 'that is too long to be an API key' }));
 
+        const slot = keySlot(body.provider);
+        if (!slot) return send(400, JSON.stringify({ ok: false, error: 'provider must be "api" or "deepseek"' }));
+
         try {
           const scope = body.scope ? String(body.scope) : undefined;
-          await vaultApi.putSecret(vaultApi.ANTHROPIC_API_KEY, value, scope);
+          await vaultApi.putSecret(slot, value, scope);
           return send(200, JSON.stringify({ ok: true, hint: value.slice(-4), scope: scope || 'global' }));
         } catch (e) {
           // The message names the problem, never the value — same rule as src/vault.ts.
@@ -2897,9 +2934,11 @@ const server = createServer((req, res) => {
 
       if (url.pathname === '/api/vault/key/remove') {
         if (!vaultApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing — run npm run build' }));
+        const slot = keySlot(body.provider);
+        if (!slot) return send(400, JSON.stringify({ ok: false, error: 'provider must be "api" or "deepseek"' }));
         try {
           const scope = body.scope ? String(body.scope) : undefined;
-          const removed = await vaultApi.removeSecret(vaultApi.ANTHROPIC_API_KEY, scope);
+          const removed = await vaultApi.removeSecret(slot, scope);
           return send(200, JSON.stringify({ ok: true, removed }));
         } catch (e) {
           return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
@@ -3738,8 +3777,16 @@ const server = createServer((req, res) => {
        async. The same reason /api/update gives, and the same SyntaxError if it is forgotten. */
     Promise.resolve()
       .then(() => dependenciesApi.checkDependencies({
-        /* The Claude CLI is only required on the CLI path, so the check has to know which is set. */
-        provider: configApi && configApi.config ? configApi.config.llm.provider : 'cli'
+        /**
+         * The Claude CLI is only required on the CLI path, so the check has to know which is set.
+         *
+         * `llmProvider()`, NOT `configApi.config.llm.provider`. The latter is this server
+         * process's own REDBOT_LLM, read once at module load — so switching the provider on the
+         * Setup screen left step 1 still demanding the Claude CLI, and an install with a key and
+         * no CLI stayed red until the app was restarted. The picker is what the runs use
+         * (`env.REDBOT_LLM = selectedProvider`), so it is what the check must read.
+         */
+        provider: llmProvider()
       }))
       .then((dependencies) => {
         const v = {
