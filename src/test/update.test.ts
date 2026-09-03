@@ -186,7 +186,20 @@ test('checkForUpdate carries the platform through to the asset choice', async ()
 });
 
 test('a newer release is reported as newer', async () => {
-  const r = await checkForUpdate({ current: '0.1.0', fetchImpl: respond(200, [release('v0.2.0')]) });
+  /**
+   * `platform` IS NAMED HERE, and the omission was caught by running this suite on Linux.
+   *
+   * The fixture release carries one asset, a .exe. Without the argument this fell through to
+   * `process.platform` — win32 on the development machine and on the windows-latest runner, so
+   * green in both — and on an actual Linux box `download` is correctly undefined, because there
+   * is no Linux asset in that release. The CODE was right; the assertion was making a
+   * Windows-only claim without saying so. Measured on cardinal: 18 passed, this one failed.
+   *
+   * The rest of the assertions are platform-independent and are what this test is named for.
+   */
+  const r = await checkForUpdate({
+    current: '0.1.0', fetchImpl: respond(200, [release('v0.2.0')]), platform: 'win32'
+  });
   assert.equal(r.ok, true);
   assert.equal(r.ok && r.newer, true);
   assert.equal(r.ok && r.latest, 'v0.2.0');
