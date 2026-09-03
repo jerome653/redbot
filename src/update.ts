@@ -81,7 +81,8 @@ export interface ReleaseInfo {
   url: string;
   publishedAt: string;
   prerelease: boolean;
-  /** The Windows installer, when the release has one. Null is normal, not an error. */
+  /** The asset THIS platform can install, when the release carries one. Null is normal,
+   *  not an error: a release with no build for this platform has nothing to offer here. */
   download: { name: string; url: string; size: number } | null;
 }
 
@@ -115,6 +116,25 @@ interface RawRelease {
 }
 
 /**
+ * Which asset in a release is the one THIS machine could install.
+ *
+ * The filter used to be `/\.exe$/i` unconditionally, with a comment reasoning that Windows is the
+ * only platform the app packages for. The packaging is a fact about the BUILD; the platform the
+ * check runs on is not the same fact, and conflating them meant a Linux console offered
+ * `redbot-Setup-3.5.1.exe` under a button that says "Download the installer" — a file that cannot
+ * be run on the machine being told to run it.
+ *
+ * A platform with no matching asset resolves to no download at all, and the card falls back to the
+ * release page. That is the honest answer, and it is the answer Linux gets until a release
+ * actually carries an AppImage (electron-builder.yml `linux:`).
+ */
+const ASSET_FOR_PLATFORM: Record<string, RegExp> = {
+  win32: /\.exe$/i,
+  linux: /\.AppImage$/i,
+  darwin: /\.dmg$/i
+};
+
+/**
  * The newest usable release in a GitHub `/releases` payload.
  *
  * `/releases/latest` is NOT used, and that is measured rather than assumed: against this
@@ -125,7 +145,7 @@ interface RawRelease {
  * Ordered by VERSION, not by publish date — a hotfix to an older line can be published after a
  * newer release, and date order would then offer a downgrade.
  */
-export function pickLatest(payload: unknown): ReleaseInfo | null {
+export function pickLatest(payload: unknown, platform: string = process.platform): ReleaseInfo | null {
   if (!Array.isArray(payload)) return null;
   const usable = (payload as RawRelease[])
     .filter((r) => r && r.draft !== true && typeof r.tag_name === 'string')
@@ -136,11 +156,14 @@ export function pickLatest(payload: unknown): ReleaseInfo | null {
   usable.sort((a, b) => (isNewer(a.v, b.v) ? -1 : isNewer(b.v, a.v) ? 1 : 0));
   const best = usable[0]!.raw;
 
-  /* Windows is the only platform this app packages for (src/ports.ts is win32-only), so the
-     installer is the only asset worth offering. Anything else is left for the release page. */
-  const asset = (best.assets ?? []).find(
-    (a) => typeof a?.name === 'string' && /\.exe$/i.test(a.name as string)
-      && typeof a.browser_download_url === 'string');
+  /* The asset this platform can actually run. An unknown platform matches nothing rather than
+     falling back to the Windows installer — see ASSET_FOR_PLATFORM. */
+  const wanted = ASSET_FOR_PLATFORM[platform];
+  const asset = wanted
+    ? (best.assets ?? []).find(
+      (a) => typeof a?.name === 'string' && wanted.test(a.name as string)
+        && typeof a.browser_download_url === 'string')
+    : undefined;
 
   const releasesPage = `https://github.com/${UPDATE_REPO}/releases`;
   const downloadUrl = asset ? safeUrl(asset.browser_download_url, '') : '';
@@ -168,10 +191,13 @@ export function pickLatest(payload: unknown): ReleaseInfo | null {
  *
  * `fetchImpl` and `current` are injectable so the tests can drive every branch — a newer release,
  * the same one, a rate-limited response, a socket that never answers — without a network.
+ * `platform` joins them for the same reason: which asset is offered depends on it, and that has
+ * to be provable from one machine.
  */
 export async function checkForUpdate(opts: {
   fetchImpl?: typeof fetch;
   current?: string;
+  platform?: string;
   timeoutMs?: number;
 } = {}): Promise<UpdateResult> {
   const current = opts.current ?? currentVersion();
@@ -204,7 +230,7 @@ export async function checkForUpdate(opts: {
     };
   }
 
-  const release = pickLatest(payload);
+  const release = pickLatest(payload, opts.platform ?? process.platform);
   if (!release) return { ok: true, current, latest: current, newer: false, release: null };
 
   const there = parseVersion(release.tag)!;

@@ -5191,6 +5191,10 @@ function paintUpdates(){
   else if(s.phase==='ready')say('<strong>redbot '+esc(s.latest||'')+' is ready to install.</strong>');
   else if(s.phase==='installing')say('<strong>Installing.</strong> redbot will close and reopen on its own — do not start it again by hand.');
   else if(s.phase==='error')say('<span class="tag no">could not check</span> '+esc(s.reason||'unknown'));
+  /* Its own arm for the same reason the button handler has one: without it this landed on
+     "Not checked yet." — which is at least not a false all-clear, but says nothing a person can
+     act on. The reason names the cause and what to do instead. */
+  else if(s.phase==='unavailable')say('<span class="tag no">cannot self-update</span> '+esc(s.reason||''));
   else if(s.newer)say('<strong>redbot '+esc(s.latest||'')+' is available.</strong>');
   else if(s.phase==='none')say('This is the newest release.');
   else say('Not checked yet.');
@@ -6671,6 +6675,19 @@ $('#updateBtn').onclick=async()=>{
     const st=await refreshUpdates(true);
     await updateCheck(true);
     if(st&&st.phase==='error'){ toast(st.reason||'the update check could not run'); }
+    /**
+     * `unavailable` MUST BE ITS OWN ARM, and this is the line the whole Linux fix turns on.
+     *
+     * It is not an error — nothing failed — so it does not belong in the arm above. But it is
+     * emphatically not "you are on the latest" either, and without this branch it fell through
+     * to the final `else` and said exactly that. electron-updater resolves `checkForUpdates()`
+     * with null on an installation whose updater is inactive (AppUpdater.js:253), which on Linux
+     * is every run not started from an AppImage — so the machine that could not update itself
+     * gave the most reassuring answer on the screen. See electron/updater.mjs `inactive()`.
+     */
+    else if(st&&st.phase==='unavailable'){
+      toast(st.reason||'this installation cannot update itself in place');
+    }
     else if(st&&(st.newer||st.phase==='available')){
       toast(`redbot ${st.latest||'(newer)'} is available — the bar at the top can install it.`);
       scrollTo({top:0,behavior:'instant'});

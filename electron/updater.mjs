@@ -79,6 +79,24 @@ export function explainError(e) {
   if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|net::/i.test(code + msg)) {
     return 'could not reach the update server';
   }
+  /**
+   * The two Linux-specific throws, named because their raw text sends people the wrong way.
+   *
+   * `ERR_UPDATER_OLD_FILE_NOT_FOUND` is thrown by `AppImageUpdater.js:40` when `APPIMAGE` is unset
+   * at DOWNLOAD time — it needs the path of the running AppImage to replace. Its message is
+   * literally "APPIMAGE env is not defined", which reads like a missing environment variable to
+   * set rather than what it is: the app was not started from an AppImage.
+   */
+  if (/ERR_UPDATER_OLD_FILE_NOT_FOUND/.test(code + msg) || /APPIMAGE env is not defined/i.test(msg)) {
+    return 'in-place update needs the AppImage build — this process did not start from one. '
+      + 'Download the new AppImage from the release page.';
+  }
+  /* `findFile` (Provider.js) throws this when the feed has no asset of the required extension —
+     on Linux, a release built before the `linux:` target existed. */
+  if (/cannot find .*\.AppImage|no files provided/i.test(msg)) {
+    return 'this release has no Linux AppImage to update to — download it from the release page, '
+      + 'or publish a release built with the linux target';
+  }
   if (/status code 404/i.test(msg)) return 'the update feed was not found (404)';
   if (/status code 403|rate limit/i.test(msg)) return 'the update server refused the request (403 — possibly rate-limited)';
   return msg;
@@ -138,7 +156,16 @@ export function createUpdater({
    * An update is never urgent enough to risk that. Default is "always idle" so a caller that does
    * not pass this keeps the old behaviour rather than silently refusing to update.
    */
-  isBusy = async () => null
+  isBusy = async () => null,
+  /**
+   * The platform and environment the inactive-updater reason is read off.
+   *
+   * Injected for the same reason everything else here is: the branch that matters most is the
+   * LINUX one, and it has to be provable from a Windows test run. Defaults to the real values, so
+   * production behaviour is unchanged by their presence.
+   */
+  platform = process.platform,
+  env = process.env
 } = {}) {
   /**
    * One state object, pushed whole on every change.
@@ -264,6 +291,59 @@ export function createUpdater({
   }
 
   /**
+   * WHY A NULL FROM `checkForUpdates()` IS NOT "YOU ARE UP TO DATE".
+   *
+   * Read from electron-updater 6.8.9, `AppUpdater.js:253`:
+   *
+   *     checkForUpdates() {
+   *       if (!this.isUpdaterActive()) {
+   *         return Promise.resolve(null);
+   *       }
+   *
+   * It RESOLVES WITH NULL. Not an error, not a rejection — the same shape a successful check
+   * takes, minus the payload. The code below used to read `result?.updateInfo?.version ?? null`,
+   * get null, compute `newer = false`, and land in the `phase: 'none'` arm — whose message to the
+   * operator is "You are on the latest". So an installation that CANNOT update itself at all
+   * reported the single most reassuring thing it could say, and said it identically to a machine
+   * that genuinely was current. There is no way to tell those two apart from the screen.
+   *
+   * On Linux that is not a corner case, it is the default. `main.js:50` constructs an
+   * `AppImageUpdater` for every platform that is not win32 or darwin, and `AppImageUpdater.js:18`
+   * returns false from `isUpdaterActive()` whenever `process.env.APPIMAGE` is unset — which is
+   * every run that did not start from an AppImage file: a `.deb` install, an unpacked directory,
+   * `npx electron .` from a clone.
+   *
+   * So null gets its own phase and its own sentence naming the actual cause.
+   */
+  function inactiveReason() {
+    if (platform === 'linux') {
+      if (env.SNAP) return 'this is the Snap package — snapd updates it, not redbot';
+      if (!env.APPIMAGE) {
+        return 'in-place update needs the AppImage build, and this process did not start from one '
+          + '(APPIMAGE is unset). Download the new AppImage from the release page.';
+      }
+    }
+    if (platform === 'darwin') {
+      return 'this macOS build cannot update itself — download the new version from the release page';
+    }
+    return 'this installation cannot update itself in place — download the new version from the release page';
+  }
+
+  /**
+   * The null answer, turned into state.
+   *
+   * `phase: 'unavailable'` rather than 'error': nothing failed, and an error bar for a permanently
+   * true fact would cry wolf on every check. It is distinct from 'none' because it must be, and
+   * `newer` is left FALSE because nothing was learned about the feed either way.
+   */
+  function inactive() {
+    const reason = inactiveReason();
+    set({ phase: 'unavailable', latest: null, newer: false, reason });
+    log(`updater    check: the in-place updater is not active here — ${reason}`);
+    return { ok: false, reason, ...state, phase: 'unavailable' };
+  }
+
+  /**
    * Ask the feed what the newest release is. Downloads NOTHING — `autoDownload` is off.
    *
    * The newer? answer is computed here rather than trusted from `updateInfo`, because
@@ -279,6 +359,9 @@ export function createUpdater({
       set({ phase: 'checking', reason: null });
       const au = ensure();
       const result = await au.checkForUpdates();
+      /* Null means the updater is not active on this installation — see inactive(). Checked
+         before `updateInfo` is read, because reading it is what turned this into "up to date". */
+      if (result === null) return inactive();
       const version = result?.updateInfo?.version ?? null;
       const newer = version ? isNewerVersion(version, state.current) : false;
       set({
@@ -330,6 +413,10 @@ export function createUpdater({
       if (!downloaded && !state.newer) {
         set({ phase: 'checking', reason: null });
         const result = await au.checkForUpdates();
+        /* Same null, same reason — and it matters more here. Without this, Apply reported
+           `ok: true, installed: false` and logged "nothing newer to install" on a machine where
+           installing was never possible in the first place. */
+        if (result === null) return inactive();
         const version = result?.updateInfo?.version ?? null;
         const newer = version ? isNewerVersion(version, state.current) : false;
         set({ phase: newer ? 'available' : 'none', latest: version, newer });
