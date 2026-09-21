@@ -433,7 +433,7 @@ function cmdNew(name) {
 }
 
 /**
- * Every table the 16 migrations claim to build. Hard-coded rather than derived from the SQL,
+ * Every table the 18 migrations claim to build. Hard-coded rather than derived from the SQL,
  * because a list derived from the migrations could only ever agree with them — the point is to
  * state independently what the schema is supposed to contain.
  *
@@ -449,7 +449,7 @@ const EXPECTED_TABLES = [
   'certification_resolution_signals', 'jobs', 'history', 'observations',
   'reviews', 'regret', 'interactions', 'trace', 'confirmations',
   'credentials', 'sources', 'account_machines', 'thread_prefilter',
-  'account_proxies', 'account_exit_ips'
+  'account_proxies', 'account_exit_ips', 'account_locations'
 ];
 
 /** Assert the live schema actually contains what the migrations claim to build. */
