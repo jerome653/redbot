@@ -387,6 +387,20 @@ export async function alignBrowser(opts: {
           userAgent: ua, acceptLanguage: opts.locale
         });
       }
+      /**
+       * THE FENCE, INTO A DOCUMENT THAT IS ALREADY LOADED.
+       *
+       * `context.addInitScript` below runs on NEW documents only. A tab the operator already had
+       * open keeps an unfenced one until it happens to navigate, and nothing says so. MEASURED on
+       * a throwaway profile with three tabs open before redbot was asked to open the browser:
+       * `new RTCPeerConnection()` succeeded in all three, so the fence covered none of them.
+       *
+       * Applied here rather than beside addInitScript so that a tab counts as aligned only when it
+       * got BOTH the overrides and the fence. Counting a half-covered tab would make pagesAligned
+       * the kind of number that reads like reassurance and means nothing. A page whose fence is
+       * already installed throws on the re-definition and the fence swallows that itself, per name.
+       */
+      await page.evaluate(webrtcFence);
       pagesAligned++;
     } catch {
       /* A page that closed mid-flight is the ordinary case here and not a failure. A page that
@@ -410,8 +424,19 @@ export async function alignBrowser(opts: {
   /* Every tab that appears from now on — including ones a person opens by hand. */
   context.on('page', (p: Page) => { void cover(p); });
 
-  const first: Page = context.pages()[0] ?? await context.newPage();
-  await cover(first);
+  /**
+   * EVERY TAB THAT IS ALREADY OPEN, NOT JUST THE FIRST.
+   *
+   * This read `context.pages()[0]` and covered that one page. On a browser redbot spawned there
+   * IS only one — the about:blank it was started on — so the difference was invisible, and the
+   * spawned path behaves identically after this change. On a browser that was ALREADY open it is
+   * the entire problem: measured on a throwaway profile carrying three tabs, one announced the
+   * measured zone and the other two announced the browser's own, which is precisely the
+   * contradiction between clock and address that this module exists to remove.
+   */
+  const existing: Page[] = context.pages().length ? context.pages() : [await context.newPage()];
+  for (const p of existing) await cover(p);
+  const first: Page = existing[0]!;
 
   if (opts.openUrl) {
     /* `domcontentloaded`, not `load`: Reddit keeps connections open long after the page is usable,

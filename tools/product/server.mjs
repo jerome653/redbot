@@ -1991,9 +1991,30 @@ async function launchChrome(handle, { background = false } = {}) {
    * before a window is opened that would look like success.
    */
   const [live] = await portStatusImpl([a]);
-  if (live && live.ours) {
-    return { ok: true, handle, port: a.debugPort, profileDir: a.profileDir, alreadyRunning: true };
-  }
+  /**
+   * ALREADY OPEN IS NOT ALREADY DONE — and this line used to say it was.
+   *
+   * It read:
+   *
+   *     if (live && live.ours) return { ok: true, ..., alreadyRunning: true };
+   *
+   * which returned from HERE, above every step that follows: the exit, the detection, the
+   * persistence, both country checks, the timezone and locale cover and the WebRTC fence. An open
+   * browser was reported as a successful open having been measured by nothing, and `/api/account/open`
+   * forwarded that verdict to the console unchanged.
+   *
+   * The gap pre-dates the detection work. Migration 0018 is what turned it into a trap: it sets
+   * every `accounts.timezone` NULL, src/window.ts refuses a NULL zone with `rule: 'bad-timezone'`,
+   * and the ONLY production code that writes a zone back is the detect-then-persist path below.
+   * So an account whose Chrome happened to be open could never become schedulable again, and the
+   * remedy — close it and press the button — is written down nowhere a person would find it.
+   *
+   * So it is a FLAG now, not a return. Everything below runs exactly as it does for a browser
+   * redbot opened. The only thing skipped is the spawn, because there is nothing to spawn; the two
+   * ownership consequences of not having spawned it (it is not closed on a refusal, and it is not
+   * navigated) live in startAlignedBrowser next to the order they qualify, rather than here.
+   */
+  const alreadyRunning = !!(live && live.ours);
 
   /**
    * A port somebody else is holding is MOVED OFF, not reported.
@@ -2132,22 +2153,28 @@ async function launchChrome(handle, { background = false } = {}) {
      *
      * An unproxied browser keeps the login URL on the command line exactly as it always had.
      */
-    const child = spawn(bin, [
-      `--remote-debugging-port=${a.debugPort}`,
-      `--user-data-dir=${dir}`,
-      '--no-first-run', '--no-default-browser-check',
-      ...(proxied ? [`--proxy-server=http://127.0.0.1:${exit.relayPort}`] : []),
-      ...(background ? BACKGROUND : []),
-      /* ALWAYS about:blank now, proxied or not — this line used to read
-         `proxied ? 'about:blank' : LOGIN`. An unproxied browser went straight to Reddit off the
-         command line, which meant the one path that had never been covered was also the one
-         that arrived at Reddit before redbot could look at it. Nothing can be measured, checked
-         or refused about a browser that is already there. */
-      'about:blank'
-    ], { detached: true, stdio: 'ignore' });
-    child.unref();
+    if (!alreadyRunning) {
+      const child = spawn(bin, [
+        `--remote-debugging-port=${a.debugPort}`,
+        `--user-data-dir=${dir}`,
+        '--no-first-run', '--no-default-browser-check',
+        ...(proxied ? [`--proxy-server=http://127.0.0.1:${exit.relayPort}`] : []),
+        ...(background ? BACKGROUND : []),
+        /* ALWAYS about:blank now, proxied or not — this line used to read
+           `proxied ? 'about:blank' : LOGIN`. An unproxied browser went straight to Reddit off the
+           command line, which meant the one path that had never been covered was also the one
+           that arrived at Reddit before redbot could look at it. Nothing can be measured, checked
+           or refused about a browser that is already there. */
+        'about:blank'
+      ], { detached: true, stdio: 'ignore' });
+      child.unref();
+    }
 
     const said = { ok: true, handle, port: a.debugPort, profileDir: a.profileDir,
+                   /* Kept because electron/main.mjs branches on it — a window boot did not open is
+                      one boot must not minimise or close. It now travels WITH a measurement rather
+                      than instead of one. */
+                   ...(alreadyRunning ? { alreadyRunning: true } : {}),
                    ...(background ? { background: true } : {}),
                    ...(movedFrom ? { movedFrom } : {}) };
 
@@ -2183,7 +2210,7 @@ async function launchChrome(handle, { background = false } = {}) {
       cover: alignApi && ((o) => alignApi.cover(o)),
       close: () => stopBrowserImpl(a),
       loginUrl: REDDIT_LOGIN
-    }, { endpoint, account: a, exit, proxied });
+    }, { endpoint, account: a, exit, proxied, weSpawnedIt: !alreadyRunning });
     if (!started.ok) return { ok: false, error: started.error };
 
     /* Said back so the caller can show WHAT CLOCK this window is telling and WHERE that came from,

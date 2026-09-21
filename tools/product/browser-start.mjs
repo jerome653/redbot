@@ -46,6 +46,27 @@
  *
  * An account that does not reach Reddit is recoverable — run it again, or find out why the lookup
  * failed. An account that reaches Reddit announcing the wrong hemisphere is not.
+ *
+ * ---------------------------------------------------------------------------
+ * A BROWSER THAT WAS ALREADY OPEN RUNS THIS SAME ORDER, MINUS THE SPAWN
+ *
+ * `launchChrome` used to answer an account whose Chrome was already up and ours by returning
+ * `{ ok: true, alreadyRunning: true }` BEFORE any of the above existed in the flow. Nothing
+ * measured it, nothing recorded it, nothing covered it, and the HTTP handler forwarded that as a
+ * successful open. Migration 0018 is what turned the gap into a trap: it sets every
+ * `accounts.timezone` to NULL, the only production code that writes one back is the detect-then-
+ * persist path below, so an account whose browser happened to be open could never become
+ * schedulable again — and "close Chrome and reopen it" appears nowhere in the product.
+ *
+ * `weSpawnedIt: false` runs the identical order and changes exactly two things, both of which are
+ * about OWNERSHIP rather than about safety. They live here, next to the order, for the same reason
+ * the refuse-and-close policy does: a rule with two copies is a rule that drifts.
+ *
+ *   NOT CLOSED ON A REFUSAL  — see `refuse` below.
+ *   NOT NAVIGATED            — see the `openUrl` note at step 6.
+ *
+ * Nothing else moves. It still waits, still detects before it overrides, still refuses to act on
+ * a measurement it could not record, and still runs both country checks.
  */
 
 /** Everything a caller must supply. Named so a missing one is a sentence, not a TypeError. */
@@ -56,7 +77,7 @@ const REQUIRED = ['waitForDebugPort', 'detect', 'record', 'refusal', 'cover', 'c
  * @param opts  endpoint, account, exit, proxied
  */
 export async function startAlignedBrowser(deps, opts) {
-  const { endpoint, account, exit, proxied } = opts;
+  const { endpoint, account, exit, proxied, weSpawnedIt = true } = opts;
   const handle = account && account.handle;
 
   /* A build missing one of its compiled modules is reported as that, not as a crash. server.mjs
@@ -72,6 +93,27 @@ export async function startAlignedBrowser(deps, opts) {
   /* One place, so every refusal below closes the window and none of them can forget to. A close
      that itself throws must not replace the reason the launch was refused. */
   const refuse = async (error) => {
+    /**
+     * A BROWSER REDBOT DID NOT OPEN IS NOT REDBOT'S TO CLOSE.
+     *
+     * "We spawned it, so we own closing it" is the whole justification above, and it is precisely
+     * the sentence that stops applying to a window the operator opened, may be signed into, and
+     * may have half-typed text in. electron/main.mjs already holds the rule in as many words:
+     * "this process did not start it, so this process must not close it."
+     *
+     * FAIL-CLOSED SURVIVES, because it never rested on the window. `record` below is reached
+     * only after a successful detection, so a browser that could not be measured writes no zone,
+     * `accounts.timezone` stays NULL, and src/window.ts refuses the account under the rule
+     * `bad-timezone`. The COLUMN is the fence; closing was only ever tidying up after ourselves.
+     * Leaving a window open costs an operator a tab they must close. Closing one costs them a
+     * session they cannot get back, and Reddit fixes an account to the identity it first appears
+     * from.
+     */
+    if (!weSpawnedIt) {
+      return { ok: false, closed: false, error:
+        `${error} redbot did not open this browser, so it has been left open and unchanged — `
+        + 'close it and open it from here if you want it measured.' };
+    }
     let closed = true;
     try { await deps.close(); } catch { closed = false; }
     return { ok: false, closed, error };
@@ -179,7 +221,19 @@ export async function startAlignedBrowser(deps, opts) {
       handle,
       timezone: location.timezone,
       locale,
-      openUrl: deps.loginUrl
+      /**
+       * NOT NAVIGATED IF IT WAS ALREADY OPEN.
+       *
+       * `openUrl` reaches alignBrowser, which calls `goto` on `context.pages()[0]` — on a browser
+       * redbot spawned that is the about:blank tab it just made, and on one the operator opened it
+       * is THEIR first tab, with whatever they were doing in it.
+       *
+       * The rule this would be imitating — "Reddit LAST, after it is covered" — exists so that
+       * nothing ARRIVES anywhere before it has been measured. A browser that is already open has
+       * already done its arriving; navigating it again cannot un-arrive it, buys no safety, and
+       * costs the operator the tab. So it is covered where it stands and left there.
+       */
+      openUrl: weSpawnedIt ? deps.loginUrl : undefined
     });
     return {
       ok: true,
