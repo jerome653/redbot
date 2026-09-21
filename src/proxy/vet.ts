@@ -36,7 +36,7 @@ import { assertUsableUpstream, type UpstreamProxy } from './relay.js';
 
 /** Free tier is HTTP-only, which is exactly the transport the relay forwards. */
 export const GEO_URL =
-  'http://ip-api.com/json/?fields=status,message,query,country,countryCode,region,regionName,city,isp,org,as,asname,mobile,proxy,hosting,reverse';
+  'http://ip-api.com/json/?fields=status,message,query,country,countryCode,region,regionName,city,timezone,offset,isp,org,as,asname,mobile,proxy,hosting,reverse';
 
 /** What ip-api.com answers with. Only the fields requested above. */
 export interface GeoRecord {
@@ -47,6 +47,10 @@ export interface GeoRecord {
   countryCode?: string;
   regionName?: string;
   city?: string;
+  /** IANA zone name, e.g. `America/Los_Angeles`. Requested since the browser must agree with it. */
+  timezone?: string;
+  /** Seconds from UTC at the moment of the lookup. `0` is a real offset, not an absence. */
+  offset?: number;
   isp?: string;
   org?: string;
   as?: string;
