@@ -223,6 +223,25 @@ export function usZoneForCity(city: string | null | undefined): string | null {
  * out that the timezone contradicts the address only after Chrome is on screen means either
  * closing a window in the operator's face or letting a mismatched browser reach Reddit — and the
  * second one cannot be undone for that account.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT BOTH MESSAGES USED TO SAY, AND WHY NEITHER CAN SAY IT ANY MORE
+ *
+ * Both branches ended by sending the operator to set the account's timezone "on the Accounts
+ * screen". That was accurate while the zone was a typed field — and the same field is what made
+ * the refusal necessary so often: its placeholder was Asia/Manila, every account on this machine
+ * inherited it, and the connection egresses from San Jose. Eight accounts announcing the wrong
+ * hemisphere, and a refusal courteously offering to let somebody type another guess.
+ *
+ * The zone is measured in the browser now and `accounts.timezone` is written from that
+ * measurement, so the box is gone from the Accounts screen and a refusal cannot point at it. A
+ * message that names a control which does not exist is worse than a vague one: it teaches the
+ * reader that the refusal is confused, and the next thing they look for is the way around it.
+ *
+ * The register changes with it. When a measurement contradicts the exit record, two instruments
+ * are describing different places and the interesting question is which of them is wrong. That is
+ * a reason to stop and look, not an errand to run — so neither branch hands out a fix, and both
+ * say what would have to be true for the launch to proceed.
  */
 export function alignmentRefusal(
   handle: string, timezone: string | null | undefined,
@@ -233,15 +252,22 @@ export function alignmentRefusal(
 
   const where = [region, country].filter(Boolean).join(', ') || 'its exit';
   if (verdict === 'no') {
-    return `${handle} exits from ${where}, but its timezone is set to ${timezone}. A browser that `
-         + 'announces one part of the world from an address in another is one of the most reliable '
-         + 'proxy tells there is, and it is read by a single line of JavaScript. Set the account\'s '
-         + `timezone to the ${country} zone matching ${region || 'that address'} on the Accounts `
-         + 'screen, then start the browser again.';
+    return `${handle} exits from ${where}, but the timezone measured in its browser is ${timezone}. `
+         + 'A browser that announces one part of the world from an address in another is one of the '
+         + 'most reliable proxy tells there is, and it is read by a single line of JavaScript. '
+         + 'Nothing here was typed: the zone is what the browser itself reported and the address is '
+         + 'what the exit check proved, so this is two measurements disagreeing rather than a field '
+         + 'filled in wrongly. Find out which of them is describing a different machine — whether '
+         + 'the exit still carries this account\'s traffic, whether it has moved, and whether the '
+         + 'browser was measured going through it or around it. redbot will launch once they agree.';
   }
-  return `redbot could not confirm that ${handle}'s timezone (${timezone || 'unset'}) belongs to `
-       + `${where}, so it will not point the browser at the exit. An unverified match is not a `
-       + 'match — set the timezone from the address the check reported.';
+  return `redbot could not confirm that the timezone measured in ${handle}'s browser (${
+           timezone || 'none recorded'}) belongs to ${where}, so it will not point the browser at `
+       + 'the exit. An unverified match is not a match. There are three ways to arrive here and not '
+       + 'one of them is a value to correct: nothing has measured this account yet, the exit record '
+       + 'does not say which country it is in, or this runtime cannot answer for that country at '
+       + 'all. Which one it is decides what happens next, so find that out rather than launching '
+       + 'past it.';
 }
 
 /** A CDP connection held open for as long as the browser it is aligning. */

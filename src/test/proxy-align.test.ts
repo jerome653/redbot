@@ -85,18 +85,51 @@ test('a matching timezone raises no refusal', () => {
   assert.equal(alignmentRefusal('Acct', 'America/New_York', 'US', 'New York'), null);
 });
 
-test('a contradicting timezone refuses, and names both sides plus the fix', () => {
+test('a contradicting timezone refuses, and names both sides plus what it means', () => {
   const r = alignmentRefusal('Striking_Mousse6841', 'Asia/Manila', 'US', 'New York');
   assert.ok(r, 'Asia/Manila behind a US exit must not be allowed to launch');
   assert.match(r, /Asia\/Manila/, 'it must say what the timezone is');
   assert.match(r, /New York, US/, 'and where the exit actually is');
-  assert.match(r, /Accounts screen/, 'and where to change it');
+  assert.match(r, /measured/i,
+               'and that the zone is a MEASUREMENT. This replaces an assertion on the words '
+               + '"Accounts screen" — see the test below, which now asserts those words are gone.');
 });
 
 test('a timezone that cannot be checked is refused too — unverified is not verified', () => {
   const r = alignmentRefusal('Acct', undefined, 'US', 'New York');
   assert.ok(r);
   assert.match(r, /could not confirm/i);
+});
+
+/**
+ * NEITHER REFUSAL MAY NAME A CONTROL THAT NO LONGER EXISTS.
+ *
+ * Both branches used to end by telling the operator to set the account's timezone "on the Accounts
+ * screen". That box is gone. The zone is measured in the browser and `accounts.timezone` is written
+ * from the measurement, so there is nothing on that screen to set and nothing for a person to type.
+ *
+ * This is the same coupling the mismatch test used to assert in the opposite direction
+ * (`assert.match(r, /Accounts screen/)`), moved here and widened: it covers BOTH branches, because
+ * the unverified one carried the same instruction and nothing was checking it.
+ *
+ * It is worth a test rather than a comment because the failure is silent. A refusal that sends
+ * somebody hunting for a field they cannot find does not throw and does not log; it teaches them
+ * that the refusal is wrong, and the next thing they look for is the way around it.
+ */
+test('neither refusal sends the operator to the Timezone box that was removed', () => {
+  const refusals = [
+    /* the mismatch branch */        alignmentRefusal('Acct', 'Asia/Manila', 'US', 'New York'),
+    /* nothing measured yet */       alignmentRefusal('Acct', undefined, 'US', 'New York'),
+    /* a country the runtime cannot answer for */
+                                     alignmentRefusal('Acct', 'Europe/London', 'ZZ', null)
+  ];
+  for (const r of refusals) {
+    assert.ok(r, 'each of these must still be a refusal — the point is the wording, not the verdict');
+    assert.doesNotMatch(r, /Accounts screen/i,
+                        'the Accounts screen has no timezone field to send anyone to any more');
+    assert.doesNotMatch(r, /\bset the (account'?s? )?timezone\b/i,
+                        'nobody sets this zone — a browser measures it and redbot records it');
+  }
 });
 
 /* ------------------------------------------------------------------ *
