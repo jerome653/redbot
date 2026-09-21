@@ -1,0 +1,68 @@
+-- Reverses 0018_account_locations.
+--
+-- WHAT IS LOST, stated plainly: every location this fleet has ever measured. account_locations is
+-- the only place a detection is kept — the timezone the browser itself reported, the address it
+-- was answered for, the country, the city, the occasion and the transport — and rolling this back
+-- removes all of it. An account whose zone is wanted afterwards must be measured again by opening
+-- its browser. Nothing here can be reconstructed: the row IS the measurement, and a measurement
+-- that was dropped cannot be assumed back.
+--
+-- What SURVIVES: the account rows themselves, their browser bindings, their exits and the whole
+-- 0016 pin ledger. This rollback touches no parent table, so no cascade fires, and account_exit_ips
+-- is a separate ledger answering a separate question — it is not disturbed.
+--
+-- ---------------------------------------------------------------------------
+-- accounts.timezone IS LEFT NULL, AND THAT IS THE DECISION IN THIS FILE.
+--
+-- The up migration cleared every stored zone. A rollback is normally expected to put back what it
+-- found, and here it deliberately does not. Two candidates were on offer and both are worse than
+-- nothing:
+--
+--   RESTORE 'Asia/Manila'. This is what was there. It is also the exact defect 0018 was written to
+--   delete — a typed zone, evidence of nothing, on a fleet that egresses from California — and it
+--   is not refused by anything downstream. It passes every check, drives
+--   Emulation.setTimezoneOverride, and announces the contradiction to Reddit. Reintroducing it
+--   under the name of a rollback would be the most expensive kind of restoration: one that looks
+--   like caution and re-arms the hazard.
+--
+--   COPY THE LAST MEASURED ZONE out of account_locations before dropping it. Superficially the
+--   better idea, because that value was at least measured once. But the column it would land in is
+--   hand-editable and, a moment later, its evidence is gone — the ledger row that said where the
+--   value came from, when, over what route, is what this file is deleting. What survives is a
+--   plausible string in a column nothing can account for, indistinguishable from something a
+--   person typed. That un-provenanced state is precisely what 0018 abolished.
+--
+-- NULL is the fail-closed answer and the honest one. src/window.ts refuses to schedule an account
+-- whose zone is NULL and names the rule `bad-timezone`, so the fleet stops and says why, loudly,
+-- in one place. A wrong zone stops nothing and is silent. Stopping is recoverable — measure the
+-- account and it comes back; announcing the wrong hemisphere to Reddit is not.
+--
+-- So the column is CLEARED here, actively, by the statement at the foot of this file. That is not
+-- the same as simply declining to restore the old values, and the difference is the whole point.
+-- By the time anyone rolls this back, detections will have run and the column will hold measured
+-- zones. Dropping the table underneath them leaves exactly the state the second candidate above
+-- was rejected for: a plausible string in a hand-editable column whose evidence has just been
+-- deleted, indistinguishable from something a person typed. Clearing it is what keeps the rule
+-- 0018 introduced — a zone in that column always has a row behind it — true on the way down as
+-- well as on the way up.
+--
+-- Said once more so it is not mistaken for an omission: emptying the column is the intended
+-- outcome of this rollback, not a step that was forgotten, and it is symmetric with the up
+-- migration, which cleared the same column for the same reason.
+-- ---------------------------------------------------------------------------
+--
+-- WHY THIS FILE EXISTS AT ALL, since 0018 could be left irreversible. It could not: the runner
+-- walks down the chain in order, so a missing 0018 down does not merely pin 0018 — it blocks the
+-- rollback of every migration beneath it. `down 2`, `down 3` and `down 5` all refuse while this
+-- file is absent, which put 0017, 0016 and 0015 out of reach for a reason that had nothing to do
+-- with them. 0018 was the only migration in the chain with no down file.
+
+DROP INDEX IF EXISTS account_locations_by_handle;
+DROP TABLE IF EXISTS account_locations;
+
+-- The column goes back to having nothing in it, for the reason argued at length above: a zone
+-- whose evidence has just been dropped is an un-provenanced zone, and this is the migration that
+-- dropped the evidence. Every account is unschedulable until it is measured again — loudly, by
+-- src/window.ts, under the rule name `bad-timezone` — which is the recoverable failure rather
+-- than the silent one.
+UPDATE accounts SET timezone = NULL;

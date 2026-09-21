@@ -71,16 +71,41 @@ export function checkWindow(input: WindowInput): WindowVerdict {
     return { allowed: false, rule: 'no-account', detail: 'No account selected — set REDBOT_ACCOUNT.' };
   }
 
+  /* ---- the account's own clock ---- */
+
+  /**
+   * EVALUATED FOR EVERY ACCOUNT, and that placement is the whole point.
+   *
+   * This check used to live INSIDE `if (quiet)` below, which made an unreadable timezone a
+   * refusal only for accounts that happened to declare quiet hours. Everything else fell through
+   * to the tail of this function, where `hour` was recomputed and a null was dropped by
+   * `...(hour === null ? {} : { localHour: hour })` — so the verdict came back `allowed: true`,
+   * with no localHour and nothing anywhere saying the zone could not be read.
+   *
+   * It was reachable from data, not merely in theory. `quietHours` is optional on AccountRecord
+   * (src/config.ts), and src/db/accounts.ts only populates it when BOTH quiet_start and quiet_end
+   * are non-null — so any row with either column NULL yields a record with no quietHours, and the
+   * timezone refusal was never evaluated for it.
+   *
+   * Nothing had been let through yet only because all 8 live rows carry quiet hours. 0018 makes
+   * a NULL timezone the normal state for an account nobody has measured, which is exactly the
+   * moment a latent fail-open would have become a live one.
+   *
+   * Read ONCE, here, and reused below. The second call at the tail was the thing that made the
+   * silent drop possible; with the zone resolved up front, an allowed verdict always carries the
+   * hour it was decided on.
+   */
+  const hour = localHourFor(account.timezone, now);
+  if (hour === null) {
+    return { allowed: false, rule: 'bad-timezone', detail: `${account.handle}: timezone "${account.timezone ?? '(unset)'}" is not a zone I can read.` };
+  }
+
   /* ---- quiet hours ---- */
   const quiet = account.quietHours;
   if (quiet) {
     if (!Array.isArray(quiet) || quiet.length !== 2 ||
         !quiet.every((n) => Number.isInteger(n) && n >= 0 && n <= 23)) {
       return { allowed: false, rule: 'bad-quiet-range', detail: `${account.handle}: quietHours is not two hours between 0 and 23.` };
-    }
-    const hour = localHourFor(account.timezone, now);
-    if (hour === null) {
-      return { allowed: false, rule: 'bad-timezone', detail: `${account.handle}: timezone "${account.timezone ?? '(unset)'}" is not a zone I can read.` };
     }
     if (inQuietRange(hour, quiet[0]!, quiet[1]!)) {
       return {
@@ -103,10 +128,9 @@ export function checkWindow(input: WindowInput): WindowVerdict {
     };
   }
 
-  const hour = localHourFor(account.timezone, now);
   return {
     allowed: true,
-    ...(hour === null ? {} : { localHour: hour }),
+    localHour: hour,
     detail: `${account.handle}: clear to act — ${repliesToday} of ${ceiling} replies used today.`
   };
 }

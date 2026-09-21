@@ -31,7 +31,7 @@ import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -656,4 +656,50 @@ describe('the history vocabulary in the code and in the database are the same li
       /CHECK constraint failed/
     );
   });
+});
+
+/* ------------------------------------------------------------------ *
+ * Rollback reachability
+ * ------------------------------------------------------------------ */
+
+/**
+ * EVERY migration can be rolled back, because one that cannot blocks every migration beneath it.
+ *
+ * WHY THIS IS NOT PEDANTRY. 0018 shipped with no down file. The runner refuses cleanly and says
+ * so — measured, it exits 1 with "0018_account_locations has no 0018_account_locations.down.sql.
+ * Refusing to roll back a migration that cannot be reversed." — but the refusal is not scoped to
+ * 0018. The runner walks the chain in order, so `down 2`, `down 3` and `down 5` all failed too,
+ * and 0017, 0016 and 0015 became unreachable for a reason that had nothing to do with them. One
+ * absent file took the whole rollback path with it.
+ *
+ * Nothing said so. `migrate.mjs verify` counts schema OBJECTS, so a missing down file is invisible
+ * to it; the up path works perfectly; and no test looked at the directory. The gap was found by
+ * trying to roll back, which is the one thing nobody does until something has already gone wrong.
+ *
+ * This is a directory listing rather than a rollback run on purpose: it is cheap, it names the
+ * offending version, and it fails the moment the file is missing rather than the moment somebody
+ * needs it.
+ */
+test('EVERY migration can be rolled back — a missing down file blocks the whole chain', () => {
+  const dirEntries = readdirSync(join(HERE, 'migrations'));
+  const ups = dirEntries.filter((f) => f.endsWith('.up.sql')).sort();
+  const downs = new Set(dirEntries.filter((f) => f.endsWith('.down.sql')));
+
+  assert.ok(ups.length >= 18, `expected at least 18 migrations, found ${ups.length} — the listing is wrong, not the schema`);
+
+  const orphans = ups
+    .map((up) => [up, up.replace(/\.up\.sql$/, '.down.sql')])
+    .filter(([, down]) => !downs.has(down))
+    .map(([up, down]) => `${up} has no ${down}`);
+
+  assert.deepEqual(orphans, [],
+    'a migration with no down file cannot be rolled back, AND neither can any migration applied '
+    + 'before it — the runner walks the chain in order and stops at the first one it cannot '
+    + 'reverse');
+
+  /* And nothing the other way round: a down with no up is a file the runner will never reach. */
+  const strays = [...downs]
+    .filter((d) => !ups.includes(d.replace(/\.down\.sql$/, '.up.sql')))
+    .sort();
+  assert.deepEqual(strays, [], 'a down file with no matching up is dead weight the runner never reads');
 });

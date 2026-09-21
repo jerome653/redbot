@@ -1990,6 +1990,37 @@ const ago=iso=>{if(!iso)return '';const d=(Date.now()-new Date(iso).getTime())/1
 /* A measured zero and an absent measurement are different facts, and look different. */
 const num=(v,none)=>v==null?`<b class="none">${esc(none||'never measured')}</b>`:`<b>${v}</b>`;
 
+/**
+ * The account's timezone, rendered as what it now is: A RECORD OF A MEASUREMENT.
+ *
+ * It used to be typed into a box on the Accounts screen, and that box defaulted to Asia/Manila.
+ * Every account on this machine therefore announced Manila while the connection egressed from San
+ * Jose, and this card could not reveal it — a zone printed on its own looks exactly the same
+ * whether a person guessed it or a browser reported it. That indistinguishability IS the defect,
+ * so the zone is never shown without the moment it was taken, and an account nothing has measured
+ * says so in the words the rest of this console already uses for an unmeasured fact (`num`, the
+ * karma chip, the stage tag).
+ *
+ * RELATIVE TIME, not a clock reading, for two reasons. It is what every other "when was this
+ * measured" line on this screen uses — "Karma checked 4m ago", "seen 2h ago" — and the question a
+ * reader actually has here is whether the measurement has gone stale, which a wall-clock time in
+ * an unstated zone answers worse. On a line about timezones, printing a timestamp the reader has
+ * to convert would be a joke at their expense.
+ *
+ * `loc` is the account's `location` object. `null` means nothing has ever measured it, and that is
+ * NOT the same as `a.timezone` being empty: the column still holds whatever was typed before, and
+ * echoing that back would put the old guess on screen wearing a measurement's clothes. A populated
+ * object whose `at` will not parse is a measurement nobody can date, and is reported as exactly
+ * that rather than rendered as `NaNd ago`.
+ */
+const zoneRead=loc=>{
+  const tz=loc&&loc.timezone;
+  if(!tz)return 'timezone never measured';
+  const t=loc.at?Date.parse(loc.at):NaN;
+  return Number.isFinite(t)?`timezone ${tz}, measured ${ago(loc.at)}`
+                           :`timezone ${tz}, measured at a time that was not recorded`;
+};
+
 /* THE TICKER IS GONE (2026-08-01).
  *
  * Five figures in the ledge, between the logo and the controls. Every one of them is also a badge
@@ -3906,9 +3937,12 @@ function paintPortBar(node,s){
          *
          * Shown ONLY if a Webshare key is stored and the list comes back non-empty. Selecting a
          * proxy fills the fields above; it does NOT skip the check below — the exit still has to
-         * pass the same vet. The timezone note carries the account's half of the job: an exit whose
-         * city implies America/Los_Angeles behind an account set to Asia/Manila is refused at
-         * launch (src/proxy/align.ts), so the zone is offered here, ready to copy onto the card. */
+         * pass the same vet. The timezone note says what the exit's CITY implies — nothing more.
+         * It used to offer that zone ready to copy onto the account card, which was right while
+         * the card had a Timezone box; it has not, since the zone became something the browser
+         * reports rather than something a person types. What gets compared at launch is the
+         * account's own measured zone against this exit (src/proxy/align.ts), so there is nothing
+         * here to copy and nowhere to copy it to. */
         const pick=el('select','sel');
         pick.setAttribute('aria-label',`Fill ${account.handle}'s exit from a Webshare US proxy`);
         pick.style.cssText='display:none;font:inherit;font-size:.78rem;padding:.35rem .5rem;border-radius:8px;'
@@ -3924,14 +3958,17 @@ function paintPortBar(node,s){
           tzNote.style.display='';
           const head=el('div');
           if(p.timezone){
-            head.innerHTML=`This exit is in <b>${esc(p.city||p.region||'the US')}</b>. Set this account’s `
-              +`timezone to <code>${esc(p.timezone)}</code> — a browser whose timezone does not match its `
-              +`exit is refused at launch. Copy it, then update the timezone on this account’s card.`;
-            tzNote.append(head,copyBox(p.timezone,'the timezone'));
+            head.innerHTML=`This exit is in <b>${esc(p.city||p.region||'the US')}</b>, which is `
+              +`<code>${esc(p.timezone)}</code>. There is nothing to copy: redbot measures this account’s `
+              +`timezone from the browser itself and compares it with the exit at launch. If the two `
+              +`disagree the launch is refused — and a disagreement between two measurements is worth `
+              +`reading, not overriding.`;
+            tzNote.append(head);
           }else{
             head.innerHTML=`This exit is in <b>${esc(p.city||'an unknown city')}</b>, which redbot could not map `
-              +`to a US timezone. Set this account’s timezone to the zone for that city yourself, or the `
-              +`launch will be refused.`;
+              +`to a US timezone. The account’s own zone is still measured from the browser and still `
+              +`checked against this exit at launch — this note simply cannot tell you in advance what `
+              +`to expect.`;
             tzNote.append(head);
           }
         };
@@ -4068,7 +4105,19 @@ function accountEditor(a){
   const eRole  =f('Role',a.role,'Support desk');
   const eSpeaks=f('What they talk about',a.speaks,'Error messages, plugin conflicts');
   const eSubs  =f('Subreddits',(a.subreddits||[]).join(', '),'WordPress, Wordpress_Help');
-  const eTz    =f('Timezone',a.timezone,'Asia/Manila');
+  /**
+   * THERE IS NO TIMEZONE BOX, and its absence is the fix rather than an omission.
+   *
+   * `f('Timezone',a.timezone,'Asia/Manila')` stood here. The placeholder is the whole story: it was
+   * the value everybody accepted, so every account on this machine announced Manila while the
+   * connection left San Jose — and a browser announcing one part of the world from an address in
+   * another is the most readable proxy tell there is. A field whose default is wrong for every
+   * account is not a setting, it is a trap.
+   *
+   * The zone is measured in the browser now and the column is written from the measurement, so
+   * there is nothing here for a person to be right or wrong about. The card shows the zone WITH
+   * the moment it was taken; `zoneRead` is where that is rendered.
+   */
   const eQuiet =f('Quiet hours',a.quietHours?`${a.quietHours[0]}-${a.quietHours[1]}`:'','0-8');
   const eCeil  =f('Daily ceiling',a.dailyCeiling,'1');
   const eNote  =f('Note',a.note,'');
@@ -4078,7 +4127,12 @@ function accountEditor(a){
     'Chrome does not fail loudly — it reads Reddit signed out while still looking configured. '+
     'Change it in <code>data/accounts.json</code>, then run <code>redbot accounts import</code>. '+
     'The <b>port</b> has its own button on the card: it checks the new one is actually free '+
-    'first, which is the check that makes moving it safe.'));
+    'first, which is the check that makes moving it safe. '+
+    'The <b>timezone</b> is not here either, and it is not editable anywhere: it is measured from '+
+    'the browser itself, and the card shows when that measurement was taken. A typed zone is a '+
+    'guess, and a guess that contradicts the exit address is the most readable proxy tell there '+
+    'is — which is exactly what a box defaulting to Asia/Manila had every account here '+
+    'announcing.'));
 
   const msg=el('div','tiny');msg.style.marginTop='.4rem';
   const bar=el('div');bar.style.cssText='margin-top:.55rem;display:flex;gap:.5rem;flex-wrap:wrap';
@@ -4088,7 +4142,10 @@ function accountEditor(a){
   save.onclick=async()=>{
     const body={
       handle:a.handle,
-      role:eRole.value, speaks:eSpeaks.value, timezone:eTz.value, note:eNote.value,
+      /* No `timezone` key: the column is written from the browser's measurement, and the server
+         treats an absent key as unchanged — so sending one here could only overwrite a fact
+         with whatever was on screen when the panel was opened. */
+      role:eRole.value, speaks:eSpeaks.value, note:eNote.value,
       subreddits:eSubs.value.split(',').map(s=>s.trim()).filter(Boolean)
     };
     /* Blank means "leave it alone", not "set it to nothing" — the server treats an absent key
@@ -4300,8 +4357,8 @@ function accounts(){
     if(a.speaks)b.append(el('p','jt',esc(a.speaks)));
     b.append(el('p','jw',
       `${a.dailyCeiling!=null?esc(`Ceiling ${a.dailyCeiling} repl${a.dailyCeiling===1?'y':'ies'}`):'No daily limit set'} · `+
-      `quiet ${a.quietHours?esc(a.quietHours[0]+':00–'+a.quietHours[1]+':00'):'not set'} `+
-      `${esc(a.timezone||'')}`));
+      `quiet ${a.quietHours?esc(a.quietHours[0]+':00–'+a.quietHours[1]+':00'):'not set'} · `+
+      `${esc(zoneRead(a.location))}`));
     job.append(b);
     job.append(el('div','jr',
       `<span class="score"${a.karma==null?' style="color:var(--ink-3)"':''}>${a.karma==null?'—':esc(String(a.karma))}</span>`));
@@ -4383,7 +4440,7 @@ function accounts(){
       c.append(el('div','tiny',
         `Posts in ${a.subreddits.length?esc(a.subreddits.map(s=>'r/'+s).join(', ')):'nowhere set'} · `+
         `${a.dailyCeiling!=null?esc(a.dailyCeiling+' reply a day at most'):'no daily limit set'} · `+
-        `quiet ${a.quietHours?esc(a.quietHours[0]+':00–'+a.quietHours[1]+':00'):'not set'} ${esc(a.timezone||'')}`));
+        `quiet ${a.quietHours?esc(a.quietHours[0]+':00–'+a.quietHours[1]+':00'):'not set'} · ${esc(zoneRead(a.location))}`));
       /**
        * The sign-in folder, in THREE states rather than two.
        *
