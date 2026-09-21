@@ -247,6 +247,28 @@ test('a body that is not JSON at all is refused, and quoted back', () => {
  * practice in this suite (see dependencies, cli, tokens).
  * ------------------------------------------------------------------ */
 
+/**
+ * The two shapes that mean "this went through Playwright's APIRequestContext", which is DEAD
+ * ROUTE 2 however it is spelled.
+ *
+ * Named and shared so the guard below and the test of the guard cannot drift apart — a guard
+ * proven against one regex and applied with another proves nothing.
+ *
+ *   `call`  the request object is ALWAYS reached as a `.request` property and ALWAYS used by
+ *           calling an HTTP verb on it. That holds for `page.context().request.get(...)`, for
+ *           `context.request.get(...)` and for any alias, because the property name is part of
+ *           Playwright's API and the variable name is not.
+ *
+ *   `reach` the precursor, for the form that takes the alias first and calls it later, or hands
+ *           the request object on under a name with no `.request` left at the call site.
+ *           `detectFromBrowser` gets its page from `attach()` and has never needed the
+ *           BrowserContext, so reaching for one in this file is itself the signal.
+ */
+const DEAD_ROUTE_2 = {
+  call:  /\.\s*request\s*\.\s*(get|post|put|patch|delete|head|fetch)\s*\(/i,
+  reach: /\.\s*context\s*\(\s*\)/
+};
+
 test('detection still fetches from a LOCAL ORIGIN and neither of the two dead routes', () => {
   const src = readFileSync(join(process.cwd(), 'src/proxy/detect.ts'), 'utf8');
   /* CODE ONLY. The comments in that file NAME both dead routes in order to warn about them,
@@ -260,6 +282,48 @@ test('detection still fetches from a LOCAL ORIGIN and neither of the two dead ro
   assert.doesNotMatch(code, /page\.goto\(\s*GEO_URL/,
     'DEAD ROUTE 1: a top-level navigation to the http geo URL is upgraded to https by Chrome and answered 403. Measured — do not restore it.');
 
-  assert.doesNotMatch(code, /context\.request/,
-    'DEAD ROUTE 2: context.request issues from Node, does not inherit the browser upstream, and reports the HOST location as if it were the exit. Measured — it returns 200, which is what makes it dangerous.');
+  for (const [what, re] of Object.entries(DEAD_ROUTE_2)) {
+    assert.doesNotMatch(code, re,
+      `DEAD ROUTE 2 (${what}): an APIRequestContext issues from Node, does not inherit the `
+      + 'browser upstream, and reports the HOST location as if it were the exit. Measured — it '
+      + 'returns 200, which is what makes it dangerous.');
+  }
+});
+
+/**
+ * The guard's own coverage, which is not the same claim as the guard passing.
+ *
+ * WHY THIS TEST EXISTS. The assertion above used to be `/context\.request/`, and it caught one
+ * spelling in three. `detectFromBrowser` works entirely on `session.page` and there is no variable
+ * named `context` anywhere in detect.ts — so the only form the old regex could catch was the one
+ * least likely to be written, and the two idiomatic forms restored the dead route in silence.
+ *
+ * Measured by putting each spelling back into src/proxy/detect.ts as live, type-correct code and
+ * running this suite:
+ *
+ *   session.page.context().request.get(GEO_URL)          old guard PASSED — 17/17 green
+ *   const context = page.context(); context.request.get  old guard fired
+ *   const ctx = page.context(); ctx.request.get(...)     old guard PASSED — 17/17 green
+ *
+ * A guard is a claim about what it would catch, and that claim is testable without touching the
+ * file it guards. These three strings are the three spellings, so the coverage cannot silently
+ * narrow again — which is exactly how it narrowed the first time, by pinning a VARIABLE NAME when
+ * the property being guarded is a PROPERTY ACCESS. The regexes are shared with the test above, so
+ * the thing proven here is the thing applied there.
+ */
+test('the guard catches all three spellings of the dead route, not just the unlikely one', () => {
+  const caught = (text: string) => Object.values(DEAD_ROUTE_2).some((re) => re.test(text));
+
+  assert.ok(caught('const r = await session.page.context().request.get(GEO_URL);'),
+    'the idiomatic form: reached straight off the page, no intermediate variable at all');
+  assert.ok(caught('const context = session.page.context();\nconst r = await context.request.get(GEO_URL);'),
+    'the form the old regex caught — kept, because a fix must not trade one spelling for another');
+  assert.ok(caught('const ctx = session.page.context();\nconst r = await ctx.request.get(GEO_URL);'),
+    'the same thing under any other name — the name was never the property being guarded');
+
+  /* And it must not fire on what detect.ts actually does, or it would be unfalsifiable. */
+  assert.ok(!caught('const res = await fetch(url, { signal: AbortSignal.timeout(ms) });'),
+    'a renderer fetch is the CORRECT transport and must not be flagged');
+  assert.ok(!caught('await session.page.goto(origin, { waitUntil: \'domcontentloaded\' });'),
+    'pointing the tab at the local origin is the whole design and must not be flagged');
 });

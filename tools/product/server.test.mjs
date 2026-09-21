@@ -1156,6 +1156,26 @@ test('an account’s description can be edited, in the record and the seed alike
     assert.equal(r.status, 200, `update was refused: ${JSON.stringify(body)}`);
     assert.equal(body.account.role, 'After');
 
+    /**
+     * THE ZONE IS REFUSED, AND THE REFUSAL IS REPORTED.
+     *
+     * This test used to post `timezone: 'Europe/London'` and assert the column held it. That
+     * contract is over: `accounts.timezone` is a record of a measurement — written only by a
+     * detection, from what the browser's own network reported — so the field is no longer
+     * editable. The request above still NAMES it, deliberately, so that the refusal is exercised
+     * rather than assumed. Deleting the test would have removed the only place that proves a
+     * posted zone cannot reach the column.
+     *
+     * NAMED BACK rather than silently dropped. A form that posts a field and gets a cheerful 200
+     * has taught the person something false about what was saved, and they will go on believing
+     * the zone on screen is the one the browser announces. `ignored` is the console's only way to
+     * say "that one did not take".
+     */
+    assert.ok(Array.isArray(body.ignored),
+      `a refused field must be reported back, not dropped: ${JSON.stringify(body)}`);
+    assert.ok(body.ignored.includes('timezone'),
+      'an update naming the zone must say it was ignored, rather than accept it quietly');
+
     /* Both stores, because the CLI reads the seed file synchronously and the database is the
        record: an edit that lands in one is an account that behaves differently depending on
        which half of redbot is asking. */
@@ -1165,7 +1185,12 @@ test('an account’s description can be edited, in the record and the seed alike
     assert.equal(row.rows[0].role, 'After');
     assert.equal(row.rows[0].speaks, 'plugin conflicts');
     assert.deepEqual(row.rows[0].subreddits, ['Wordpress_Help', 'woocommerce']);
-    assert.equal(row.rows[0].timezone, 'Europe/London');
+    /* The column, which is the load-bearing half — the response could be polite and the row
+       could still have moved. This account has never been measured, so the zone stays NULL, and
+       NULL is exactly what src/window.ts refuses to schedule on. */
+    assert.equal(row.rows[0].timezone, null,
+      'a posted zone must not reach the column: it is a measurement, and nothing has measured this '
+      + 'account');
     assert.equal(row.rows[0].quiet_start, 1);
     assert.equal(row.rows[0].daily_ceiling, 4);
 
@@ -1173,6 +1198,11 @@ test('an account’s description can be edited, in the record and the seed alike
     const mirrored = seeded.accounts.filter((a) => a.handle === 'Edit_Me');
     assert.equal(mirrored.length, 1, 'editing must REPLACE the seed entry, never append a second');
     assert.equal(mirrored[0].role, 'After');
+    /* And the seed file did not take it either. src/config.ts reads this file synchronously as a
+       fallback, so a zone that landed only here would be the one an unprimed process announces —
+       the stale-store failure 0018's header describes. */
+    assert.ok(!mirrored[0].timezone,
+      `the seed mirror must not accept a posted zone either: ${JSON.stringify(mirrored[0])}`);
   } finally {
     await forgetAccount('Edit_Me');
   }
