@@ -2528,3 +2528,59 @@ test('no console button hands doAction a click event instead of its button', () 
   assert.match(ui, /if\(!bt\|\|!bt\.style\|\|!bt\.parentElement\)/,
     'doAction must refuse a non-button BEFORE it takes the busy lock');
 });
+
+/**
+ * THE TIMEZONE IS NOT A FIELD, AND A ZONE WITHOUT A DATE IS NOT A MEASUREMENT.
+ *
+ * `accounts.timezone` was typed into a box on the Accounts screen whose placeholder was
+ * `Asia/Manila`. On the machine this was found on, all eight accounts therefore announced Manila
+ * while the connection egressed from San Jose — and nothing on the card could reveal it, because a
+ * zone printed on its own looks identical whether a person guessed it or a browser reported it.
+ *
+ * So two things have to stay true together, and neither is sufficient alone: nothing may offer a
+ * box to type a zone into, and nothing may print a zone without the moment it was measured. The
+ * second is the one a well-meaning edit undoes — restoring `esc(a.timezone||'')` to a card is a
+ * one-character-looking change that silently puts the guess back on screen wearing the same
+ * clothes as a fact.
+ *
+ * A source-shape test because the rendering needs a DOM: `server.test.mjs` drives HTTP and never
+ * loads the page. The render itself — both states, side by side — is asserted in
+ * `tools/product/ui.test.mjs`, which has a browser. This is the half that runs in `npm test`.
+ */
+test('no box types a timezone, and no card prints one without a date', () => {
+  const ui = readFileSync(join(HERE, 'index.html'), 'utf8');
+
+  /* Comments are dropped the same way the doAction test above drops them, and for the same
+     reason: the comments EXPLAIN the removed field and quote its old shape. */
+  const code = ui.split('\n').filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join('\n');
+
+  assert.ok(!/f\('Timezone'/.test(code),
+    "the account editor must not offer a Timezone box — a measured zone is not an editable field");
+  /**
+   * Not a ban on the WORDS "Asia/Manila" — the editor panel now explains, in prose, that a box
+   * defaulting to that zone is why every account here announced the wrong hemisphere, and a test
+   * that forbade the string would forbid the explanation. What must never come back is a FIELD
+   * seeded with a zone, whatever zone it is: `f('Timezone', a.timezone, 'America/Los_Angeles')`
+   * would be the same defect wearing a better default, and a literal-string check would wave it
+   * straight through.
+   */
+  const seeded = [...code.matchAll(/f\('([^']+)'[^\n]*'([A-Za-z]+\/[A-Za-z_]+)'\)/g)];
+  assert.deepEqual(seeded.map((m) => `${m[1]} = ${m[2]}`), [],
+    'no editor field may be seeded with an IANA timezone — the zone is measured, not offered');
+  assert.ok(!/timezone\s*:\s*eTz\.value/.test(code),
+    'and nothing may submit a hand-typed zone to /api/account/update');
+
+  const bare = [...code.matchAll(/esc\(\s*a\.timezone\s*\|\|\s*''\s*\)/g)];
+  assert.deepEqual(bare.map((m) => m[0]), [],
+    'a card that prints the zone alone cannot be told apart from the old guess — that '
+    + 'indistinguishability is the whole defect, so the timestamp is not decoration');
+
+  assert.match(code, /const zoneRead=/,
+    'one helper renders the measurement, so the card and the limits rail cannot drift apart');
+  assert.match(code, /never measured/,
+    'and it must say "never measured" rather than showing a zone nothing has checked');
+
+  const sites = [...code.matchAll(/zoneRead\(a\.location\)/g)];
+  assert.equal(sites.length, 2,
+    `both surfaces that used to print a.timezone must read the measurement instead — found ${sites.length}`);
+});

@@ -69,7 +69,15 @@ before(async () => {
     child.on('error', (e) => { clearTimeout(timer); rej(e); });
     child.on('exit', (c) => { clearTimeout(timer); rej(new Error(`console exited ${c}`)); });
   });
-  browser = await chromium.launch();
+  /**
+   * `npm ci` installs the playwright PACKAGE, not its browsers, so a machine where
+   * `npx playwright install` has never run has nothing for `chromium.launch()` to start and this
+   * whole file fails before its first assertion. REDBOT_UI_CHANNEL points it at a browser that IS
+   * installed — `chrome` uses the system Google Chrome, which this app already requires. Unset,
+   * nothing changes and the bundled chromium is used exactly as before.
+   */
+  browser = await chromium.launch(
+    process.env.REDBOT_UI_CHANNEL ? { channel: process.env.REDBOT_UI_CHANNEL } : {});
 });
 
 after(async () => {
@@ -2875,5 +2883,103 @@ test('a genuinely up-to-date desktop install still says so', async () => {
     await page.waitForFunction(() => (document.querySelector('#toast')?.textContent || '').trim().length > 0,
       null, { timeout: 10_000 });
     assert.match(await page.textContent('#toast'), /on the latest/i);
+  } finally { await context.close(); }
+});
+
+/**
+ * THE ZONE ON THE CARD IS A MEASUREMENT, AND AN UNMEASURED ONE SAYS SO.
+ *
+ * `accounts.timezone` was typed into a box on this screen, and the box defaulted to `Asia/Manila`.
+ * All eight accounts on the machine this was found on claimed Manila while the connection left
+ * the United States, and the card could not reveal it: a zone printed on its own looks the same
+ * whether a person guessed it or a browser reported it. That indistinguishability IS the defect,
+ * which is why the timestamp is asserted here and not treated as trim.
+ *
+ * BOTH STATES IN ONE RENDER, deliberately. The two cards sit side by side, so the contrast is the
+ * assertion — a test that only ever saw the measured one would pass against a renderer that had
+ * quietly collapsed the two states into the same line, which is the regression that matters.
+ */
+test('the card dates the timezone it shows, and says so when nothing has measured one', async () => {
+  const state = makeState(NOW);
+
+  /**
+   * Real wall-clock, not the frozen NOW. `ago()` reads the BROWSER's clock and this suite does not
+   * freeze it (the checkpoint rows above build their timestamps from `Date.now()` for the same
+   * reason). Four minutes renders as "4m ago" with minutes of slack for the run's own duration.
+   */
+  const measuredAt = new Date(Date.now() - 4 * 60_000).toISOString();
+
+  state.accounts = state.accounts.map((a) => (a.handle === 'docs-architect'
+    ? { ...a,
+        timezone: 'America/Los_Angeles',
+        location: { timezone: 'America/Los_Angeles', at: measuredAt,
+                    countryCode: 'US', city: 'San Jose', via: 'browser' } }
+    /* Left in exactly the state the eight live accounts are in: a zone sitting in the column with
+       nothing that ever measured it. The card must not read that column back as a finding. */
+    : { ...a, timezone: 'Asia/Manila', location: null }));
+
+  const { context, page, errors } = await open({ state });
+  try {
+    await tab(page, 'accounts');
+    const cards = await page.evaluate(() => [...document.querySelectorAll('#v-accounts .card')]
+      .map((c) => ({ handle: c.querySelector('.chead b')?.textContent ?? '', text: c.textContent ?? '' })));
+
+    const measured = cards.find((c) => c.handle === 'docs-architect');
+    const never = cards.find((c) => c.handle === 'sgen-support');
+    assert.ok(measured && never, 'both accounts should render');
+
+    assert.match(measured.text, /America\/Los_Angeles/, 'the measured zone is shown');
+    assert.match(measured.text, /measured \d+[smhd] ago/,
+                 'with WHEN it was measured — a zone with no timestamp is the old guess');
+    assert.doesNotMatch(measured.text, /never measured/,
+                        'a measured account must not also carry the unmeasured wording');
+
+    assert.match(never.text, /timezone never measured/,
+                 'an account nothing has measured must say exactly that');
+    assert.doesNotMatch(never.text, /Asia\/Manila/,
+                        'the un-measured column value must never be printed as though it were a finding');
+
+    /* The limits rail beside the cards renders the same fact from the same helper, so one of them
+       cannot start disagreeing with the other about the same account. */
+    const screen = await page.textContent('#v-accounts');
+    assert.ok((screen.match(/timezone never measured/g) || []).length >= 2,
+              'the rail says it too — one fact, one rendering');
+
+    assert.deepEqual(errors, [], 'the accounts screen must render with a clean console');
+  } finally { await context.close(); }
+});
+
+/**
+ * And the box itself is gone.
+ *
+ * Asserted through the editor rather than the source because the source half already lives in
+ * `server.test.mjs`; what this adds is that the panel EXPLAINS the absence. A control that
+ * disappears with no word reads as a feature that broke, and the editor already takes that posture
+ * about the sign-in folder and the port.
+ */
+test('the account editor no longer offers a Timezone box to type a guess into', async () => {
+  const { context, page, calls } = await open();
+  try {
+    await tab(page, 'accounts');
+    await page.click('button[aria-label="Edit docs-architect"]');
+    await page.waitForSelector('input[aria-label="Role for docs-architect"]', { timeout: 5000 });
+
+    assert.equal(await page.locator('input[aria-label="Timezone for docs-architect"]').count(), 0,
+                 'a measured zone is not an editable field');
+
+    const txt = await page.textContent('#v-accounts');
+    assert.match(txt, /measured from the browser/i,
+                 'the panel must say where the zone comes from instead');
+
+    /* The load-bearing half: nothing may still SEND a zone, whatever the form shows. */
+    await page.click('text=Save changes');
+    const t0 = Date.now();
+    while (!calls.some((c) => c.path === '/api/account/update')) {
+      if (Date.now() - t0 > 5000) throw new Error('the save never reached /api/account/update');
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const sent = calls.filter((c) => c.path === '/api/account/update')[0].body;
+    assert.ok(!('timezone' in sent),
+              'a typed zone must not be submitted — the column is written from the measurement');
   } finally { await context.close(); }
 });
