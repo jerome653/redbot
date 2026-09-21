@@ -359,7 +359,7 @@ function startServer(port, env) {
  * Recorded so the quit handler can close exactly those and nothing else. A browser the operator
  * started themselves is not in here and is never touched.
  */
-const bootOpened = [];
+export const bootOpened = [];
 let consolePort = null;
 
 /**
@@ -406,7 +406,94 @@ async function closeBootBrowsers() {
   await Promise.race([work, deadline]);
 }
 
-async function openBoundBrowsers(port) {
+/**
+ * HOW LONG BOOT WAITS FOR ONE ACCOUNT, AND WHY IT IS WRITTEN AS A SUM.
+ *
+ * This was `30_000`, and 30 seconds was right for what `/api/account/open` used to do: spawn
+ * Chrome and come back. It does not do that any more. Since detection was wired into the launch
+ * path, the server runs the whole `wait for the port -> DETECT -> align -> open Reddit` order
+ * before it answers, and this number was never moved to match. What that produced was not a slow
+ * boot but a WRONG one: the fetch below aborted on launches that were still succeeding, and boot
+ * then reported a failure for a browser that opened perfectly well.
+ *
+ * So it is no longer one number. Each part is the budget of a real step, read from the code that
+ * spends it:
+ *
+ *   PORT_WAIT       tools/product/server.mjs, `waitForDebugPort(endpoint, ms = 30_000)`.
+ *                   browser-start.mjs calls it with no second argument, so that default IS the
+ *                   budget rather than a fallback nobody reaches.
+ *   DETECT_GOTO     src/proxy/detect.ts, `DEFAULT_TIMEOUT_MS = 20_000`, spent as the `timeout` of
+ *                   `page.goto(origin, …)`.
+ *   DETECT_FETCH    src/proxy/detect.ts, the SAME 20_000 a second time, as the
+ *                   `AbortSignal.timeout(ms)` of the renderer's geo fetch. The second one is NOT
+ *                   the remainder of the first — it is a fresh, whole budget, which is what makes
+ *                   the two add. Measured: `timeoutMs=3000 -> 3535ms` and `timeoutMs=6000 ->
+ *                   6395ms`, each a fast goto followed by a fetch that spent its allowance whole.
+ *   ALIGN_CONNECT   src/proxy/align.ts, `connectTimeoutMs ?? 20_000`, for the CDP connect that
+ *                   covers the browser once detection has answered.
+ *
+ * NONE OF THE FOUR IS IMPORTABLE FROM HERE. `DEFAULT_TIMEOUT_MS` is module-private to detect.ts
+ * and `waitForDebugPort`'s is a default parameter, so there is nothing exported to import and
+ * mirroring them is the best that can be done from this file. Writing the mirror as a SUM rather
+ * than as a second magic number is the entire point: the arithmetic is visible, and the day any
+ * of those four moves, this line is visibly wrong instead of quietly short. electron/main.test.mjs
+ * pins each part against its source, so that day fails a test rather than a boot. Do not collapse
+ * it back into a literal — a constant divorced from what it waits for is how the first one rotted.
+ *
+ * The headroom covers the work with no declared budget at all: spawning Chrome, reallocating a
+ * port another program was holding, creating the profile directory, writing the detection down,
+ * and the final navigation to Reddit. None of that can hang unboundedly. None of it is free.
+ *
+ * TWO MINUTES IS NOT EXPENSIVE, and this is the place to say why. A launch that answers returns
+ * the moment it is done, so this budget is only ever paid in full by an account that is genuinely
+ * stuck. The loop below is serial, so a fleet pays it in sequence — but the arrangement being
+ * replaced paid 30 seconds per account AND got the answer wrong at the end of it.
+ */
+export const PORT_WAIT_MS = 30_000;
+export const DETECT_GOTO_MS = 20_000;
+export const DETECT_FETCH_MS = 20_000;
+export const ALIGN_CONNECT_MS = 20_000;
+export const BOOT_OPEN_HEADROOM_MS = 30_000;
+export const BOOT_OPEN_TIMEOUT_MS =
+  PORT_WAIT_MS + DETECT_GOTO_MS + DETECT_FETCH_MS + ALIGN_CONNECT_MS + BOOT_OPEN_HEADROOM_MS;
+
+/**
+ * Is that browser OURS now?
+ *
+ * Asked of `/api/pulse` rather than of the debug port directly, for the same reason the
+ * `state === 'ours'` skip below defers to it: the console already owns the rule for what makes a
+ * browser ours as opposed to merely something answering on a port. A second copy of that rule
+ * here would be a second rule, and the two would disagree — which on this exact question is how a
+ * machine with Lenovo Vantage holding 9222 gets somebody else's window closed at quit.
+ *
+ * Bounded, and short. The abort happened because the launch outran its budget, so the case worth
+ * covering is the one that finished just after boot stopped listening; a few seconds of asking
+ * covers it. Anything still going after that is reported rather than waited for, because a boot
+ * that hangs is worse than a browser left running.
+ */
+async function browserIsOursNow(base, handle, { attempts = 3, gapMs = 2_000 } = {}) {
+  for (let i = 0; i < attempts; i++) {
+    if (i) await new Promise((r) => setTimeout(r, gapMs));
+    try {
+      /* The same budget the first pulse gets — it is the same call to the same server. */
+      const res = await fetch(`${base}/api/pulse`, { signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) continue;
+      const found = ((await res.json()).browsers || []).find((x) => x && x.handle === handle);
+      if (found && found.state === 'ours') return found;
+    } catch { /* the console not answering is not an answer — ask again, then give up */ }
+  }
+  return null;
+}
+
+/**
+ * Open every browser bound to this machine that is not already open.
+ *
+ * `openTimeoutMs` is a parameter rather than a constant read straight from scope so the abort path
+ * can be driven in a test in under a second instead of in two minutes — the same shape, and for
+ * the same reason, as `waitForDebugPort(endpoint, ms = 30_000)` in tools/product/server.mjs.
+ * Production never passes it.
+ */
+export async function openBoundBrowsers(port, { openTimeoutMs = BOOT_OPEN_TIMEOUT_MS } = {}) {
   consolePort = port;
   if (process.env.REDBOT_NO_AUTO_BROWSER === '1') {
     boot_log('browsers    skipped — REDBOT_NO_AUTO_BROWSER=1');
@@ -444,7 +531,7 @@ async function openBoundBrowsers(port) {
            launch is the interruption this whole feature was meant to remove. Headed, never
            headless — Reddit block-pages a headless browser with a 200. See launchChrome. */
         body: JSON.stringify({ handle: b.handle, background: true }),
-        signal: AbortSignal.timeout(30_000)
+        signal: AbortSignal.timeout(openTimeoutMs)
       });
       const out = await res.json().catch(() => ({}));
       /* Recorded ONLY on a real open. `alreadyRunning` means the browser was already there when
@@ -469,7 +556,49 @@ async function openBoundBrowsers(port) {
         ? `browsers    ${b.handle} opened on ${out.port ?? b.port}${out.movedFrom ? ` (moved off ${out.movedFrom} — another program had it)` : ''}`
         : `browsers    ${b.handle} NOT opened — ${(out && out.error) || `HTTP ${res.status}`}`);
     } catch (e) {
-      boot_log(`browsers    ${b.handle} NOT opened — ${e && e.message ? e.message : e}`);
+      /**
+       * A TIMEOUT IS NOT A FAILED LAUNCH, and treating it as one is what left browsers behind.
+       *
+       * `AbortSignal.timeout` rejects with a DOMException named `TimeoutError` (measured on the
+       * Node 24 this ships with). When it fires nothing has failed — THIS SIDE STOPPED LISTENING.
+       * The server goes on launching, so a Chrome this process caused ends up running with
+       * nothing anywhere recording the fact: `out` is never assigned, the handle never reaches
+       * `bootOpened`, and the quit handler therefore leaves it. The next boot reads it as `ours`,
+       * skips it, and leaves it again. That is exactly the pile-up described at the quit handler
+       * — four instances, 39 processes, 3.6 GB, two of them belonging to an app that was no
+       * longer running — arriving through a different door.
+       *
+       * So the handle is RECONCILED rather than written off: ask the console whether that browser
+       * is ours now, and if it is, record it so quit closes it.
+       *
+       * THIS IS NOT THE `alreadyRunning` CASE and the two must not be folded together.
+       * `alreadyRunning` means the browser was there BEFORE boot asked — this process did not
+       * start it, so this process must not close it, and that reasoning above is untouched. Here
+       * the opposite holds: pulse said this account was not `ours` a moment ago, boot asked for it
+       * to be opened, and it is `ours` now. The only actor known to have asked is this loop.
+       *
+       * The residual case is an operator opening that same account by hand inside the abort
+       * window, whose window would then be closed at quit. That is a narrow window and a mild
+       * outcome, and it is the right trade against a leak that is certain and compounds on every
+       * restart — which is the failure the close-on-quit path exists to prevent in the first
+       * place. Reporting and walking away would keep the tidier rule and keep the leak.
+       *
+       * An adopted browser is NOT minimised. Minimising is a courtesy for a window this loop
+       * watched open; by the time we are here it has been up for two minutes and the operator has
+       * either noticed it or has not.
+       */
+      if (!e || e.name !== 'TimeoutError') {
+        boot_log(`browsers    ${b.handle} NOT opened — ${e && e.message ? e.message : e}`);
+        continue;
+      }
+      boot_log(`browsers    ${b.handle} still opening after ${openTimeoutMs}ms — boot stopped waiting, checking whether it came up anyway`);
+      const adopted = await browserIsOursNow(base, b.handle);
+      if (adopted) {
+        bootOpened.push(b.handle);
+        boot_log(`browsers    ${b.handle} opened on ${adopted.port ?? b.port} after boot gave up waiting — adopted, and it will be closed on the way out`);
+      } else {
+        boot_log(`browsers    ${b.handle} NOT opened — it had not answered ${openTimeoutMs}ms after boot asked, and was not running when boot looked again. If a window for it appears later, nothing is tracking it and it will be left open at quit.`);
+      }
     }
   }
 }
