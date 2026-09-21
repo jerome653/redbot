@@ -9,8 +9,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { timezoneMatchesCountry, alignmentRefusal, usZoneForCity, webrtcFence, AlignmentError } =
-  await import('../proxy/align.js');
+const { timezoneMatchesCountry, alignmentRefusal, usZoneForCity, webrtcFence, AlignmentError,
+  coverageRefusal, coverOutcome } = await import('../proxy/align.js');
 
 /* ------------------------------------------------------------------ *
  * Country <-> timezone, from the runtime's own IANA data
@@ -166,4 +166,69 @@ test('the fence leaves the constructor in place and makes it throw', () => {
 test('AlignmentError is its own type, so a caller can tell it from a network fault', () => {
   assert.ok(new AlignmentError('x') instanceof Error);
   assert.equal(new AlignmentError('x').name, 'AlignmentError');
+});
+
+/* ------------------------------------------------------------------ *
+ * Covering the browser: what a failure to apply the override means
+ *
+ * The fence and the override are the same promise made twice — that the browser will not
+ * announce something untrue — and only one of them used to be enforced. A failed fence install
+ * threw and closed the browser; a failed `Emulation.setTimezoneOverride` was swallowed, and
+ * nothing looked at the count before navigating. So a launch in which ZERO pages were covered
+ * returned ok and went to Reddit announcing whatever the host machine says, which on this
+ * project's own box is not where the exit is.
+ *
+ * The decision is pure and lives here. Whether the browser is actually closed and actually not
+ * navigated is proven by a run against a real Chrome, as the header of this file says.
+ * ------------------------------------------------------------------ */
+
+test('a page that is gone VANISHED; a page that is still open REFUSED', () => {
+  /* The distinction the swallowing `catch` said could not be made at that seam. It can:
+     Playwright answers `isClosed()` synchronously, and a page that shut mid-flight reports it. */
+  assert.equal(coverOutcome({ isClosed: () => true }), 'vanished');
+  assert.equal(coverOutcome({ isClosed: () => false }), 'refused');
+});
+
+test('a covered page is not refused — the ordinary launch still proceeds', () => {
+  assert.equal(coverageRefusal('acct', 'America/Los_Angeles', 'covered', 1), null);
+  assert.equal(coverageRefusal('acct', 'America/Los_Angeles', 'covered', 4), null,
+    'more pages covered is still covered');
+});
+
+test('a page that REFUSED the override stops the launch, and says the browser refused it', () => {
+  const r = coverageRefusal('acct', 'America/Los_Angeles', 'refused', 0);
+  assert.ok(r, 'a browser that would announce the host zone must not be sent to Reddit');
+  assert.match(r, /refused/i, 'the diagnosis must name what happened');
+  assert.match(r, /America\/Los_Angeles/, 'and the zone it could not apply');
+  assert.match(r, /acct/, 'and which account');
+});
+
+test('a page that VANISHED also stops the launch, but is diagnosed as the ordinary thing it is', () => {
+  /**
+   * BOTH STOP, AND THAT IS THE POINT OF SEPARATING THEM. Zero pages covered means the next line
+   * would navigate an uncovered tab, and why it is uncovered does not change what it announces.
+   * What the distinction buys is the MESSAGE: a closed page is the ordinary case, tolerated
+   * everywhere else, and telling somebody their browser "refused" when the tab merely shut would
+   * send them looking for a fault that is not there.
+   */
+  const r = coverageRefusal('acct', 'America/Los_Angeles', 'vanished', 0);
+  assert.ok(r, 'nothing was covered, so there is nothing safe to navigate');
+  assert.match(r, /closed/i, 'it must say the tab closed');
+  /* No word boundaries, deliberately. The first spelling of this line carried a `\b` that
+     arrived as a literal BACKSPACE byte, so the pattern matched nothing and the assertion
+     passed for any input at all — a dead instrument reporting good news. A bare /refused/i
+     needs no escape and is the stronger claim anyway. */
+  assert.doesNotMatch(r, /refused/i, 'and must NOT accuse the browser of refusing');
+
+  const refused = coverageRefusal('acct', 'America/Los_Angeles', 'refused', 0);
+  assert.notEqual(r, refused, 'the two diagnoses must not collapse into one message');
+});
+
+test('a count that disagrees with the outcome still refuses — neither instrument alone decides', () => {
+  /* `covered` with a zero count means the counter and the outcome disagree. That is not a state
+     to pick a winner in: it is a broken instrument, and the fail-closed reading is the only safe
+     one. It is also what stops a future edit that increments the count somewhere else from
+     quietly re-opening the door. */
+  assert.ok(coverageRefusal('acct', 'America/Los_Angeles', 'covered', 0),
+    'a covered outcome with nothing counted is not evidence of coverage');
 });

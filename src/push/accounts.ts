@@ -183,8 +183,30 @@ export interface PullResult {
   stopped?: string;
 }
 
-/** Fields a person would notice changing, compared to decide create vs update vs no-op. */
-const COMPARED = ['role', 'speaks', 'knows', 'subreddits', 'timezone',
+/**
+ * Fields a person would notice changing, compared to decide create vs update vs no-op.
+ *
+ * `timezone` IS NOT ONE OF THEM, and its absence is load-bearing rather than an oversight.
+ *
+ * Both local writers refuse an incoming zone — see the long note at the timezone site in
+ * src/console-accounts.ts. Comparing a field that can never be applied manufactures a change
+ * NOTHING CAN EVER SETTLE: the plan says `update`, `applyAccounts` calls `updateConsoleAccount`,
+ * the key is refused, the column stays as it was, and the next pull plans the identical update
+ * again. Forever, and visibly — it is reported to the operator as an outstanding change on every
+ * single pull.
+ *
+ * This file already carries that scar once. See `diff()` immediately below, where comparing
+ * `String(["WordPress"])` against `'["WordPress"]'` produced a phantom update on every pull for
+ * the same underlying reason: two sides that no write could bring into agreement.
+ *
+ * It is also not a field the two sides SHOULD agree on. The local value is a measurement of the
+ * exit THIS machine egresses from; the remote one came from whichever machine last reported. Two
+ * correct measurements of two different places are not a disagreement to reconcile.
+ *
+ * It stays in PORTABLE_FIELDS: the measurement still travels UP, so the dashboard sees what each
+ * machine resolved. Only comparing it in order to pull one DOWN is removed.
+ */
+const COMPARED = ['role', 'speaks', 'knows', 'subreddits',
   'quiet_start', 'quiet_end', 'daily_ceiling', 'note'] as const;
 
 /**
@@ -338,6 +360,12 @@ export async function applyAccounts(
     const a = byHandle.get(entry.handle.toLowerCase());
     if (!a) continue;
 
+    /* `timezone` is passed on DELIBERATELY even though both writers refuse it. Dropping it here
+       would hide the refusal instead of making it: `createConsoleAccount` and
+       `updateConsoleAccount` report a refused key through `ignored`, and a caller that quietly
+       stopped sending the field would leave nothing anywhere able to say that a zone arrived and
+       was declined. The reason it is declined is at the timezone site in src/console-accounts.ts
+       — in short, a zone measured behind another machine's exit is not evidence about this one. */
     const common = {
       handle: entry.handle,
       role: a.role, speaks: a.speaks,

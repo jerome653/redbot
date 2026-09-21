@@ -93,8 +93,15 @@ test('an account with no quiet hours is judged on the ceiling alone', () => {
  * and src/db/accounts.ts only sets it when BOTH quiet_start and quiet_end are non-null, so any
  * row with either column NULL produces a record with no quietHours at all.
  *
- * All 8 rows carry quiet hours today, which is why nothing has been let through yet. 0018 makes
- * NULL timezones the normal state, which is precisely when a latent fail-open becomes a live one.
+ * Nothing has been let through YET only because of how the rows happen to be populated, not
+ * because the code refuses. Measured 2026-09-21, against a copy taken with its -wal and -shm and
+ * checkpointed before reading: every accounts row then carried both quiet_start and quiet_end, so
+ * no record reached checkWindow without quietHours. That is a fact about one day's data, dated
+ * deliberately rather than stated as a count — the reachability argument above rests on the
+ * SCHEMA allowing NULL, which no amount of currently-populated rows can retire.
+ *
+ * 0018 makes NULL timezones the normal state, which is precisely when a latent fail-open becomes
+ * a live one.
  * ------------------------------------------------------------------ */
 
 test('an account with NO timezone and NO quiet hours is REFUSED, not waved through', () => {

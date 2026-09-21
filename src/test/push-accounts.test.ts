@@ -74,7 +74,10 @@ async function seedAccount(handle: string, over: Record<string, unknown> = {}): 
        quiet_start, quiet_end, daily_ceiling, profile_dir, debug_port, note, created_at, updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
     [handle, over.role ?? 'support desk', over.speaks ?? 'things', '[]',
-      over.subreddits ?? '["WordPress"]', 'Asia/Manila', 0, 8, over.daily_ceiling ?? 1,
+      over.subreddits ?? '["WordPress"]',
+      /* Overridable so a fixture can seed an UNMEASURED account — the normal state after 0018.
+         The default is unchanged, so every fixture that does not ask for one is untouched. */
+      'timezone' in over ? over.timezone : 'Asia/Manila', 0, 8, over.daily_ceiling ?? 1,
       /* Machine-local, and present exactly as a real install has them. */
       over.profile_dir ?? 'chrome-profile-a', over.debug_port ?? 9223,
       over.note ?? 'seeded', '2026-07-01T00:00:00.000Z',
@@ -251,6 +254,50 @@ describe('pulling the list', () => {
     assert.equal(r.listVersion, 7);
   });
 
+  test('a remote zone against an unmeasured local one is NOT planned as an update', async () => {
+    /**
+     * THE SECOND HALF OF CLOSING THE DOOR, and it is not optional.
+     *
+     * Once the zone is refused on the way in, comparing it on the way in manufactures a change
+     * that NOTHING CAN EVER APPLY: the plan says `update`, `applyAccounts` calls
+     * `updateConsoleAccount`, the key is refused, the column stays NULL, and the next pull plans
+     * the identical update again. Forever. This file already carries the scar of exactly that
+     * shape — see the `diff()` note about `String(["WordPress"])`, which produced a phantom
+     * update on every pull for the same reason: two sides that can never be made to agree.
+     *
+     * The local NULL here is not an edge case. It is what every account on a freshly migrated
+     * install looks like, so this is the ordinary pull, not an unusual one.
+     */
+    await seedAccount('Unmeasured_Acct', { timezone: null });
+    const m = remote([
+      { handle: 'Unmeasured_Acct', role: 'support desk', speaks: 'things', knows: '[]',
+        subreddits: '["WordPress"]', timezone: 'Asia/Manila',
+        quiet_start: 0, quiet_end: 8, daily_ceiling: 1, note: 'seeded' }
+    ]);
+    const client = new PushClient({ baseUrl: 'https://push.invalid', token: 's', fetchImpl: m.fetchImpl });
+    const r = await pullAccounts(client, {});
+
+    const entry = r.plan.find((p) => p.handle === 'Unmeasured_Acct');
+    assert.ok(entry, 'the account is still in the plan');
+    assert.equal(entry.action, 'unchanged',
+      `a zone the local side will refuse must not be planned as a change: ${JSON.stringify(entry)}`);
+    assert.equal((entry.changed ?? []).includes('timezone'), false,
+      'and it must not be NAMED as changed either — the report is what a person reads');
+  });
+
+  test('the zone still travels UP: closing the inbound door leaves the projection intact', () => {
+    /**
+     * ONE DIRECTION, NOT BOTH. A measurement taken here is worth sending to the dashboard, which
+     * is how an operator sees what each machine actually resolved. What is refused is accepting
+     * one BACK — a zone measured on another machine describes another exit.
+     *
+     * Pinned because the cheap way to stop a value arriving is to stop SENDING it, and that would
+     * have removed a field from the wire and changed the list hash for every install.
+     */
+    assert.ok(PORTABLE_FIELDS.includes('timezone'),
+      'the outbound projection keeps the measurement — only the inbound door closed');
+  });
+
   test('an account missing from the list is REPORTED, never removed', async () => {
     // 'Third_Account' exists locally and is absent from the incoming list.
     const m = remote([
@@ -340,7 +387,19 @@ describe('applying a pulled list', () => {
     assert.equal(row.rows.length, 1);
     const a = row.rows[0]!;
     assert.equal(a.role, 'support desk');
-    assert.equal(a.timezone, 'Asia/Manila');
+
+    /**
+     * AND THE ZONE IS ONE OF THE THINGS IT DERIVES NOTHING OF, which is what this test is called.
+     *
+     * It used to assert the opposite — that a pulled account adopted the sender's 'Asia/Manila'.
+     * A zone arriving over the wire has no `account_locations` row behind it on THIS machine, and
+     * src/db/locations.ts only ever moves `accounts.timezone` in the same transaction as the
+     * evidence for it. So a synced zone is precisely the un-provenanced value 0018 exists to
+     * clear, and it is announced by src/proxy/align.ts from an exit the sender never measured.
+     */
+    assert.equal(a.timezone, null,
+      'a zone that arrived over the wire has no evidence row here, so it must not reach the column');
+
     assert.equal(Number(a.daily_ceiling), 3, 'the ceiling arrives, which create() alone does not set');
     assert.equal(Number(a.quiet_start), 1);
   });

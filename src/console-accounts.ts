@@ -42,6 +42,16 @@ export { portIsFree };
 const HANDLE_RE = /^[A-Za-z0-9_-]{3,20}$/;
 
 /**
+ * The keys a WRITE refuses, named in one place so the refusal and the report cannot drift.
+ *
+ * It governs BOTH doors. It used to sit beside EDITABLE and be read only by `updateConsoleAccount`,
+ * and that is exactly how `timezone` came to be refused by an edit and accepted by a create: one
+ * door consulted the list, the other carried its own literal. A refused set that only half the
+ * writers read is a rule with a hole in it shaped like the other half.
+ */
+const REFUSED = ['profileDir', 'debugPort', 'timezone'] as const;
+
+/**
  * Where debug ports start. 9222 is Chrome's conventional default and is often already taken.
  *
  * The bounds moved to src/ports.ts when relay allocation needed the same scan over a different
@@ -72,6 +82,14 @@ export interface CreateResult {
    * ready" is a different fact from "here is an empty folder to sign into".
    */
   adoptedProfileDir?: boolean;
+  /**
+   * Which keys were REFUSED, so the caller can say so instead of silently ignoring them.
+   *
+   * It lives on CREATE as well as update because both doors refuse the same key for the same
+   * reason, and a refusal only one of them can report is how the two drifted apart in the first
+   * place: update named `timezone` in `ignored` while create went on writing it.
+   */
+  ignored?: string[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -255,6 +273,13 @@ export async function createConsoleAccount(body: {
   const kept = keptFolderFor(handle, dirs);
   const dir = kept ? kept.profileDir : allocateProfileDir({ dataRoot: DATA, taken: dirs });
 
+  /* Named back to the caller rather than dropped on the floor — the same report `update` makes,
+     computed from the same list, so the two doors cannot drift on what they refuse or on what
+     they say about it. Keyed on the KEY BEING PRESENT, not on the value being plausible: a form
+     that posts a field and gets a cheerful 200 has taught the person something false about what
+     was saved, and that is true of a blank value as much as a well-formed one. */
+  const ignored = REFUSED.filter((k) => (body as Record<string, unknown>)[k] !== undefined);
+
   const account: AccountRecord = {
     handle,
     role: String(body.role ?? 'Support'),
@@ -272,28 +297,49 @@ export async function createConsoleAccount(body: {
      */
     subreddits: Array.isArray(body.subreddits) ? body.subreddits.map(String).filter(Boolean) : [],
     /**
-     * NO FALLBACK, AND USUALLY NO KEY AT ALL.
+     * NO KEY AT ALL, FROM ANY CALLER. A posted `timezone` is REFUSED, reported through `ignored`
+     * exactly as an edit reports it, and the column is left NULL.
      *
      * This used to write 'Asia/Manila' whenever the field was left empty, which is the build
      * inventing a location for somebody else's account. It is worse than the `['WordPress']`
      * default removed just above, because the timezone is ANNOUNCED: src/proxy/align.ts drives
      * `Emulation.setTimezoneOverride` from this value, so a guessed zone is broadcast to Reddit
-     * from an address that contradicts it. All 8 live accounts carried this default while the
-     * machine exited from California.
+     * from an address that contradicts it.
      *
-     * An account nobody has measured now has NO zone, and src/window.ts refuses to schedule it
-     * until a detection supplies one (see recordAccountDetection below). Absent rather than null:
-     * `upsertAccounts` writes `a.timezone ?? null`, so an absent key is already a NULL column, and
-     * `toRecord` turns that NULL back into an absent key. Absence is this codebase's existing
-     * spelling of "no zone", and adding a second one would be two spellings of one state.
+     * Removing the fallback left a CONDITIONAL SPREAD in its place, and that is the hole this
+     * closes. It no longer invented a zone, but it still accepted one — the same un-provenanced
+     * value, now typed by hand instead of defaulted — so create went on writing what update
+     * refused, and only update had a test.
      *
-     * A value is still accepted when a caller genuinely supplies one — src/push/accounts.ts syncs
-     * accounts in from the dashboard and passes the field through. That is the door this keeps
-     * open; it is not an invitation to type one, and the console form no longer sends it.
+     * THE HEADCOUNT IS NOT THE ARGUMENT, for the reason 0018's header gives at length: it rotted
+     * twice while that header was being written. The claim that does not turn on a count is the
+     * one to hold onto — every `accounts.timezone` in both stores was typed or defaulted, not one
+     * of them had been measured, and all of them said Manila while the machine egressed from San
+     * Jose, US.
+     *
+     * WHAT MAKES A ZONE LEGITIMATE IS ITS EVIDENCE, not who supplied it. src/db/locations.ts moves
+     * this column only inside the transaction that writes the `account_locations` row standing as
+     * its proof. A value arriving by any other route has no such row behind it.
+     *
+     * THE SYNC DOOR IS CLOSED TOO, which is the change from the comment that used to stand here.
+     * src/push/accounts.ts passes `timezone` through when it pulls an account in, and that value
+     * was measured on ANOTHER MACHINE behind another exit; writing it here would claim this
+     * browser egresses somewhere it does not, which is the exact contradiction `alignmentRefusal`
+     * exists to catch. Sync was already half-closed and did not say so — `updateConsoleAccount`
+     * has always refused the key, so a dashboard could never CHANGE a zone, only mint one on the
+     * first create. One list, one rule, both doors.
+     *
+     * The measurement still travels UP: `PORTABLE_FIELDS` keeps `timezone`, so the dashboard goes
+     * on seeing what each machine resolved. Only accepting one BACK is refused.
+     *
+     * Absent rather than null: `upsertAccounts` writes `a.timezone ?? null`, so an absent key is
+     * already a NULL column, and `toRecord` turns that NULL back into an absent key. Absence is
+     * this codebase's existing spelling of "no zone", and adding a second one would be two
+     * spellings of one state.
+     *
+     * An account nobody has measured has NO zone, and src/window.ts refuses to schedule it until
+     * a detection supplies one (see recordAccountDetection below).
      */
-    ...(typeof body.timezone === 'string' && body.timezone.trim()
-      ? { timezone: body.timezone.trim() }
-      : {}),
     quietHours: [0, 8],
     dailyCeiling: 1,
     profileDir: dir,
@@ -329,7 +375,11 @@ export async function createConsoleAccount(body: {
   if (kept) forgetKeptFolder(handle);
 
   forgetAccounts();
-  return { ok: true, account, storedIn, ...(kept ? { adoptedProfileDir: true } : {}) };
+  return {
+    ok: true, account, storedIn,
+    ...(kept ? { adoptedProfileDir: true } : {}),
+    ...(ignored.length ? { ignored } : {})
+  };
 }
 
 /**
@@ -361,14 +411,10 @@ export async function createConsoleAccount(body: {
  */
 const EDITABLE = ['role', 'speaks', 'knows', 'subreddits', 'quietHours', 'dailyCeiling', 'note'] as const;
 
-/**
- * The keys an update REFUSES, named in one place so the refusal and the report cannot drift.
- *
- * This list and EDITABLE are the two halves of one rule. Keeping the refused set as a literal
- * inside updateConsoleAccount is how `timezone` could have been dropped from EDITABLE and gone on
- * being written anyway — removed from the menu, still accepted at the door.
- */
-const REFUSED = ['profileDir', 'debugPort', 'timezone'] as const;
+/* REFUSED is the other half of this rule and is declared at the top of the file, because
+   `createConsoleAccount` reads it too. Keeping a refused set as a literal inside one writer is
+   how `timezone` could be dropped from EDITABLE and go on being written anyway — removed from
+   the menu, still accepted at a door that never read the list. */
 
 export interface UpdateBody {
   handle?: unknown; role?: unknown; speaks?: unknown; knows?: unknown;
@@ -376,10 +422,11 @@ export interface UpdateBody {
   quietHours?: unknown; dailyCeiling?: unknown;
 }
 
-/** Which keys were REFUSED, so the console can say so instead of silently ignoring them. */
-export interface UpdateResult extends CreateResult {
-  ignored?: string[];
-}
+/**
+ * Nothing of its own any more: `ignored` moved up to CreateResult when create started refusing
+ * the same key. Kept as a named type because the call sites read better for it.
+ */
+export type UpdateResult = CreateResult;
 
 /**
  * Change an existing account's descriptive fields, in both stores.
