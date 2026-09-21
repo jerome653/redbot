@@ -22,7 +22,7 @@ const { timezoneMatchesCountry } = await import('../proxy/align.js');
 /** Measured from the box this was built on, 2026-09-21, through the live free tier. */
 const SAN_JOSE = {
   status: 'success',
-  query: '149.22.84.166',
+  query: '203.0.113.166',
   country: 'United States',
   countryCode: 'US',
   region: 'CA',
@@ -50,7 +50,7 @@ test('every field of a real success record arrives, with the timezone intact', (
   const loc = parseGeoRecord(SAN_JOSE, AT);
   assert.ok(loc, 'a success record with a timezone must parse');
   assert.equal(loc.at, AT, 'the timestamp is the one injected, so this test has no clock');
-  assert.equal(loc.ip, '149.22.84.166');
+  assert.equal(loc.ip, '203.0.113.166');
   assert.equal(loc.countryCode, 'US');
   assert.equal(loc.country, 'United States');
   assert.equal(loc.regionName, 'California');
@@ -254,19 +254,41 @@ test('a body that is not JSON at all is refused, and quoted back', () => {
  * Named and shared so the guard below and the test of the guard cannot drift apart — a guard
  * proven against one regex and applied with another proves nothing.
  *
- *   `call`  the request object is ALWAYS reached as a `.request` property and ALWAYS used by
- *           calling an HTTP verb on it. That holds for `page.context().request.get(...)`, for
- *           `context.request.get(...)` and for any alias, because the property name is part of
- *           Playwright's API and the variable name is not.
+ *   `call`  the request object is reached as a `.request` PROPERTY and then used. That holds for
+ *           `page.context().request.get(...)`, for `context.request.get(...)` and for any alias,
+ *           because the property name is part of Playwright's API and the variable name is not.
+ *
+ *           IT NAMES NOTHING AFTER THE PROPERTY. It used to require one of get/post/put/patch/
+ *           delete/head/fetch, and a closed list of method names is the same narrowness that let
+ *           the first three spellings through one level up: `playwright.request.newContext(...)`
+ *           is a `.request` property access whose method is on nobody's verb list.
+ *
+ *           Widening it to "any method call on .request" was still too narrow, and this was
+ *           caught reviewing the widening itself rather than by the suite. `const r = page.request;`
+ *           followed later by `r.get(GEO_URL)` has no `.` after `request` at all, so a pattern
+ *           requiring one missed it, exactly as the verb list missed `newContext`. Each fix had
+ *           pinned one more character of a SHAPE when the thing being guarded is a NAME. So this
+ *           now matches the bare property and stops there.
  *
  *   `reach` the precursor, for the form that takes the alias first and calls it later, or hands
  *           the request object on under a name with no `.request` left at the call site.
  *           `detectFromBrowser` gets its page from `attach()` and has never needed the
  *           BrowserContext, so reaching for one in this file is itself the signal.
+ *
+ *   `create` the standalone factory, which has NO `.request` and NO `.context()` anywhere near
+ *           the call that fetches. `import { request } from 'playwright'` then
+ *           `request.newContext()` hands back an APIRequestContext under any name the author
+ *           likes, and `c.get(GEO_URL)` is then indistinguishable from an ordinary method call.
+ *           `newContext(` is the chokepoint: every route to an APIRequestContext that is not a
+ *           `.request` property goes through it, so it is the one token that cannot be spelled
+ *           around. It also covers `browser.newContext()`, deliberately — detectFromBrowser works
+ *           on an ATTACHED page and has no business creating a context of any kind, which is the
+ *           same argument `reach` already makes for asking for one.
  */
 const DEAD_ROUTE_2 = {
-  call:  /\.\s*request\s*\.\s*(get|post|put|patch|delete|head|fetch)\s*\(/i,
-  reach: /\.\s*context\s*\(\s*\)/
+  call:   /\.\s*request\b/i,
+  reach:  /\.\s*context\s*\(\s*\)/,
+  create: /\bnewContext\s*\(/
 };
 
 test('detection still fetches from a LOCAL ORIGIN and neither of the two dead routes', () => {
@@ -306,12 +328,26 @@ test('detection still fetches from a LOCAL ORIGIN and neither of the two dead ro
  *   const ctx = page.context(); ctx.request.get(...)     old guard PASSED — 17/17 green
  *
  * A guard is a claim about what it would catch, and that claim is testable without touching the
- * file it guards. These three strings are the three spellings, so the coverage cannot silently
- * narrow again — which is exactly how it narrowed the first time, by pinning a VARIABLE NAME when
- * the property being guarded is a PROPERTY ACCESS. The regexes are shared with the test above, so
- * the thing proven here is the thing applied there.
+ * file it guards. The regexes are shared with the test above, so the thing proven here is the
+ * thing applied there.
+ *
+ * IT NARROWED A SECOND TIME, one alias further out, and the same way: by pinning a shape rather
+ * than the thing being guarded. `reach` required a literal `.context()` and `call` required one
+ * of seven verb names, so a FOURTH spelling walked past both while the suite read 18/18 green:
+ *
+ *   const { request } = await import('playwright');
+ *   const c = await request.newContext();
+ *   await c.get(GEO_URL);
+ *
+ * There is no `.context()` in it and no `.request` at the call site — the factory is imported by
+ * name and the context is held under one. Measured the same way as the first three: put back into
+ * src/proxy/detect.ts as live, type-correct code, suite run, guard silent.
+ *
+ * So the guard now matches the CHOKEPOINT instead of the spelling. Every way of obtaining an
+ * APIRequestContext is either a `.request` property or a `newContext(` call, and both are names
+ * Playwright's API fixes rather than names an author chooses.
  */
-test('the guard catches all three spellings of the dead route, not just the unlikely one', () => {
+test('the guard catches every spelling of the dead route, not just the unlikely one', () => {
   const caught = (text: string) => Object.values(DEAD_ROUTE_2).some((re) => re.test(text));
 
   assert.ok(caught('const r = await session.page.context().request.get(GEO_URL);'),
@@ -321,9 +357,36 @@ test('the guard catches all three spellings of the dead route, not just the unli
   assert.ok(caught('const ctx = session.page.context();\nconst r = await ctx.request.get(GEO_URL);'),
     'the same thing under any other name — the name was never the property being guarded');
 
+  /* THE FOURTH SPELLING, which passed the guard this test used to describe as complete. */
+  assert.ok(caught("const { request } = await import('playwright');\n"
+                   + 'const c = await request.newContext();\nawait c.get(GEO_URL);'),
+    'the standalone factory: no .context(), and no .request at the call site');
+
+  /* And the one the verb list let through, which is the same hole a level up: a `.request`
+     property whose method simply was not on a list of seven. */
+  assert.ok(caught('const c = await playwright.request.newContext();\nawait c.get(GEO_URL);'),
+    'a .request property access is caught whatever method is called on it');
+
+  /* THE FIFTH: the property is taken on one line and used on another, so there is no method
+     call attached to it to match. Found by reviewing the fourth fix, not by the suite — which is
+     the whole reason this guard is matched against a NAME and not against a shape. */
+  assert.ok(caught('const r = session.page.request;\nconst res = await r.get(GEO_URL);'),
+    'the property taken alone, used later — no method call attached to match against');
+  assert.ok(caught("const r = session.page.request;\nconst res = await r['get'](GEO_URL);"),
+    'and the same thing through bracket notation, which no dot-pattern would ever see');
+
   /* And it must not fire on what detect.ts actually does, or it would be unfalsifiable. */
   assert.ok(!caught('const res = await fetch(url, { signal: AbortSignal.timeout(ms) });'),
     'a renderer fetch is the CORRECT transport and must not be flagged');
   assert.ok(!caught('await session.page.goto(origin, { waitUntil: \'domcontentloaded\' });'),
     'pointing the tab at the local origin is the whole design and must not be flagged');
+
+  /* The widened regexes must still be falsifiable. A guard that fires on everything would make
+     the assertions above pass while proving nothing at all about what it discriminates. */
+  assert.ok(!caught('const cdp = await context.newCDPSession(page);'),
+    'a CDP session is not an APIRequestContext — newCDPSession must not be swept up by newContext');
+  assert.ok(!caught('const res = await page.evaluate(() => fetch(url).then((r) => r.text()));'),
+    'a renderer fetch inside evaluate is the CORRECT transport');
+  assert.ok(!caught('const n = results.requests.length;'),
+    'a word merely STARTING with request is not the property — the boundary has to hold');
 });

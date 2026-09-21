@@ -270,6 +270,80 @@ export function alignmentRefusal(
        + 'past it.';
 }
 
+/**
+ * How a cover attempt ended.
+ *
+ * Three states and not two, because the count alone cannot tell the two failures apart and the
+ * MESSAGE has to. `covered` is the ordinary path; the other two are both zero coverage.
+ */
+export type CoverOutcome = 'covered' | 'vanished' | 'refused';
+
+/**
+ * Which kind of failure a thrown cover was — the distinction the swallowing `catch` said could
+ * not be drawn at that seam.
+ *
+ * It can be drawn, and cheaply: a page that shut mid-flight answers `isClosed()` true, which
+ * Playwright resolves synchronously off state it already holds. A page that is still open and
+ * still threw refused the call. The old comment was right that the two must not be conflated and
+ * wrong that nothing could separate them, so the fail-open was never actually required.
+ */
+export function coverOutcome(page: { isClosed(): boolean }): 'vanished' | 'refused' {
+  return page.isClosed() ? 'vanished' : 'refused';
+}
+
+/**
+ * Whether a browser that has just been covered may be used — null to proceed, a message to stop.
+ *
+ * FAIL-CLOSED, IN THE SAME SHAPE AS THE FENCE. A failed `addInitScript` already threw and closed
+ * the browser; a failed `Emulation.setTimezoneOverride` was swallowed and nothing read the count
+ * before navigating, so a launch covering ZERO pages returned ok and went to Reddit announcing
+ * whatever the host machine says. The fence and the override are the same promise made twice —
+ * that this browser will not announce something untrue — and enforcing only one of them left the
+ * more easily read signal unguarded. `timezoneMatchesCountry` calls a zone that contradicts the
+ * exit one of the most reliable proxy tells there is; an uncovered page IS that contradiction.
+ *
+ * WHY BOTH INSTRUMENTS. The outcome says what happened to the page about to be navigated; the
+ * count says whether anything at all was covered. They should never disagree, and if they do,
+ * one of them is broken — which is not a state to pick a winner in. Reading both also means a
+ * later edit that increments the count from somewhere else cannot quietly re-open the door.
+ *
+ * WHY A VANISHED PAGE STILL STOPS THE LAUNCH. A page closing mid-flight is ordinary and stays
+ * tolerated everywhere it can be: every page after the first is covered from a `page` event whose
+ * outcome is deliberately dropped. It stops things only here, where it was the ONLY page, because
+ * the very next statement would navigate an uncovered tab and a tab does not announce a correct
+ * zone on the grounds that its predecessor closed politely. What the distinction buys is the
+ * diagnosis — telling somebody their browser "refused" when the tab merely shut sends them
+ * hunting a fault that is not there.
+ */
+export function coverageRefusal(
+  handle: string, timezone: string, outcome: CoverOutcome, pagesAligned: number
+): string | null {
+  if (outcome === 'covered' && pagesAligned > 0) return null;
+
+  if (outcome === 'vanished') {
+    return `The tab redbot was aligning for ${handle} closed before the timezone override (${
+             timezone}) could be applied, so no page was covered and the browser was not sent to `
+         + 'Reddit. A page closing mid-flight is ordinary and is tolerated everywhere else; it '
+         + 'stops a launch only when it was the only page there was, because what comes next is a '
+         + 'navigation, and an uncovered tab announces this machine\x27s own zone rather than the '
+         + 'one the exit carries.';
+  }
+
+  if (outcome === 'refused') {
+    return `${handle}'s browser refused the timezone override (${timezone}), so it was not sent `
+         + 'to Reddit. An uncovered page announces the zone of the machine redbot is running on, '
+         + 'and a browser saying one part of the world from an address in another is the single '
+         + 'most reliable proxy tell there is. This is the same rule the WebRTC fence is held to '
+         + 'a few lines below, and for the same reason: both are the browser being stopped from '
+         + 'announcing something untrue.';
+  }
+
+  /* `covered` with nothing counted. The two instruments disagree, so neither is trusted. */
+  return `redbot could not confirm that any page in ${handle}'s browser carries the timezone `
+       + `override (${timezone}): the cover reported success and the page count is still zero. `
+       + 'That is a contradiction rather than a result, so the browser was not sent to Reddit.';
+}
+
 /** A CDP connection held open for as long as the browser it is aligning. */
 export interface AlignedBrowser {
   handle: string;
@@ -361,7 +435,7 @@ export async function alignBrowser(opts: {
    * there is no context-wide form of it. The init script above is the opposite — installed once on
    * the context, inherited by every document.
    */
-  const cover = async (page: Page): Promise<void> => {
+  const cover = async (page: Page): Promise<CoverOutcome> => {
     try {
       const cdp = await context.newCDPSession(page);
       await cdp.send('Emulation.setTimezoneOverride', { timezoneId: opts.timezone });
@@ -402,10 +476,22 @@ export async function alignBrowser(opts: {
        */
       await page.evaluate(webrtcFence);
       pagesAligned++;
+      return 'covered';
     } catch {
-      /* A page that closed mid-flight is the ordinary case here and not a failure. A page that
-         genuinely refused the override is not distinguishable from it at this seam; the count
-         above is what makes "the hook never fired" visible to the console. */
+      /**
+       * A page that closed mid-flight is the ordinary case here and is still not a failure.
+       *
+       * What changed is only that the two are now TOLD APART rather than both swallowed. The
+       * earlier note said a genuine refusal "is not distinguishable from it at this seam" — it
+       * is, by asking the page whether it is closed, which Playwright answers synchronously from
+       * state it already holds. See coverOutcome().
+       *
+       * NOTHING IS DECIDED HERE. This still returns rather than throwing, because most calls into
+       * it come from the `page` event below, where there is no caller to throw to and where a
+       * background tab opening and closing must never fail a launch. The decision is made once,
+       * by the caller that is about to navigate.
+       */
+      return coverOutcome(page);
     }
   };
 
@@ -421,7 +507,9 @@ export async function alignBrowser(opts: {
     );
   }
 
-  /* Every tab that appears from now on — including ones a person opens by hand. */
+  /* Every tab that appears from now on — including ones a person opens by hand. The outcome is
+     dropped on purpose: there is no caller to refuse on behalf of, and a background tab that
+     opens and shuts must not retrospectively fail a launch that is already covered. */
   context.on('page', (p: Page) => { void cover(p); });
 
   /**
@@ -435,8 +523,30 @@ export async function alignBrowser(opts: {
    * contradiction between clock and address that this module exists to remove.
    */
   const existing: Page[] = context.pages().length ? context.pages() : [await context.newPage()];
-  for (const p of existing) await cover(p);
   const first: Page = existing[0]!;
+
+  /**
+   * The FIRST page's outcome is the one the gate below reads, because the first page is the one
+   * the navigation goes to. The rest are covered too — an uncovered tab announces the host's
+   * clock whether or not anything navigates it — but their outcome is deliberately dropped: a
+   * tab the operator opened and then closed mid-flight must not refuse a launch.
+   */
+  const outcome = await cover(first);
+  for (const p of existing.slice(1)) await cover(p);
+
+  /**
+   * THE GATE, AND IT SITS BEFORE THE NAVIGATION ON PURPOSE.
+   *
+   * This is the line whose absence made a failed override fail-OPEN: `cover` swallowed the error,
+   * nothing read the count, and the next statement sent an uncovered browser to Reddit announcing
+   * the host machine's zone. Closing the browser rather than returning an unusable handle is what
+   * the fence install does a few lines up, and the two failures deserve the same answer.
+   */
+  const refusal = coverageRefusal(opts.handle, opts.timezone, outcome, pagesAligned);
+  if (refusal) {
+    await browser.close().catch(() => {});
+    throw new AlignmentError(refusal);
+  }
 
   if (opts.openUrl) {
     /* `domcontentloaded`, not `load`: Reddit keeps connections open long after the page is usable,

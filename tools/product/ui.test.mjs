@@ -2890,9 +2890,10 @@ test('a genuinely up-to-date desktop install still says so', async () => {
  * THE ZONE ON THE CARD IS A MEASUREMENT, AND AN UNMEASURED ONE SAYS SO.
  *
  * `accounts.timezone` was typed into a box on this screen, and the box defaulted to `Asia/Manila`.
- * All eight accounts on the machine this was found on claimed Manila while the connection left
- * the United States, and the card could not reveal it: a zone printed on its own looks the same
- * whether a person guessed it or a browser reported it. That indistinguishability IS the defect,
+ * On the machine this was found on, EVERY account claimed Manila while the connection left the
+ * United States — the property being that not one of the values had been measured, which is what
+ * made them all agree with each other and with nothing else. The card could not reveal it: a zone
+ * printed on its own looks the same whether a person guessed it or a browser reported it. That indistinguishability IS the defect,
  * which is why the timestamp is asserted here and not treated as trim.
  *
  * BOTH STATES IN ONE RENDER, deliberately. The two cards sit side by side, so the contrast is the
@@ -2914,8 +2915,11 @@ test('the card dates the timezone it shows, and says so when nothing has measure
         timezone: 'America/Los_Angeles',
         location: { timezone: 'America/Los_Angeles', at: measuredAt,
                     countryCode: 'US', city: 'San Jose', via: 'browser' } }
-    /* Left in exactly the state the eight live accounts are in: a zone sitting in the column with
-       nothing that ever measured it. The card must not read that column back as a finding. */
+    /* Left in exactly the state an UNMEASURED account is in — a zone sitting in the column with
+       no `account_locations` row behind it. That is the state 0018 was written to clear and the
+       one every account reached by the old typed-zone path is in, which is the property worth
+       fixturing; how many such accounts exist on any given day is not. The card must not read
+       that column back as a finding. */
     : { ...a, timezone: 'Asia/Manila', location: null }));
 
   const { context, page, errors } = await open({ state });

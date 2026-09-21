@@ -9,13 +9,23 @@ import { join } from 'node:path';
  *
  * It used to be hand-typed configuration with a hardcoded fallback — an empty field became
  * 'Asia/Manila' — and it is what the browser ANNOUNCES, because src/proxy/align.ts drives
- * `Emulation.setTimezoneOverride` from it. All 8 live accounts carried that default while the
- * machine exited from California, so the one value that has to agree with the exit address was
- * the only one nothing measured.
+ * `Emulation.setTimezoneOverride` from it.
  *
- * Three rules, and each is asserted against the DATABASE and not only the returned object:
+ * NO HEADCOUNT HERE, for the reason 0018's header gives at length: it rotted twice inside that
+ * header while the header was being written, and a file arguing "measure it, do not assume it"
+ * must not itself carry an unmeasured claim. The property that does not turn on a count is the
+ * one worth pinning — EVERY zone in both stores was typed or defaulted, not one of them had an
+ * `account_locations` row behind it, and all of them named a zone on the far side of the world
+ * from the exit the machine egresses through. That was true of one account and it is true of
+ * however many exist the day you read this, because it is a statement about where the values
+ * CAME FROM rather than about how many there are.
+ *
+ * Four rules, and each is asserted against the DATABASE and not only the returned object:
  *
  *   - creating an account without a timezone leaves the column NULL, never a guess;
+ *   - creating one WITH a timezone leaves the column NULL too, and says so through `ignored`;
+ *     the fallback's removal left a conditional spread behind that still accepted a typed value,
+ *     so create wrote what update refused and only update was tested;
  *   - an update naming `timezone` is REFUSED and SAYS SO through `ignored`, rather than being
  *     silently dropped — a form that posts a field and gets a cheerful 200 has taught the person
  *     something false about what was saved;
@@ -85,18 +95,48 @@ describe('a timezone is measured, not typed', () => {
     assert.ok(seeded, 'the account must be mirrored into the seed file');
     assert.equal(seeded.timezone, undefined, 'and the mirror must not invent a zone either');
     assert.ok(!JSON.stringify(seeded).includes('Manila'), 'no Manila anywhere in the written entry');
+
+    /* Nothing was named, so nothing is reported. Without this the `ignored` assertion in the next
+       test would pass against a field that simply always says 'timezone'. */
+    assert.equal(made.ignored, undefined, 'a create that named no refused key reports none');
   });
 
-  test('an explicitly supplied timezone is still accepted — that is the dashboard sync path', async () => {
-    /* src/push/accounts.ts passes `timezone` straight into createConsoleAccount when it syncs an
-       account in. Removing the FALLBACK must not close that door, so this pins the difference
-       between "no default" and "no field". */
+  test('creating an account with a posted timezone leaves the column NULL and SAYS it was refused', async () => {
+    /**
+     * THE DOOR THE FALLBACK LEFT OPEN.
+     *
+     * Removing the hardcoded 'Asia/Manila' replaced it with a conditional spread, so a caller
+     * that TYPED a zone still got one written — the same un-provenanced value the default used to
+     * mint, now supplied by hand. `update` refused the key from the day it was locked and `create`
+     * did not, so the two halves of one rule disagreed and only one of them was tested.
+     *
+     * THE COLUMN IS THE ASSERTION. A returned record that merely omits the key would satisfy a
+     * weaker test while the row carried a zone, and the row is what src/proxy/align.ts announces.
+     */
     const made = await mod.createConsoleAccount({
       handle: 'tz-probe-two', role: 'Support', speaks: '', subreddits: [],
-      timezone: 'America/Los_Angeles'
+      timezone: 'Asia/Manila'
     });
     assert.equal(made.ok, true, JSON.stringify(made));
-    assert.equal(await zoneOf('tz-probe-two'), 'America/Los_Angeles');
+    assert.equal(made.storedIn, 'database', 'the assertion below is about a column, so it must have been written');
+
+    assert.equal(await zoneOf('tz-probe-two'), null,
+      'a typed zone must not reach the column — nothing has measured this account');
+    assert.equal(made.account!.timezone, undefined, 'absent is how this codebase spells "no zone"');
+
+    /* SAID SO, not silently dropped — the same report `update` has always made. A create that
+       swallowed the key would leave every screen truthfully showing no zone while the person who
+       typed one believed it had been saved. */
+    assert.ok(made.ignored, 'a refused key must be reported');
+    assert.ok(made.ignored.includes('timezone'),
+      `timezone must be named in ignored: ${JSON.stringify(made.ignored)}`);
+
+    /* The seed file is the synchronous fallback src/config.ts reads, so a zone hiding there would
+       be announced by any unprimed process even with the column clear. */
+    const seeded = seedEntry('tz-probe-two');
+    assert.ok(seeded, 'the account is still created — one key is refused, not the whole form');
+    assert.equal(seeded.timezone, undefined, 'the mirror must not carry a typed zone either');
+    assert.ok(!JSON.stringify(seeded).includes('Manila'), 'no Manila anywhere in the written entry');
   });
 
   test('a blank or non-string timezone is treated as absent, never coerced into a value', async () => {
@@ -111,6 +151,11 @@ describe('a timezone is measured, not typed', () => {
       });
       assert.equal(made.ok, true, JSON.stringify(made));
       assert.equal(await zoneOf(handle), null, `${JSON.stringify(bads[i])} must not become a stored zone`);
+      /* NAMED IS NAMED. The refusal keys off the key being present, not off the value being
+         plausible — exactly as `update` has always done — so there is one rule and not a second
+         one that quietly tolerates the spellings a validator happens to dislike. */
+      assert.ok(made.ignored?.includes('timezone'),
+        `${JSON.stringify(bads[i])} still NAMES the key, so the refusal must be reported`);
     }
   });
 
@@ -119,10 +164,19 @@ describe('a timezone is measured, not typed', () => {
    * ---------------------------------------------------------------- */
 
   test('an update naming timezone is REFUSED, reported in `ignored`, and changes nothing', async () => {
-    await mod.createConsoleAccount({
-      handle: 'tz-probe-edit', role: 'Support', speaks: '', subreddits: [],
-      timezone: 'America/New_York'
+    await mod.createConsoleAccount({ handle: 'tz-probe-edit', role: 'Support', speaks: '', subreddits: [] });
+
+    /**
+     * THE ZONE IS ESTABLISHED BY A DETECTION, because that is now the only thing that may
+     * establish one. This precondition used to be a create carrying a typed zone; once create
+     * refuses the key too, that spelling would have left the column NULL and the assertion below
+     * would have passed against an untouched null rather than a PRESERVED MEASUREMENT — a fixture
+     * quietly going vacuous while its test went on reporting green.
+     */
+    const seeded = await mod.recordAccountDetection('tz-probe-edit', {
+      ip: '203.0.113.166', timezone: 'America/New_York', countryCode: 'US', via: 'launch'
     });
+    assert.equal(seeded.ok, true, JSON.stringify(seeded));
     assert.equal(await zoneOf('tz-probe-edit'), 'America/New_York', 'precondition');
 
     const r = await mod.updateConsoleAccount({
