@@ -25,6 +25,8 @@ import {
   bindAccountToMachine, boundHandles
 } from './db/accounts.js';
 import type { AccountDependents } from './db/accounts.js';
+import { recordAccountLocation } from './db/locations.js';
+import type { LocationDetection } from './db/locations.js';
 import {
   portIsFree, statusForAccounts, firstFreePortInRange, DEBUG_PORT_FIRST, DEBUG_PORT_LAST
 } from './ports.js';
@@ -269,7 +271,29 @@ export async function createConsoleAccount(body: {
      * falls back to anything. It still never means everywhere.
      */
     subreddits: Array.isArray(body.subreddits) ? body.subreddits.map(String).filter(Boolean) : [],
-    timezone: String(body.timezone ?? 'Asia/Manila'),
+    /**
+     * NO FALLBACK, AND USUALLY NO KEY AT ALL.
+     *
+     * This used to write 'Asia/Manila' whenever the field was left empty, which is the build
+     * inventing a location for somebody else's account. It is worse than the `['WordPress']`
+     * default removed just above, because the timezone is ANNOUNCED: src/proxy/align.ts drives
+     * `Emulation.setTimezoneOverride` from this value, so a guessed zone is broadcast to Reddit
+     * from an address that contradicts it. All 8 live accounts carried this default while the
+     * machine exited from California.
+     *
+     * An account nobody has measured now has NO zone, and src/window.ts refuses to schedule it
+     * until a detection supplies one (see recordAccountDetection below). Absent rather than null:
+     * `upsertAccounts` writes `a.timezone ?? null`, so an absent key is already a NULL column, and
+     * `toRecord` turns that NULL back into an absent key. Absence is this codebase's existing
+     * spelling of "no zone", and adding a second one would be two spellings of one state.
+     *
+     * A value is still accepted when a caller genuinely supplies one — src/push/accounts.ts syncs
+     * accounts in from the dashboard and passes the field through. That is the door this keeps
+     * open; it is not an invitation to type one, and the console form no longer sends it.
+     */
+    ...(typeof body.timezone === 'string' && body.timezone.trim()
+      ? { timezone: body.timezone.trim() }
+      : {}),
     quietHours: [0, 8],
     dailyCeiling: 1,
     profileDir: dir,
@@ -321,8 +345,30 @@ export async function createConsoleAccount(body: {
  * still shows a configured account. That is the same silent class as the 9222 default this
  * codebase already had to remove. They stay changeable by editing data/accounts.json and
  * running `redbot accounts import`, which is a deliberate speed bump rather than a button.
+ *
+ * `timezone` is absent for the SAME CLASS OF REASON, arrived at the same way. It decides what the
+ * browser ANNOUNCES — src/proxy/align.ts drives `Emulation.setTimezoneOverride` from it — so a
+ * typed value does not fail loudly either: the browser says Manila, the exit says California, and
+ * every screen goes on showing a configured account while the one signal most reliably used to
+ * spot a proxy is being broadcast on every page load. Like the 9222 default and like `debugPort`,
+ * the danger was never that the value was wrong; it was that nothing could tell.
+ *
+ * The difference from profileDir and debugPort is that timezone has no deliberate manual verb at
+ * all, and should not have one. It is not configuration a person is better placed to supply — it
+ * is a MEASUREMENT, written only by recordAccountDetection below, from what the browser's own
+ * network reported. `redbot accounts import` will not bring it back either: the value belongs to
+ * the machine the account actually exits from, not to a file.
  */
-const EDITABLE = ['role', 'speaks', 'knows', 'subreddits', 'timezone', 'quietHours', 'dailyCeiling', 'note'] as const;
+const EDITABLE = ['role', 'speaks', 'knows', 'subreddits', 'quietHours', 'dailyCeiling', 'note'] as const;
+
+/**
+ * The keys an update REFUSES, named in one place so the refusal and the report cannot drift.
+ *
+ * This list and EDITABLE are the two halves of one rule. Keeping the refused set as a literal
+ * inside updateConsoleAccount is how `timezone` could have been dropped from EDITABLE and gone on
+ * being written anyway — removed from the menu, still accepted at the door.
+ */
+const REFUSED = ['profileDir', 'debugPort', 'timezone'] as const;
 
 export interface UpdateBody {
   handle?: unknown; role?: unknown; speaks?: unknown; knows?: unknown;
@@ -369,7 +415,7 @@ export async function updateConsoleAccount(body: UpdateBody): Promise<UpdateResu
 
   /* Named back to the caller rather than dropped on the floor: a form that posts debugPort and
      gets a cheerful 200 has taught the person something false about what was saved. */
-  const ignored = ['profileDir', 'debugPort'].filter((k) => body[k as keyof UpdateBody] !== undefined);
+  const ignored = REFUSED.filter((k) => body[k as keyof UpdateBody] !== undefined);
 
   const strings = (v: unknown, fallback: string[]): string[] =>
     Array.isArray(v) ? v.map(String).map((s) => s.trim()).filter(Boolean) : fallback;
@@ -393,11 +439,15 @@ export async function updateConsoleAccount(body: UpdateBody): Promise<UpdateResu
     handle: current.handle,
     profileDir: current.profileDir,
     debugPort: current.debugPort,
+    /* And the zone, for the reason above it is no longer in EDITABLE: it is a measurement, not a
+       field. Carried over rather than omitted — an edit to the note must not silently erase a
+       detection — and taken from `current`, never from `body`, so a request naming it is reported
+       through `ignored` instead of quietly winning. */
+    timezone: current.timezone,
     role: body.role === undefined ? current.role : String(body.role),
     speaks: body.speaks === undefined ? current.speaks : String(body.speaks),
     knows: body.knows === undefined ? current.knows : strings(body.knows, current.knows ?? []),
     subreddits: body.subreddits === undefined ? current.subreddits : strings(body.subreddits, current.subreddits ?? []),
-    timezone: body.timezone === undefined ? current.timezone : String(body.timezone),
     quietHours: quiet,
     dailyCeiling: ceiling,
     note: body.note === undefined ? current.note : String(body.note)
@@ -915,3 +965,118 @@ export async function adoptProfileDir(body: {
 
 /** The fields the console may offer, exported so the UI and the tests cannot drift from it. */
 export const EDITABLE_ACCOUNT_FIELDS: readonly string[] = EDITABLE;
+
+/* ------------------------------------------------------------------ *
+ * The write-back: a detection becomes the record
+ * ------------------------------------------------------------------ */
+
+export interface DetectionResult {
+  ok: boolean;
+  error?: string;
+  handle?: string;
+  /** The zone now on record, echoed back from what was stored rather than from the input. */
+  timezone?: string;
+  /** The account_locations row, so a caller can cite the evidence it just wrote. */
+  locationId?: number;
+  /** Which stores actually moved, so the caller can say so rather than imply both. */
+  storedIn?: ('database' | 'seed-file')[];
+}
+
+/**
+ * Record a successful location detection: the evidence, and the zone it establishes.
+ *
+ * THIS IS THE ONLY THING THAT SHOULD WRITE `accounts.timezone`. `timezone` left EDITABLE for that
+ * reason — the value is a measurement, and a measurement has a writer, not a form field.
+ *
+ * **Why it lives here and not only in src/db/locations.ts.** Because `accounts` is not the only
+ * store. `data/accounts.json` is written too and stays a seed and a fallback: src/config.ts
+ * resolves `config.browser` synchronously at module load and cannot await a query, so an unprimed
+ * process reads the file. Migration 0018 clears the database column, but it cannot reach a JSON
+ * file — so on an install that has not re-detected yet the file still says `Asia/Manila` for every
+ * account. A write-back that moved only the database would leave the two stores disagreeing about
+ * the one value the browser announces, and the stale one is the one the fallback path reads.
+ * Moving both is what makes the measurement true everywhere, and this module is the place that
+ * already knows both stores have to move together.
+ *
+ * DATABASE FIRST, then the file — the same order and the same failure rule as create and update:
+ * if the row cannot be written this reports it rather than leaving a file that claims a
+ * measurement nothing recorded.
+ *
+ * **It refuses outright when there is no database**, which is stricter than create and update are,
+ * deliberately. Those two write configuration, and configuration in the seed file alone is still
+ * configuration. This writes EVIDENCE. With no database there is nowhere for the ledger row to go,
+ * and updating the announced zone with no record of where it came from would manufacture exactly
+ * the un-provenanced value 0018 exists to abolish — a zone that is once again just a string
+ * somebody put in a file.
+ *
+ * The caller decides what counts as a successful detection; a record with no timezone is not one,
+ * and `LocationDetection` requires the field so it cannot be stored as though it were.
+ */
+export async function recordAccountDetection(
+  handle: string, detection: LocationDetection
+): Promise<DetectionResult> {
+  const name = String(handle ?? '').trim();
+  if (!HANDLE_RE.test(name)) {
+    return { ok: false, error: 'A Reddit username is 3–20 characters: letters, numbers, underscore or dash.' };
+  }
+  if (!detection || typeof detection.timezone !== 'string' || !detection.timezone.trim()) {
+    return { ok: false, error: 'A detection without a timezone is a failed detection, and is not recorded.' };
+  }
+
+  const reason = dbUnavailableReason();
+  if (reason) {
+    return { ok: false, error: `Recording a detection needs the database — that is where the evidence lives. ${reason}` };
+  }
+
+  // Same read-and-validate-before-writing-anything rule as create, update and delete.
+  let seed: Record<string, unknown> = { accounts: [] };
+  if (existsSync(accountsPath())) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(accountsPath(), 'utf8'));
+      if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { accounts?: unknown }).accounts)) {
+        throw new Error('no accounts list');
+      }
+      seed = parsed as Record<string, unknown>;
+    } catch {
+      return { ok: false, error: 'data/accounts.json is not readable JSON with an "accounts" list. Fix or delete it, then try again.' };
+    }
+  }
+
+  const storedIn: ('database' | 'seed-file')[] = [];
+  let locationId: number;
+  try {
+    locationId = await recordAccountLocation(getPool(), name, detection);
+    storedIn.push('database');
+  } catch (e) {
+    return { ok: false, error: `The detection could not be recorded: ${
+      e instanceof Error ? e.message : String(e)}` };
+  }
+
+  /* The mirror. Replace in place when the seed lists the account; an account the file has never
+     heard of is NOT appended here — this function records a measurement, it does not create a
+     record, and inventing a half-populated entry from a detection would put an account into the
+     fallback that no store ever set up. */
+  const list = seed.accounts as AccountRecord[];
+  const at = list.findIndex((a) => a && typeof a.handle === 'string'
+                                && a.handle.toLowerCase() === name.toLowerCase());
+  if (at >= 0) {
+    list[at] = { ...list[at], timezone: detection.timezone } as AccountRecord;
+    try {
+      mkdirSync(DATA, { recursive: true });
+      writeFileSync(accountsPath(), JSON.stringify(seed, null, 2), 'utf8');
+      storedIn.push('seed-file');
+    } catch (e) {
+      /* The measurement IS on record — the database has both the row and the column. A failed
+         mirror is reported, not fatal, and `storedIn` says which stores actually moved. */
+      forgetAccounts();
+      return {
+        ok: true, handle: name, timezone: detection.timezone, locationId, storedIn,
+        error: `Recorded, but data/accounts.json could not be updated: ${
+          e instanceof Error ? e.message : String(e)}`
+      };
+    }
+  }
+
+  forgetAccounts();
+  return { ok: true, handle: name, timezone: detection.timezone, locationId, storedIn };
+}

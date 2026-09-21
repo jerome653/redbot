@@ -423,8 +423,18 @@ describe('the schema-derived column map', () => {
     // it to decide whether an account's exit still matches its vetted address, and a raw 0 is
     // truthy in JavaScript — so an un-coerced column would report every observation as a match and
     // silently disable the check.
+    // Migration 0018 (account_locations) moved both counts again, and again because a column was
+    // ADDED rather than because the numbers were loosened:
+    //   date    43 -> 44   account_locations.at
+    //   boolean 11 -> 13   account_locations.proxy, account_locations.hosting
+    // The two booleans are the pair that would bite here, and they bit already. Both are NULLABLE,
+    // because "the provider did not say" is a different answer from "the provider said no" — and an
+    // un-coerced 0 is truthy in JavaScript, so a column that stopped coercing would report every
+    // exit as proxied and hosted. src/db/locations.ts was first written against a hand-rolled
+    // `x.proxy === 1` and returned false for a stored 1; the `false` case asserted correctly while
+    // being wrong for the same reason, so only the `true` case could tell the two apart.
     const expected = {
-      date: 43, json: 20, boolean: 11, blob: 3
+      date: 44, json: 20, boolean: 13, blob: 3
     };
 
     const rows = await getPool().query<{ name: string; sql: string }>(
