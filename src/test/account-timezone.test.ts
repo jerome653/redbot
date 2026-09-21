@@ -172,7 +172,7 @@ describe('a timezone is measured, not typed', () => {
     assert.equal(await zoneOf('tz-probe-detect'), null, 'precondition: unmeasured');
 
     const r = await mod.recordAccountDetection('tz-probe-detect', {
-      ip: '149.22.84.166',
+      ip: '203.0.113.166',
       timezone: 'America/Los_Angeles',
       countryCode: 'US',
       regionName: 'California',
@@ -194,7 +194,7 @@ describe('a timezone is measured, not typed', () => {
        whose null/false distinction is the thing that must not collapse. */
     const got = await locs.latestAccountLocation(db.getPool(), 'tz-probe-detect');
     assert.ok(got, 'the detection must be retrievable');
-    assert.equal(got.ip, '149.22.84.166');
+    assert.equal(got.ip, '203.0.113.166');
     assert.equal(got.countryCode, 'US');
     assert.equal(got.regionName, 'California');
     assert.equal(got.city, 'San Jose');
@@ -277,7 +277,7 @@ describe('a timezone is measured, not typed', () => {
     assert.equal(before.rule, 'bad-timezone');
 
     await mod.recordAccountDetection('tz-round-trip', {
-      ip: '149.22.84.166', timezone: 'America/Los_Angeles', countryCode: 'US', via: 'launch'
+      ip: '203.0.113.166', timezone: 'America/Los_Angeles', countryCode: 'US', via: 'launch'
     });
 
     const measured = (await mod.knownAccounts())

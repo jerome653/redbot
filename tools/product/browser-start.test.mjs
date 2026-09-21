@@ -45,7 +45,7 @@ const LOGIN = 'https://www.reddit.com/login';
  */
 const MEASURED = {
   at: '2026-09-21T00:00:00.000Z',
-  ip: '149.22.84.166',
+  ip: '203.0.113.166',
   countryCode: 'US',
   country: 'United States',
   regionName: 'California',
@@ -59,7 +59,7 @@ const MEASURED = {
 
 /** An exit that was vetted in some country. Only the fields this order actually reads. */
 const exitIn = (country, region) => ({
-  proxied: true, ok: true, relayPort: 41000, exitIp: '149.22.84.166',
+  proxied: true, ok: true, relayPort: 41000, exitIp: '203.0.113.166',
   proxy: { country, region }
 });
 
@@ -298,7 +298,7 @@ describe('a browser is measured before it is used', () => {
     assert.ok(row, 'the detection must be retrievable — this is the round trip that was never made');
 
     assert.equal(row.timezone, 'America/Los_Angeles');
-    assert.equal(row.ip, '149.22.84.166');
+    assert.equal(row.ip, '203.0.113.166');
     assert.equal(row.countryCode, 'US');
     assert.equal(row.regionName, 'California');
     assert.equal(row.city, 'San Jose');

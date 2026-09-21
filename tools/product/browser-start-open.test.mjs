@@ -59,7 +59,7 @@ const LOGIN = 'https://www.reddit.com/login';
 /** The same measured fixture the spawned-path suite uses, so the two cannot drift apart. */
 const MEASURED = {
   at: '2026-09-21T00:00:00.000Z',
-  ip: '149.22.84.166',
+  ip: '203.0.113.166',
   countryCode: 'US',
   country: 'United States',
   regionName: 'California',
