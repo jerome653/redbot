@@ -88,11 +88,74 @@ test('a conditional may not rule a cause in or out', () => {
     'and must forbid ruling a cause in or out from one observation');
 });
 
-test('speculation must be marked as speculation', () => {
-  /* Argus rule `low-confidence-as-fact`: a claim that "carries low confidence and is not marked
-     as speculation". Marking is the cheap half of the fix and the model cannot infer it. */
+test('a guess must be marked, in the words, with a phrase the drafter can actually use', () => {
+  /**
+   * Argus rule `low-confidence-as-fact` (certify.ts:191): a claim that "carries low confidence
+   * and is not marked as speculation".
+   *
+   * This asserted the literal word "speculation" appeared in the prompt, which was pinning
+   * VOCABULARY rather than the rule — and it went red the moment the prompt said the same thing
+   * in words a drafter would actually write. `speculation` is the EXTRACTOR's type name
+   * (src/argus/prompts.ts:72); the drafting model never needs to know it, and telling it to
+   * "mark speculation" produced sentences that were not marked at all. What has to be in the
+   * prompt is a usable phrase, so that is what this checks.
+   */
   const p = build();
-  assert.match(p, /speculation|speculati/i, 'the prompt must require low-confidence claims to be marked');
+  assert.match(p, /my guess is|I'd bet|I'm not sure, but|I've seen that happen/i,
+    'the prompt must hand the drafter a concrete marker phrase, not the classifier\'s jargon');
+});
+
+test('the reply is asked for observations and next steps, not for inferences', () => {
+  /**
+   * MEASURED, claim by claim. Argus cert 5 (2026-09-24, draft d_bd08ae06610b_mufslaet) typed
+   * every claim and then attacked them. Exactly the inferences fell:
+   *
+   *   ✗ c1  inference       "Switching the page builder would not diagnose this issue."
+   *   ✓ c2  observation     "The LCP breakdown ... identifies the Jarallax image as the LCP element."
+   *   ✓ c3  observation     "The hero is currently a plain img element."
+   *   ✓ c4  recommendation  "First check what Lighthouse reports as the LCP element now."
+   *   ✗ c5  inference       "Checking ... would help distinguish between a hero JS/CSS render
+   *                          delay and an image/preload request problem."
+   *
+   * c4 and c5 are one idea split in two: the STEP survived and the REASON for it did not. An
+   * `alternative-explanation` counterexample is always available against an ungrounded claim
+   * about what something would prove, and src/argus/certify.ts:322-323 exempts `opinion` and
+   * `speculation` from the SUPPORT requirement but never from CONTRADICTION — so hedging cannot
+   * rescue an inference the way it rescues an unsupported claim.
+   *
+   * The reply therefore gives the step and stops. That is also a perfectly ordinary Reddit
+   * comment; "I'd check X first" needs no theory attached to be worth reading.
+   */
+  const p = build();
+  assert.match(p, /\bobservation|what the thread (already )?shows|already in the thread/i,
+    'the prompt must name observations as a safe kind of sentence');
+  assert.match(p, /\bnext step\b|what you would do next|what to check/i,
+    'and next steps as the other');
+  assert.match(p, /\binference\b|what it would (prove|mean|show)|would prove/i,
+    'and must name the kind that gets contradicted');
+});
+
+test('a mechanism may only appear as an explicitly uncertain guess', () => {
+  /**
+   * THE LAST FOUR REASONS ON CERT 6 (ESCALATE, the first non-REJECT). Two conditionals smuggled
+   * a mechanism back in:
+   *
+   *   c6 "If the old hero background/parallax image is still rendered behind the new <img>,
+   *       it CAN CAUSE Lighthouse to report the Jarallax image as LCP."
+   *
+   * Argus: "carries low confidence and is not marked as speculation" (certify.ts:191).
+   *
+   * src/argus/certify.ts:185 fires that rule only when the claim's type is NOT `opinion` or
+   * `speculation`, and :323 exempts those same two types from the support requirement. So the
+   * fix is not to delete the mechanism — it is to make the extractor TYPE it as speculation,
+   * and src/argus/prompts.ts:72 defines that as "an explicitly uncertain guess". The extractor
+   * reads the sentence, not the author's intent: the uncertainty has to be in the words.
+   */
+  const p = build();
+  assert.match(p, /explicitly|in the words|say it is a guess/i,
+    'the prompt must require the uncertainty to be visible in the sentence itself');
+  assert.match(p, /\bcauses?\b|\bcan cause\b|mechanism|because/i,
+    'and must name the mechanism phrasing that gets typed as fact');
 });
 
 test('the safety rules that predate the rewrite survive it', () => {
