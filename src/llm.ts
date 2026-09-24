@@ -298,6 +298,35 @@ async function completeViaApi(opts: CompleteOpts): Promise<string> {
 /* ------------------------------------------------------------------ *
  * Provider: DeepSeek API
  * ------------------------------------------------------------------ */
+
+/**
+ * The smallest budget worth sending to a DeepSeek reasoning model.
+ *
+ * Every `maxTokens` in this repository was sized for the Anthropic endpoint, where `max_tokens`
+ * bounds the ANSWER. Here it bounds reasoning AND answer, so those numbers ask for a fraction of
+ * what the model needs and the first attempts are billed for producing nothing:
+ *
+ *     src/gap.ts:96             1600     measured need ~9,905 completion tokens
+ *     src/commands/draft.ts:127 1600     measured need ~3,255
+ *     src/argus/extract.ts   3000/1400
+ *     src/commands/warmup.ts     700
+ *
+ * MEASURED 2026-09-24, thread 869b0d4176e9, deepseek-flash, prompt ~1,800 tokens:
+ * `max_tokens=16000` → `finish_reason=stop`, `reasoning_tokens=9053`, `completion_tokens=9905`.
+ * The same call at 1600 truncates, and the retry ladder then spends 1600 and 4800 before its
+ * third attempt has any chance — three calls billed, two of them guaranteed to return nothing.
+ * Production had already shown this: `gap analysis failed for 869b0d4176e9` on this box.
+ *
+ * WHY A FLOOR RATHER THAN RETUNING FIVE CALL SITES. `max_tokens` is a ceiling, not a
+ * reservation — the bill is the tokens actually generated, so a call that finishes in 800 costs
+ * 800 whether the ceiling was 1,600 or 16,000. Raising it is therefore free on every call that
+ * already fits, and the five call sites keep expressing what their ANSWER needs rather than each
+ * carrying a private guess about how much this vendor's model thinks.
+ *
+ * It lifts, it never caps: a caller that asks for more keeps what it asked for. The model's own
+ * `max_output_tokens` is 393,216, so there is room above this by three orders of magnitude.
+ */
+const REASONING_FLOOR = 16_000;
 /**
  * DeepSeek chat completions, per https://api-docs.deepseek.com (read 2026-09-03).
  *
@@ -348,7 +377,7 @@ async function completeViaDeepseek(opts: CompleteOpts): Promise<string> {
    * of the same prompt. Growing the budget only when the endpoint says `length` costs nothing
    * on the calls that already fit, and needs no number anybody has to maintain.
    */
-  let budget = maxTokens;
+  let budget = Math.max(maxTokens, REASONING_FLOOR);
 
   for (let attempt = 1; attempt <= config.llm.maxRetries; attempt++) {
     let res: Response;
