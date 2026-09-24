@@ -97,10 +97,43 @@ export interface PushState {
    * Absent means "nothing was chosen"; the default belongs to the caller, not to this reader.
    */
   llmProvider?: LlmProvider;
+  /**
+   * The unattended loop that was running, so a restart can put it back.
+   *
+   * `autoProc` in tools/product/server.mjs is a module-level `let` written down nowhere — the
+   * same shape as `llmProvider` above, with a worse consequence. Measured 2026-09-24: this
+   * machine has no systemd unit at system or user level, no autostart entry and no cron, so the
+   * desktop app is running only because somebody typed the launcher. A reboot therefore stopped
+   * the app AND the loop, and nothing anywhere recorded that either had been running.
+   *
+   * THE INTENT IS STORED, NOT THE PROCESS. An account and an interval are what `autoStart`
+   * needs to rebuild the loop; a pid from before the reboot names nothing, or worse, names
+   * somebody else's process by the time it is read.
+   *
+   * Absent means the loop is stopped, and a stop must survive a restart as firmly as a start —
+   * a resume that ignores a deliberate stop is worse than having no resume at all.
+   */
+  autoLoop?: { account: string; everyMinutes: number };
 }
 
 /** The only three values `REDBOT_LLM` resolves to — src/config.ts:362-364. */
 const PROVIDERS: readonly LlmProvider[] = ['cli', 'api', 'deepseek'];
+
+/**
+ * A stored loop record, or undefined.
+ *
+ * Validated here because the value becomes a spawn — `dist/cli.js auto --every <n>` running as
+ * `<account>`. A missing account, or an interval that is zero, negative or not a number, must
+ * not reach that call: a zero interval is a hot loop against Reddit, which is the one mistake
+ * this file can prevent and the scheduler cannot.
+ */
+function readAutoLoop(raw: unknown): PushState['autoLoop'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const { account, everyMinutes } = raw as { account?: unknown; everyMinutes?: unknown };
+  if (typeof account !== 'string' || !account.trim()) return undefined;
+  if (typeof everyMinutes !== 'number' || !Number.isFinite(everyMinutes) || everyMinutes <= 0) return undefined;
+  return { account, everyMinutes };
+}
 
 const EMPTY: PushState = { cursors: {} };
 
@@ -125,7 +158,8 @@ export function readPushState(): PushState {
          must not reach a spawn. src/config.ts:362-364 would fall back to 'cli' anyway; failing
          at the reader means the console can also SEE that nothing valid was stored. */
       ...(PROVIDERS.includes(raw?.llmProvider as LlmProvider)
-        ? { llmProvider: raw!.llmProvider as LlmProvider } : {})
+        ? { llmProvider: raw!.llmProvider as LlmProvider } : {}),
+      ...(readAutoLoop(raw?.autoLoop) ? { autoLoop: readAutoLoop(raw?.autoLoop)! } : {})
     };
   } catch {
     /* Fails forward: an unreadable watermark re-sends, and the server de-duplicates. */
