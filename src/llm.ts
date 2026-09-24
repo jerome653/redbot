@@ -22,7 +22,7 @@ import { mkdirSync, existsSync } from 'node:fs';
 import { delimiter as pathDelimiter, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
-import { config, anthropicKey, deepseekKey, claudeConfigDir, operatorRecord } from './config.js';
+import { config, anthropicKey, deepseekKey, claudeConfigDir, operatorRecord, type LlmProvider } from './config.js';
 import { say } from './log.js';
 
 /** One announcement per process for a declared credential location. */
@@ -472,7 +472,54 @@ async function completeViaDeepseek(opts: CompleteOpts): Promise<string> {
 let warnedNonDeterministic = false;
 
 /* ------------------------------------------------------------------ */
+/**
+ * The provider this INSTALL is restricted to, or null when it is not restricted.
+ *
+ * Set per machine (this box sets it in /etc/systemd/system/redbot.service), never in the
+ * repository: it is a prohibition about one operator's costs, not a property of the product.
+ *
+ * READ PER CALL, not captured at module load. `config.llm.provider` is resolved once at import,
+ * and src/requirements.ts:101-105 records what that cost — the Setup screen and the spawned
+ * child disagreed about which provider was in use because one of them had frozen the answer.
+ *
+ * FAILS OPEN on an unrecognised value, deliberately, and this is the opposite of the reader in
+ * src/push/state.ts. There, junk would reach a spawn, so it fails closed. Here, a typo in a unit
+ * file would refuse every provider and brick generation with no obvious symptom — worse than the
+ * prohibition silently not applying, which at least leaves a working install.
+ */
+export function onlyProvider(): LlmProvider | null {
+  const raw = (process.env.REDBOT_ONLY_PROVIDER ?? '').trim();
+  return raw === 'cli' || raw === 'api' || raw === 'deepseek' ? raw : null;
+}
+
+/**
+ * Refuse a provider this install has forbidden.
+ *
+ * Thrown rather than logged: a warning on a metered path is a warning nobody reads until the
+ * bill arrives, and the whole point is that the forbidden path is one nobody CHOSE — `cli` is
+ * what src/config.ts:362-364 falls back to whenever `REDBOT_LLM` is unset, which is how this
+ * very box spent 2026-09-21 to 09-24 on the Claude CLI without anyone selecting it.
+ */
+export function assertProviderAllowed(provider: LlmProvider): void {
+  const only = onlyProvider();
+  if (!only || only === provider) return;
+  throw new LlmError(
+    `this install is restricted to the "${only}" model provider, and "${provider}" was requested. ` +
+    (provider === 'cli'
+      ? 'Note that "cli" is also what src/config.ts falls back to when REDBOT_LLM is unset or ' +
+        'unrecognised — so this is most likely a silent default, not a choice, and it would have ' +
+        'billed a Claude subscription. '
+      : '') +
+    `Set REDBOT_LLM=${only}, or lift the restriction by changing REDBOT_ONLY_PROVIDER ` +
+    '(on this machine: /etc/systemd/system/redbot.service).'
+  );
+}
+
 export async function complete(opts: CompleteOpts): Promise<string> {
+  /* Before anything else, including the warning below: a forbidden provider must not reach a
+     network call, a spawn, or even a message that implies it is about to run. */
+  assertProviderAllowed(config.llm.provider);
+
   /**
    * The Claude Code CLI (`claude -p`) exposes no temperature control, so a caller asking for
    * `temperature: 0` — Argus does, to make a certification pass reproducible — silently gets the
