@@ -2519,6 +2519,17 @@ function autoStart({ account, everyMinutes }) {
   child.on('close', (code) => { keep(`\n[loop stopped, exit ${code}]\n`); autoProc = null; });
   child.on('error', (e) => { keep(`\n[loop failed to start: ${e.message}]\n`); autoProc = null; });
   autoProc = { child, account: String(account), every, startedAt: new Date().toISOString() };
+  /**
+   * WRITE THE INTENT DOWN. Without this the loop existed only as this variable, and a restart —
+   * of the app or of the machine — stopped it with nothing anywhere recording that it had been
+   * running. Measured 2026-09-24: this box has no systemd unit at system or user level, no
+   * autostart entry and no cron, so the app itself only runs because somebody typed the
+   * launcher. The loop died twice over and reported nothing either time.
+   *
+   * The account and the interval, not the pid: those two rebuild the loop, and a pid from
+   * before a restart names nothing — or worse, names somebody else's process.
+   */
+  rememberAutoLoop({ account: String(account), everyMinutes: every });
   return { ok: true, ...autoStatus() };
 }
 
@@ -2526,7 +2537,48 @@ function autoStop() {
   if (!autoProc) return { ok: false, error: 'The loop is not running.' };
   try { autoProc.child.kill(); } catch { /* already gone */ }
   autoProc = null;
+  /* A STOP MUST SURVIVE A RESTART AS FIRMLY AS A START. Forgetting the record here is what
+     stops `resumeAutoLoop` resurrecting a loop somebody deliberately switched off — a resume
+     that ignores a stop is worse than having no resume at all. */
+  rememberAutoLoop(null);
   return { ok: true, ...autoStatus() };
+}
+
+/**
+ * Store, or clear, the loop that should be running. Never throws: the loop is started or
+ * stopped either way, and failing the caller's request because a JSON file could not be
+ * written would report the opposite of what actually happened.
+ */
+function rememberAutoLoop(loop) {
+  try {
+    if (!pushStateApi) return;
+    const { readPushState, writePushState } = pushStateApi;
+    const state = readPushState();
+    if (loop) writePushState({ ...state, autoLoop: loop });
+    else { const { autoLoop, ...rest } = state; void autoLoop; writePushState(rest); }
+  } catch (e) {
+    console.error(`[auto] the loop ran but its state was not recorded: ${e && e.message ? e.message : e}`);
+  }
+}
+
+/**
+ * Put back the loop a restart interrupted.
+ *
+ * Called once, after the server is listening — not at module load — because `autoStart` spawns
+ * a child that drives a browser, and on a cold boot the browsers are still being opened. The
+ * first cycle may therefore fail; `src/commands/auto.ts:132-142` catches a failed cycle and
+ * sleeps rather than dying ("A failed cycle must not kill the loop"), so the loop recovers on
+ * the next tick without special handling here.
+ */
+function resumeAutoLoop() {
+  let saved = null;
+  try { saved = pushStateApi ? pushStateApi.readPushState().autoLoop ?? null : null; }
+  catch { return; }                                   // an unreadable state file resumes nothing
+  if (!saved) return;
+  const r = autoStart({ account: saved.account, everyMinutes: saved.everyMinutes });
+  console.log(r.ok
+    ? `[auto] resumed after restart: ${saved.account}, every ${saved.everyMinutes} min`
+    : `[auto] could not resume ${saved.account}: ${r.error}`);
 }
 
 function autoStatus() {
@@ -4082,6 +4134,10 @@ server.listen(PORT, '127.0.0.1', () => {
     `  Bound to 127.0.0.1 and refuses cross-origin requests — there is no other guard.\n` +
     `  Ctrl+C to stop.\n`
   );
+
+  /* Put back an unattended loop a restart interrupted. Here rather than at module load: this
+     spawns a child that drives a browser, and nothing should spawn before the server answers. */
+  resumeAutoLoop();
 
   /**
    * Start pushing on this install's own schedule.

@@ -63,6 +63,47 @@ test('a non-string provider is dropped', () => {
   assert.equal(readPushState().llmProvider, undefined);
 });
 
+test('an unattended loop that was running is remembered across a restart', () => {
+  /**
+   * THE DEFECT THIS PINS. `autoProc` (tools/product/server.mjs:2454) is a module-level `let`,
+   * set at :2521 and nulled at :2519/:2520/:2528, written down NOWHERE — the same shape as the
+   * provider bug above. Nothing on this machine starts the app at boot either: no systemd unit
+   * at system or user level, no autostart entry, no cron (checked 2026-09-24). So a reboot
+   * stopped the loop silently and nothing resumed it.
+   *
+   * The intent is stored, not the process: an account and an interval are what `autoStart`
+   * needs to rebuild the loop, and a pid from before the reboot names nothing.
+   */
+  writePushState({ ...readPushState(), autoLoop: { account: 'ryangrowth12', everyMinutes: 180 } });
+  const back = readPushState().autoLoop;
+  assert.deepEqual(back, { account: 'ryangrowth12', everyMinutes: 180 });
+});
+
+test('a stopped loop is forgotten, so a reboot does not resurrect it', () => {
+  writePushState({ ...readPushState(), autoLoop: { account: 'ryangrowth12', everyMinutes: 180 } });
+  const { autoLoop, ...rest } = readPushState(); void autoLoop;
+  writePushState(rest);
+  assert.equal(readPushState().autoLoop, undefined,
+    'stopping the loop must mean stopped — a resume that ignores the stop is worse than no resume');
+});
+
+test('a malformed loop record is dropped rather than spawned from', () => {
+  /* This value becomes a spawn: `dist/cli.js auto --every <n>` as `<account>`. A junk interval
+     or a missing account must not reach that call. */
+  for (const bad of [
+    { account: 'ryangrowth12' },                       // no interval
+    { everyMinutes: 180 },                             // no account
+    { account: '', everyMinutes: 180 },                // empty account
+    { account: 'ryangrowth12', everyMinutes: 0 },      // a zero interval is a hot loop
+    { account: 'ryangrowth12', everyMinutes: -5 },
+    { account: 'ryangrowth12', everyMinutes: 'soon' },
+    'ryangrowth12'                                     // not an object at all
+  ]) {
+    writeFileSync(pushStatePath(), JSON.stringify({ cursors: {}, autoLoop: bad }), 'utf8');
+    assert.equal(readPushState().autoLoop, undefined, `must drop ${JSON.stringify(bad)}`);
+  }
+});
+
 test('storing a provider does not disturb the push watermarks beside it', () => {
   writePushState({ cursors: { events: { id: 41 } }, syncUrl: 'https://example.com/hook' });
   writePushState({ ...readPushState(), llmProvider: 'api' });

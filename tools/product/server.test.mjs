@@ -1457,6 +1457,43 @@ test('the LLM path can be switched, and only to a value redbot understands', asy
   await set('cli');   // leave it as found
 });
 
+test('the unattended loop is written down, and a stop is written down too', async () => {
+  /**
+   * THE DEFECT THIS PINS. `autoProc` (server.mjs) was a module-level `let` and nothing wrote it
+   * down, so a restart of the app — or of the machine, which has no boot unit at all — stopped
+   * the loop with no record anywhere that it had been running. Measured 2026-09-24: no systemd
+   * unit at system or user level, no autostart entry, no cron.
+   *
+   * Asserted on data/push-state.json rather than on a status call, for the same reason as the
+   * provider test above: reading it back from the process still holding it in a variable proves
+   * nothing about a restart.
+   */
+  const post = (path, body) => fetch(`http://127.0.0.1:${PORT}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  }).then((r) => r.json());
+  const onDisk = () => {
+    const f = join(DATA, 'push-state.json');
+    return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')).autoLoop : undefined;
+  };
+
+  const accounts = await getJson('/api/state');
+  const handle = (accounts.accounts || [])[0]?.handle;
+  if (!handle) { assert.ok(true, 'no account configured in this fixture — nothing to start a loop as'); return; }
+
+  try {
+    const started = await post('/api/auto/start', { account: handle, everyMinutes: 180 });
+    if (!started.ok) { assert.ok(true, `loop refused in this fixture: ${started.error}`); return; }
+    assert.deepEqual(onDisk(), { account: handle, everyMinutes: 180 },
+      'a running loop must be on disk — that file is the only thing a restart can read');
+
+    await post('/api/auto/stop', {});
+    assert.equal(onDisk(), undefined,
+      'a deliberate stop must survive a restart too — resuming a loop somebody switched off is worse than not resuming');
+  } finally {
+    await post('/api/auto/stop', {}).catch(() => {});
+  }
+});
+
 test('the provider choice is written down, so a restart does not silently revert it', async () => {
   /**
    * THE DEFECT THIS PINS. `selectedProvider` was a module-level `let` seeded from
