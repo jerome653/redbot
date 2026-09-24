@@ -61,6 +61,40 @@ test('contentious threads are declined, not argued', () => {
     'the prompt must name the class of thread to decline');
 });
 
+test('a conditional may not rule a cause in or out', () => {
+  /**
+   * THE MEASURED CAUSE OF EVERY CERTIFICATION REJECTION SO FAR.
+   *
+   * Argus cert 4 (2026-09-24, draft d_bd08ae06610b_mufq6pev, the first on the rewritten prompt)
+   * returned REJECT with all four claims failing identically: 4 overconfident-language, 4
+   * low-confidence-as-fact, 4 fatal-contradiction. The sentence that did it:
+   *
+   *   "If it still points to the Jarallax/background hero, Optimole and the preload URL aren't
+   *    your bottleneck — the render delay is Elementor/Jarallax initialization"
+   *
+   * Two absolutes drawn from one observation: a cause ruled OUT ("aren't your bottleneck") and
+   * another ruled IN ("the render delay is"). Argus answered each with a counterexample — the
+   * hero can be the LCP element while Optimole is still serving its background image, so the
+   * observation narrows the field and settles nothing.
+   *
+   * The prompt already said "say what you would check and why, rather than guessing with
+   * confidence". The model obeyed that and then wrote a confident CONDITIONAL, which the rule
+   * did not name. So the rule has to name it.
+   */
+  const p = build();
+  assert.match(p, /\bif\b[^.]{0,60}\bthen\b|conditional/i,
+    'the prompt must talk about conditional sentences specifically, not just confidence in general');
+  assert.match(p, /rule (it |a cause )?(in|out)|rules? out|rule anything (in|out)/i,
+    'and must forbid ruling a cause in or out from one observation');
+});
+
+test('speculation must be marked as speculation', () => {
+  /* Argus rule `low-confidence-as-fact`: a claim that "carries low confidence and is not marked
+     as speculation". Marking is the cheap half of the fix and the model cannot infer it. */
+  const p = build();
+  assert.match(p, /speculation|speculati/i, 'the prompt must require low-confidence claims to be marked');
+});
+
 test('the safety rules that predate the rewrite survive it', () => {
   /* These were not Jerome's brevity ask and must not be lost to it. Each one is a failure that
      already happened once: a promoted product, an invented anecdote, a confident wrong fact. */
