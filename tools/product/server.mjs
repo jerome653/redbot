@@ -132,7 +132,9 @@ let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccou
     pushClientApi = null, pushAccountsApi = null, dependenciesApi = null, profilesApi = null,
     proxiesApi = null, relayApi = null, alignApi = null, exitApi = null, webshareApi = null,
     /* The three this change adds: ask the browser where it is, write that down, read it back. */
-    detectApi = null, detectionApi = null, locationsApi = null;
+    detectApi = null, detectionApi = null, locationsApi = null,
+    /* src/llm.ts, for `onlyProvider()` — an install's per-machine provider prohibition. */
+    llmApi = null;
 
 /**
  * The push scheduler lives HERE rather than in the Electron shell.
@@ -331,6 +333,9 @@ try {
    */
   configApi = (await import('../../dist/config.js'));
   updateApi = (await import('../../dist/update.js'));
+  /* Read the provider prohibition from the SAME module that enforces it at generation time, so
+     the Setup screen cannot offer a provider src/llm.ts would then refuse. */
+  llmApi = (await import('../../dist/llm.js'));
   /* Dashboard sync: the same module the CLI uses, so the Setup screen and `redbot push` cannot
      disagree about where the endpoint is or which secret name holds a token. */
   pushApi = (await import('../../dist/push/index.js'));
@@ -2839,6 +2844,19 @@ const server = createServer((req, res) => {
         const want = String(body.provider || '');
         if (!PROVIDERS.includes(want)) {
           return send(400, JSON.stringify({ ok: false, error: 'provider must be "cli", "api" or "deepseek"' }));
+        }
+        /**
+         * An install may forbid providers it must never reach — REDBOT_ONLY_PROVIDER, set per
+         * machine, never in the repository. Refused HERE as well as in src/llm.ts because the
+         * screen must not offer a choice the next generation will throw on: a Setup page that
+         * accepts "cli" and then fails every draft is worse than one that says no.
+         */
+        const pinned = llmApi && llmApi.onlyProvider ? llmApi.onlyProvider() : null;
+        if (pinned && pinned !== want) {
+          return send(400, JSON.stringify({
+            ok: false,
+            error: `this install is restricted to "${pinned}" (REDBOT_ONLY_PROVIDER); "${want}" cannot be selected here.`
+          }));
         }
         selectedProvider = want;
         /* The dependency answer is provider-dependent (the Claude CLI row) and is cached for
