@@ -1457,6 +1457,46 @@ test('the LLM path can be switched, and only to a value redbot understands', asy
   await set('cli');   // leave it as found
 });
 
+test('the provider choice is written down, so a restart does not silently revert it', async () => {
+  /**
+   * THE DEFECT THIS PINS. `selectedProvider` was a module-level `let` seeded from
+   * `process.env.REDBOT_LLM` and mutated here, and NOTHING WROTE IT DOWN. `launch-redbot.sh`
+   * runs `npm start`, which exports no `REDBOT_LLM`, so every restart of the desktop app reset
+   * the choice to `cli` — the one provider that cannot raise the `empty completion` thrown at
+   * src/llm.ts:292 and :381. Three such failures sat in the live database from 2026-09-21
+   * naming a provider that, by the time anyone looked, existed nowhere on the machine.
+   *
+   * Asserted on the FILE, not on a second GET: reading the value back from the same process
+   * that is holding it in a variable would pass with no persistence at all. That is precisely
+   * how this went unnoticed.
+   */
+  const set = (provider) => fetch(`http://127.0.0.1:${PORT}/api/llm/provider`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider })
+  }).then((r) => r.json());
+  const onDisk = () => {
+    const f = join(DATA, 'push-state.json');
+    return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')).llmProvider : undefined;
+  };
+
+  try {
+    const r = await set('deepseek');
+    assert.equal(r.ok, true);
+    assert.equal(r.provider, 'deepseek');
+    assert.equal(r.saved, true, 'the route must report whether the choice was KEPT, not just applied');
+    assert.equal(onDisk(), 'deepseek', 'the next boot reads this file — if it is not here, the choice is gone');
+
+    await set('api');
+    assert.equal(onDisk(), 'api', 'a second change must replace the first, not sit beside it');
+
+    /* A refused value must not reach the file either — the 400 path returns before the write. */
+    await set('gpt-9');
+    assert.equal(onDisk(), 'api', 'a rejected provider must leave the stored one alone');
+  } finally {
+    await set('cli').catch(() => {});
+  }
+});
+
 test('the Claude CLI stops being a required dependency the moment a key path is selected', async () => {
   /**
    * THE DEFECT THIS PINS. `/api/dependencies` passed `configApi.config.llm.provider` — this
