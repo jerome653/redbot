@@ -59,7 +59,72 @@ function stubFetch(replies: Array<{ status: number; body?: unknown; headers?: Re
 /** The shape DeepSeek actually returns for a completed non-streaming call. */
 const ok = (content: string | null, reasoning?: string) => ({
   status: 200,
-  body: { choices: [{ message: { role: 'assistant', content, reasoning_content: reasoning ?? null } }] }
+  body: { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content, reasoning_content: reasoning ?? null } }] }
+});
+
+/**
+ * The shape DeepSeek returns when the budget ran out BEFORE the answer began.
+ *
+ * MEASURED, not imagined — 2026-09-24, thread 77d6fe170b77, the one that failed in production
+ * on 2026-09-21, at src/commands/draft.ts's own settings (deepseek-v4-pro, max_tokens 1600,
+ * temperature 0.5):
+ *
+ *   max_tokens=1600  finish_reason=length  content=0ch     reasoning_tokens=1600
+ *   max_tokens=4000  finish_reason=length  content=0ch     reasoning_tokens=4000
+ *   max_tokens=8000  finish_reason=stop    content=1093ch  reasoning_tokens=3014
+ *
+ * `max_tokens` on this endpoint bounds REASONING PLUS ANSWER. On the Anthropic endpoint it
+ * bounds the answer alone. Every maxTokens in this repository was sized for the second meaning.
+ * `effort: 'low'` was tested at 1600 and 4000 and changed nothing — the budget is the lever.
+ */
+const truncated = (reasoningTokens = 1600) => ({
+  status: 200,
+  body: {
+    choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '', reasoning_content: 'x'.repeat(40) } }],
+    usage: { completion_tokens: reasoningTokens, completion_tokens_details: { reasoning_tokens: reasoningTokens } }
+  }
+});
+
+test('a budget eaten by reasoning is RETRIED with a bigger one, not reported as an empty model', async () => {
+  const { calls, restore } = stubFetch([truncated(1600), ok('the answer that fits')]);
+  try {
+    assert.equal(await complete({ prompt: 'p', model: 'm', maxTokens: 1600 }), 'the answer that fits');
+    assert.equal(calls.length, 2, 'a truncation must be retried, not thrown on first sight');
+    const first = JSON.parse(String(calls[0]!.init.body));
+    const second = JSON.parse(String(calls[1]!.init.body));
+    assert.equal(first.max_tokens, 1600, 'the first attempt asks for what the caller asked for');
+    assert.ok(second.max_tokens > first.max_tokens,
+              `the retry must raise the budget; got ${second.max_tokens} after ${first.max_tokens}`);
+  } finally { restore(); }
+});
+
+test('a truncation that survives every retry says WHY, and does not call the model empty', async () => {
+  /**
+   * THE DEFECT THIS PINS. `empty completion` was thrown for two unrelated failures: a model
+   * that genuinely returned nothing, and a budget that ran out before the answer started. The
+   * second is fixable by the operator and the first is not, and the message said neither.
+   * Three of these reached data/redbot.db on 2026-09-21 as
+   * `draft failed for 77d6fe170b77: empty completion`, and named no cause at all.
+   */
+  const { restore } = stubFetch([truncated(1600)]);
+  try {
+    await assert.rejects(complete({ prompt: 'p', model: 'm', maxTokens: 1600 }), (e: Error) => {
+      assert.match(e.message, /reasoning/i, 'the message must name what consumed the budget');
+      assert.match(e.message, /length/, "the message must carry DeepSeek's own finish_reason");
+      assert.ok(!/^empty completion$/.test(e.message),
+                'a truncation is not an empty completion — that conflation is the defect');
+      return true;
+    });
+  } finally { restore(); }
+});
+
+test('a genuinely empty answer that was NOT truncated is still an empty completion', async () => {
+  /* The other half of the split: finish_reason 'stop' with no content is the model returning
+     nothing, and raising the budget would not help. It must keep its own distinct message. */
+  const { restore } = stubFetch([ok('')]);
+  try {
+    await assert.rejects(complete({ prompt: 'p', model: 'm' }), /empty completion/);
+  } finally { restore(); }
 });
 
 test('the model ids resolve to DeepSeek ids, not Claude ids', () => {

@@ -324,6 +324,31 @@ async function completeViaDeepseek(opts: CompleteOpts): Promise<string> {
   const key = await deepseekKey();
   const { prompt, model, maxTokens = 1600, temperature = 0.4 } = opts;
   let lastError: Error | null = null;
+  /**
+   * A FOURTH THING THAT DIFFERS, and it is the one that cost three production drafts.
+   *
+   * `max_tokens` here bounds REASONING PLUS ANSWER. On the Anthropic endpoint it bounds the
+   * answer alone, and every maxTokens in this repository was sized for that second meaning. A
+   * reasoning model handed 1600 spends 1600 thinking and emits nothing, and the call then looks
+   * exactly like a model that returned nothing.
+   *
+   * MEASURED 2026-09-24 against thread 77d6fe170b77 — the thread that produced
+   * `draft failed for 77d6fe170b77: empty completion` three times on 2026-09-21 — at
+   * src/commands/draft.ts's own settings (deepseek-v4-pro, temperature 0.5):
+   *
+   *     max_tokens=1600  finish_reason=length  content=0ch     reasoning_tokens=1600
+   *     max_tokens=4000  finish_reason=length  content=0ch     reasoning_tokens=4000
+   *     max_tokens=8000  finish_reason=stop    content=1093ch  reasoning_tokens=3014
+   *
+   * `effort: 'low'` was tested at 1600 and 4000 and changed nothing, so the budget is the lever.
+   *
+   * RAISED BY RETRY RATHER THAN BY A CONSTANT, deliberately. A fixed headroom is a guess that
+   * goes stale the next time the vendor retunes how much a model thinks — 4000 was not enough
+   * on one attempt and 3255 sufficed on another, so the figure is not even stable across calls
+   * of the same prompt. Growing the budget only when the endpoint says `length` costs nothing
+   * on the calls that already fit, and needs no number anybody has to maintain.
+   */
+  let budget = maxTokens;
 
   for (let attempt = 1; attempt <= config.llm.maxRetries; attempt++) {
     let res: Response;
@@ -335,7 +360,7 @@ async function completeViaDeepseek(opts: CompleteOpts): Promise<string> {
           authorization: `Bearer ${key}`
         },
         body: JSON.stringify({
-          model, max_tokens: maxTokens, temperature, stream: false,
+          model, max_tokens: budget, temperature, stream: false,
           messages: [{ role: 'user', content: prompt }]
         })
       });
@@ -375,11 +400,38 @@ async function completeViaDeepseek(opts: CompleteOpts): Promise<string> {
     }
 
     const json = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string | null; reasoning_content?: string | null } }>;
+      choices?: Array<{
+        finish_reason?: string | null;
+        message?: { content?: string | null; reasoning_content?: string | null };
+      }>;
+      usage?: { completion_tokens_details?: { reasoning_tokens?: number } };
     };
     const out = (json.choices?.[0]?.message?.content ?? '').trim();
-    if (!out) throw new LlmError('empty completion');
-    return out;
+    if (out) return out;
+
+    /**
+     * NO ANSWER — and the two reasons are not the same failure.
+     *
+     * `finish_reason: 'length'` means the budget ran out, which the operator can fix and which
+     * a retry with a bigger one usually fixes by itself. Anything else means the model answered
+     * with nothing, which a bigger budget will not change. Reporting both as `empty completion`
+     * is what put three causeless rows in data/redbot.db on 2026-09-21.
+     */
+    const finish = json.choices?.[0]?.finish_reason ?? null;
+    if (finish === 'length') {
+      const spent = json.usage?.completion_tokens_details?.reasoning_tokens ?? null;
+      if (attempt < config.llm.maxRetries) {
+        budget *= 3;
+        continue;   // not a backoff — nothing is overloaded, the answer simply had no room
+      }
+      throw new LlmError(
+        `the model spent its whole ${budget}-token budget on reasoning and never began the ` +
+        `answer (finish_reason=length${spent === null ? '' : `, reasoning_tokens=${spent}`}). ` +
+        'On DeepSeek max_tokens bounds reasoning AND answer, unlike the Anthropic endpoint. ' +
+        `Raise maxTokens at the call site above ${maxTokens}, or use a model that reasons less.`
+      );
+    }
+    throw new LlmError('empty completion');
   }
   throw lastError ?? new LlmError('exhausted retries');
 }
