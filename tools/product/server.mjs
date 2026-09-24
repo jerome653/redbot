@@ -1591,7 +1591,35 @@ let selectedOperator = process.env.REDBOT_OPERATOR || configApi.storedOperatorSe
  * the screen would name one provider while the child ran another.
  */
 const PROVIDERS = ['cli', 'api', 'deepseek'];
-let selectedProvider = PROVIDERS.includes(process.env.REDBOT_LLM) ? process.env.REDBOT_LLM : 'cli';
+
+/**
+ * The Setup screen's provider choice, and it OUTLIVES THE PROCESS.
+ *
+ * THE DEFECT THIS FIXES. This was `let selectedProvider = <env> ?? 'cli'` and nothing wrote it
+ * down. `launch-redbot.sh` runs `npm start`, which exports no `REDBOT_LLM`, so every restart of
+ * the desktop app silently reset the choice to `cli` — the one provider that cannot raise the
+ * `empty completion` thrown at src/llm.ts:292 and :381. Measured 2026-09-24: the running app's
+ * environ carried no `REDBOT_LLM` while the database held three such failures from 2026-09-21,
+ * naming a provider that by then existed nowhere on the machine.
+ *
+ * PRECEDENCE, and each step is deliberate:
+ *   1. `REDBOT_LLM` — an explicit environment override still wins, so a terminal run and the
+ *      test suite can pin the provider without touching the operator's saved choice.
+ *   2. the saved choice — `data/push-state.json`, beside `syncUrl`, which src/push/state.ts
+ *      persists on exactly this argument: a desktop app has no shell to export a variable in.
+ *   3. `cli` — the unmetered default. Unchanged.
+ *
+ * Reading through `pushStateApi` rather than the file: one implementation validates the value
+ * (src/push/state.ts drops anything outside PROVIDERS), and it is the same reader `redbot push`
+ * uses, so the console and the CLI cannot disagree about what is stored.
+ */
+const savedProvider = () => {
+  try { return pushStateApi ? pushStateApi.readPushState().llmProvider ?? null : null; }
+  catch { return null; }   // an unreadable state file is "nothing chosen", never a crash on boot
+};
+let selectedProvider = PROVIDERS.includes(process.env.REDBOT_LLM)
+  ? process.env.REDBOT_LLM
+  : (savedProvider() ?? 'cli');
 
 /** Last answer from the update check, so the page asking on every load costs one request a day. */
 /** Last dependency scan. Locating executables spawns processes; see the /api/dependencies route. */
@@ -2765,7 +2793,28 @@ const server = createServer((req, res) => {
            two minutes. Without this, switching to a key path left step 1 red for that long —
            the same staleness the `provider: llmProvider()` fix above was about. */
         depsCache = { at: 0, value: null };
-        return send(200, JSON.stringify({ ok: true, provider: selectedProvider }));
+        /**
+         * WRITE IT DOWN. Without this the selection lived only in this process and died with it.
+         *
+         * `saved` is reported so the screen can tell "chosen" from "chosen and kept": a console
+         * that says a provider was set while the next boot reverts it is the defect this route
+         * carried. The write is not allowed to fail the request — the choice IS in effect for
+         * this process either way, and claiming otherwise would be the opposite lie.
+         */
+        let saved = false, saveError = null;
+        try {
+          if (!pushStateApi) throw new Error('the compiled build is missing');
+          const { readPushState, writePushState } = pushStateApi;
+          writePushState({ ...readPushState(), llmProvider: want });
+          saved = true;
+        } catch (e) {
+          saveError = e && e.message ? e.message : String(e);
+          console.error(`[setup] provider set to ${want} but NOT persisted: ${saveError}`);
+        }
+        return send(200, JSON.stringify({
+          ok: true, provider: selectedProvider, saved,
+          ...(saveError ? { saveError } : {})
+        }));
       }
 
       /**

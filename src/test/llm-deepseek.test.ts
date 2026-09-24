@@ -69,15 +69,27 @@ test('the model ids resolve to DeepSeek ids, not Claude ids', () => {
    * src/argus/pipeline.ts would have recorded a Claude model name against a DeepSeek run.
    */
   assert.equal(config.llm.provider, 'deepseek');
-  assert.equal(config.llm.analyzeModel, 'deepseek-v4-flash');
+  /**
+   * `deepseek-flash`, and the missing `v4-` is the point.
+   *
+   * This asserted 'deepseek-v4-flash' — an id DeepSeek does not serve, so the assertion passed
+   * while the product asked for a model that does not exist. A constant checked against itself
+   * proves the constant has not changed, never that it is right. Measured against the vendor's
+   * `GET /models` 2026-09-24: the only ids are `deepseek-flash` and `deepseek-v4-pro`.
+   */
+  assert.equal(config.llm.analyzeModel, 'deepseek-flash');
   assert.equal(config.llm.draftModel, 'deepseek-v4-pro');
   assert.ok(!config.llm.analyzeModel.startsWith('claude-'));
+  /* The sibling carries `v4`, this one does not. Pinned so a tidying pass cannot "regularise"
+     them into a matching pair and reintroduce the id that was never real. */
+  assert.ok(!config.llm.analyzeModel.includes('v4'),
+            'deepseek-flash is DeepSeek-V4.1-Flash and carries no version in its id');
 });
 
 test('the request is the documented DeepSeek call', async () => {
   const { calls, restore } = stubFetch([ok('hello')]);
   try {
-    const out = await complete({ prompt: 'ping', model: 'deepseek-v4-flash', maxTokens: 99, temperature: 0.2 });
+    const out = await complete({ prompt: 'ping', model: 'deepseek-flash', maxTokens: 99, temperature: 0.2 });
     assert.equal(out, 'hello');
 
     assert.equal(calls.length, 1);
@@ -89,7 +101,7 @@ test('the request is the documented DeepSeek call', async () => {
     assert.equal(h['anthropic-version'], undefined, 'the Anthropic version header must not be sent to DeepSeek');
 
     const body = JSON.parse(String(calls[0]!.init.body));
-    assert.equal(body.model, 'deepseek-v4-flash');
+    assert.equal(body.model, 'deepseek-flash');
     assert.equal(body.max_tokens, 99);
     assert.equal(body.temperature, 0.2);
     assert.equal(body.stream, false, 'a streamed answer would not parse as one JSON body');

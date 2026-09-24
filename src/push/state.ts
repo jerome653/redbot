@@ -20,7 +20,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { DATA } from '../config.js';
+import { DATA, type LlmProvider } from '../config.js';
 
 export const installIdPath = (): string => join(DATA, 'install-id');
 export const pushStatePath = (): string => join(DATA, 'push-state.json');
@@ -85,7 +85,22 @@ export interface PushState {
    * somebody who never opens a terminal. Not a secret — the tokens are, and they go to the vault.
    */
   syncUrl?: string;
+  /**
+   * Which model provider the Setup screen selected. Same argument as `syncUrl`, one floor lower.
+   *
+   * `tools/product/server.mjs` held this in a module-level `let` seeded from `REDBOT_LLM` and
+   * mutated by `/api/llm/provider`, and wrote it nowhere. `launch-redbot.sh` runs `npm start`
+   * and exports no `REDBOT_LLM`, so every restart reset the choice to `cli` without saying so —
+   * and a `cli` install cannot raise the `empty completion` that only src/llm.ts:292 and :381
+   * throw, which is how three failed drafts came to name a provider that no longer existed.
+   *
+   * Absent means "nothing was chosen"; the default belongs to the caller, not to this reader.
+   */
+  llmProvider?: LlmProvider;
 }
+
+/** The only three values `REDBOT_LLM` resolves to — src/config.ts:362-364. */
+const PROVIDERS: readonly LlmProvider[] = ['cli', 'api', 'deepseek'];
 
 const EMPTY: PushState = { cursors: {} };
 
@@ -104,7 +119,13 @@ export function readPushState(): PushState {
       ...(typeof raw?.accountsFingerprint === 'string'
         ? { accountsFingerprint: raw.accountsFingerprint } : {}),
       ...(typeof raw?.accountsEtag === 'string' ? { accountsEtag: raw.accountsEtag } : {}),
-      ...(typeof raw?.syncUrl === 'string' ? { syncUrl: raw.syncUrl } : {})
+      ...(typeof raw?.syncUrl === 'string' ? { syncUrl: raw.syncUrl } : {}),
+      /* Validated here rather than at the call site: this value is handed to a child process as
+         `env.REDBOT_LLM` (tools/product/server.mjs:1485), and a hand-edited or corrupted file
+         must not reach a spawn. src/config.ts:362-364 would fall back to 'cli' anyway; failing
+         at the reader means the console can also SEE that nothing valid was stored. */
+      ...(PROVIDERS.includes(raw?.llmProvider as LlmProvider)
+        ? { llmProvider: raw!.llmProvider as LlmProvider } : {})
     };
   } catch {
     /* Fails forward: an unreadable watermark re-sends, and the server de-duplicates. */
