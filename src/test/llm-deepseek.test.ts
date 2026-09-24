@@ -85,6 +85,50 @@ const truncated = (reasoningTokens = 1600) => ({
   }
 });
 
+test('a caller asking for less than a reasoning model needs is raised to the floor', async () => {
+  /**
+   * THE WASTE THIS REMOVES. Every maxTokens in this repository was sized for the Anthropic
+   * endpoint, where max_tokens bounds the ANSWER. Here it bounds reasoning plus answer, so the
+   * call sites ask for a fraction of what the model needs and the first attempts are spent
+   * producing nothing:
+   *
+   *   src/gap.ts:96            1600   measured need ~9,905 completion tokens
+   *   src/commands/draft.ts    1600   measured need ~3,255
+   *   src/argus/extract.ts   3000/1400
+   *   src/commands/warmup.ts    700
+   *
+   * Measured 2026-09-24 on thread 869b0d4176e9, deepseek-flash, prompt ~1,800 tokens:
+   * max_tokens=16000 -> finish_reason=stop, reasoning_tokens=9053, completion_tokens=9905.
+   * At 1600 the same call truncates, and the retry ladder burns 1600 then 4800 before its
+   * third attempt has any chance — three calls billed, two of them guaranteed to produce
+   * nothing.
+   *
+   * RAISING THE FLOOR IS FREE. `max_tokens` is a ceiling, not a reservation: the bill is the
+   * tokens generated. A call that finishes in 800 costs 800 whether the ceiling was 1,600 or
+   * 16,000. So the floor removes the wasted attempts and costs nothing on the calls that
+   * already fit — which is why this is a floor and not a per-call-site retune.
+   */
+  const { calls, restore } = stubFetch([ok('fits fine')]);
+  try {
+    await complete({ prompt: 'p', model: 'm', maxTokens: 1600 });
+    const body = JSON.parse(String(calls[0]!.init.body));
+    assert.ok(body.max_tokens >= 16000,
+      `a 1600-token ask must be raised to the measured floor; got ${body.max_tokens}`);
+  } finally { restore(); }
+});
+
+test('a caller asking for MORE than the floor keeps what it asked for', () => {
+  /* The floor lifts, it never caps. A caller that has measured its own need — or a future one
+     on a model that reasons harder — must not be quietly reduced to this constant. */
+  return (async () => {
+    const { calls, restore } = stubFetch([ok('fits fine')]);
+    try {
+      await complete({ prompt: 'p', model: 'm', maxTokens: 50_000 });
+      assert.equal(JSON.parse(String(calls[0]!.init.body)).max_tokens, 50_000);
+    } finally { restore(); }
+  })();
+});
+
 test('a budget eaten by reasoning is RETRIED with a bigger one, not reported as an empty model', async () => {
   const { calls, restore } = stubFetch([truncated(1600), ok('the answer that fits')]);
   try {
@@ -92,7 +136,8 @@ test('a budget eaten by reasoning is RETRIED with a bigger one, not reported as 
     assert.equal(calls.length, 2, 'a truncation must be retried, not thrown on first sight');
     const first = JSON.parse(String(calls[0]!.init.body));
     const second = JSON.parse(String(calls[1]!.init.body));
-    assert.equal(first.max_tokens, 1600, 'the first attempt asks for what the caller asked for');
+    assert.equal(first.max_tokens, 16_000,
+                 'the first attempt starts at the floor, not at the caller\'s Anthropic-shaped number');
     assert.ok(second.max_tokens > first.max_tokens,
               `the retry must raise the budget; got ${second.max_tokens} after ${first.max_tokens}`);
   } finally { restore(); }
@@ -167,7 +212,12 @@ test('the request is the documented DeepSeek call', async () => {
 
     const body = JSON.parse(String(calls[0]!.init.body));
     assert.equal(body.model, 'deepseek-flash');
-    assert.equal(body.max_tokens, 99);
+    /* 99 was what the caller asked for; 16,000 is what goes on the wire. On this endpoint
+       max_tokens bounds reasoning AND answer, and a reasoning model handed 99 spends all 99
+       thinking and returns nothing — measured. The floor lifts every ask to something the model
+       can actually finish inside, and costs nothing when it finishes early because max_tokens is
+       a ceiling, not a reservation. */
+    assert.equal(body.max_tokens, 16_000);
     assert.equal(body.temperature, 0.2);
     assert.equal(body.stream, false, 'a streamed answer would not parse as one JSON body');
     assert.deepEqual(body.messages, [{ role: 'user', content: 'ping' }]);
