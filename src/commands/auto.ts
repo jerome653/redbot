@@ -22,6 +22,8 @@ import { search } from './search.js';
 import { opportunity } from './opportunity.js';
 import { draft } from './draft.js';
 import { certifyCmd } from './certify.js';
+import { reply } from './reply.js';
+import { autoPublishEnabled } from '../autopublish.js';
 import { record, say } from '../log.js';
 /**
  * Sources come from sources through src/sources.ts, which is also where "the file is
@@ -108,6 +110,30 @@ async function cycle(): Promise<number> {
     if (newest) {
       say.step(`Fact-checking ${newest.id}…`);
       await certifyCmd(newest.id);
+
+      /**
+       * AND, WHEN THIS INSTALL HAS BEEN SWITCHED TO IT, PUBLISH.
+       *
+       * The header of this file says the line it will not cross is publishing, and that stays
+       * true of every install that has not set REDBOT_AUTO_PUBLISH=1. On one that has, the
+       * decision moves from a person at a prompt to the rule in src/autopublish.ts — which asks
+       * for MORE than the prompt did: a CERTIFIED verdict (ESCALATE is explicitly "needs a person
+       * who knows the subject"), no hard gate, and no advisory at all.
+       *
+       * The draft is re-read rather than reused: certifyCmd has just written the verdict onto it,
+       * and `newest` is the object from before that write.
+       *
+       * `reply()` is left to do its own refusing. It re-runs the gates against the live page
+       * immediately before submitting (reply.ts, the second `evaluateGates`), and that check is
+       * the one that catches a thread locked or answered in the minutes since certification —
+       * facts no rule here could have known.
+       */
+      if (autoPublishEnabled()) {
+        const fresh = (await loadDrafts()).find((d) => d.id === newest.id);
+        const verdict = fresh?.certification?.verdict ?? null;
+        say.step(`Unattended publish check for ${newest.id} (certification: ${verdict ?? 'none'})…`);
+        await reply(newest.id, { unattended: true });
+      }
     }
   } else {
     say.step('Nothing worth writing this cycle — that is a normal outcome.');
@@ -116,13 +142,25 @@ async function cycle(): Promise<number> {
   await record('auto.cycle', `unattended cycle finished`, {
     account: account?.handle ?? null, collected, drafted: written
   });
-  say.ok('Cycle finished. Nothing was published — that still needs you.');
+  /* The message has to tell the truth about which install this is. It read "Nothing was
+     published — that still needs you" unconditionally, which on an autonomous install would be
+     a line asserting the opposite of what just happened. */
+  say.ok(autoPublishEnabled()
+    ? 'Cycle finished. Publishing is UNATTENDED on this install — see the publish.* history rows for what it decided.'
+    : 'Cycle finished. Nothing was published — that still needs you.');
   return 0;
 }
 
 export async function auto(opts?: { once?: boolean; everyMinutes?: number }): Promise<number> {
   say.head('redbot auto — unattended, up to the fact-check');
-  say.warn('This never publishes. Approving a reply is still a person’s job.');
+  /* Say which install this is, loudly, on the first line of every run. An autonomous install that
+     opened with "this never publishes" would be the single most misleading line in the product. */
+  if (autoPublishEnabled()) {
+    say.warn('UNATTENDED PUBLISHING IS ON (REDBOT_AUTO_PUBLISH=1). This will post to Reddit ' +
+             'without asking, on a CERTIFIED verdict with no gate finding of any kind.');
+  } else {
+    say.warn('This never publishes. Approving a reply is still a person’s job.');
+  }
 
   if (opts?.once) return cycle();
 

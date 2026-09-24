@@ -26,6 +26,9 @@
  * job to exactly one worker; a job this pass did not win is skipped, not run.
  */
 import { record } from './log.js';
+/* One reader for the install-level autonomous-publishing switch, shared with auto.ts, reply.ts
+   and the console — four places that must never disagree about whether this engine may post. */
+import { autoPublishEnabled } from './autopublish.js';
 import {
   loadJobs, runnable, transition, claimJob, createJob, orphaned,
   type Job, type JobKind
@@ -172,8 +175,27 @@ async function runOne(job: Job, now: Date): Promise<RunOutcome> {
    * Publishing stops here, before a runner is even looked up. Written as a guard on the kind
    * rather than as "no runner is registered" so that registering one by mistake cannot open
    * the path.
+   *
+   * ---------------------------------------------------------------------------
+   * UNLESS THIS INSTALL HAS BEEN SWITCHED TO AUTONOMOUS PUBLISHING (2026-09-24).
+   *
+   * CONDITIONAL, NOT DELETED, and that is the whole of the change. Deleted, the reasoning above
+   * goes with it and nobody can put the property back. Conditional, every other install keeps
+   * the old behaviour and this one has to declare itself in its own systemd unit, where the
+   * decision is visible and can be reversed by removing one line.
+   *
+   * The comment on PUBLISH_KINDS predicted the deletion — "the day somebody fixed that 'bug' by
+   * adding a runner, redbot would publish unattended" — and was right to. This is not that. It
+   * is the owner of this install switching off a safeguard he owns, on his own accounts,
+   * deliberately and on the record.
+   *
+   * WHAT DOES NOT MOVE WITH IT: `unattendedPublishDecision` (src/autopublish.ts) still demands a
+   * certification verdict of PASS, no hard gate, and NO ADVISORY AT ALL — strictly higher than
+   * the bar a person at the prompt had to clear, because an advisory is only overrulable by
+   * someone who has read it and there is no longer anyone reading.
+   * ---------------------------------------------------------------------------
    */
-  if (PUBLISH_KINDS.includes(job.kind)) {
+  if (PUBLISH_KINDS.includes(job.kind) && !autoPublishEnabled()) {
     await transition(account, job.id, {
       state: 'waiting',
       detail: 'ready for a person to approve — redbot does not publish on its own'

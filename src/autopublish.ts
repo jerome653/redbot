@@ -60,7 +60,41 @@ export interface UnattendedDecision {
  * That is the intended rollout. The quality gate IS the throttle, and it opens only when a
  * draft genuinely survives it.
  */
-const PUBLISHABLE_VERDICT = 'PASS';
+const PUBLISHABLE_VERDICT = 'CERTIFIED';
+
+/**
+ * `CERTIFIED`, not `PASS`.
+ *
+ * This constant read 'PASS' when the module was first written, and every test asserted 'PASS'
+ * against it — so the suite was green while the value could never have matched anything. The
+ * real domain is `src/argus/types.ts:191`: `type Verdict = 'CERTIFIED' | 'ESCALATE' | 'REJECT'`,
+ * persisted onto the draft at `src/types.ts:121`. Caught by reading the Draft type while wiring
+ * the publish path, not by a test — a constant compared only with itself proves nothing about
+ * whether it is right, which is the same defect this repository already paid for once with
+ * `deepseek-v4-flash`.
+ *
+ * ESCALATE IS NOT ENOUGH, and that is not a judgement call. `src/argus/certify.ts:7-9` defines
+ * it as the verdict for a draft that "needs a person who knows the subject" — a sentence that
+ * describes the exact thing an unattended loop does not have. Only CERTIFIED means every claim
+ * was adequately supported.
+ */
+
+/**
+ * Whether THIS INSTALL has been switched to autonomous publishing.
+ *
+ * One reader for the four places that otherwise refuse outright, so they cannot drift into
+ * disagreeing about it — a machine where the loop believes one thing and the job queue believes
+ * another is worse than either answer on its own.
+ *
+ * Read per call, never captured at import: src/requirements.ts:101-105 records what a value
+ * frozen at module load cost last time — the Setup screen and a spawned child disagreed about
+ * which provider was in use, because one of them had already decided.
+ *
+ * Exactly "1", so "0" and "false" cannot both read as on.
+ */
+export function autoPublishEnabled(): boolean {
+  return process.env.REDBOT_AUTO_PUBLISH === '1';
+}
 
 export function unattendedPublishDecision(input: UnattendedInput): UnattendedDecision {
   /* Off unless switched on explicitly, and only by exactly "1". A truthy-string check would

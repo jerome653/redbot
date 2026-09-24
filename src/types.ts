@@ -189,6 +189,20 @@ export type HistoryKind =
   | 'publish.attempt'
   | 'publish.ok'
   | 'publish.fail'
+  /**
+   * The two halves of an UNATTENDED publish decision (src/autopublish.ts), added 2026-09-24 when
+   * this install was switched to autonomous publishing.
+   *
+   * Both carry the reason, and both are their own kind rather than being folded into
+   * `publish.attempt` / `gate.block`. The question an operator asks of an autonomous run is not
+   * "did it post" — the existing kinds answer that — but "what did it decide, and on what
+   * grounds", and a decision recorded as an attempt cannot be counted separately from one a
+   * person made. `publish.refused` is also NOT `gate.block`: a gate refusing is a fact about the
+   * thread, while this is a fact about the rule, and conflating them would make the refusal rate
+   * of the rule unmeasurable.
+   */
+  | 'publish.unattended'
+  | 'publish.refused'
   /** HTTP 429 or a block page, seen live. The one measured operational limit we have. */
   | 'ratelimit'
   /** a selector list resolved to nothing — the leading indicator of Reddit markup drift */

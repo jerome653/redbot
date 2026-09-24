@@ -22,7 +22,10 @@ const clean = gate({});
 const withAdvisory = (g: string): GateResult => gate({ advisories: [{ gate: g, reason: 'because' }] });
 const hardBlocked = gate({ allow: false, blocks: [{ gate: 'identity', reason: 'wrong account' }] });
 
-const ON = { enabled: '1', certVerdict: 'PASS', gates: clean };
+/* CERTIFIED, not PASS. This file asserted 'PASS' throughout and passed, because the constant it
+   compared against said 'PASS' too — neither was the real verdict domain. src/argus/types.ts:191
+   defines it: 'CERTIFIED' | 'ESCALATE' | 'REJECT', persisted at src/types.ts:121. */
+const ON = { enabled: '1', certVerdict: 'CERTIFIED', gates: clean };
 
 test('the switch is off by default, and only "1" turns it on', () => {
   for (const enabled of [undefined, '', '0', 'false', 'true', 'yes', 'on', ' 1']) {
@@ -41,16 +44,21 @@ test('an uncertified draft never publishes', () => {
   }
 });
 
-test('only PASS publishes — REJECT and anything else do not', () => {
-  for (const certVerdict of ['REJECT', 'reject', 'REVIEW', 'WARN', 'pending', 'OK', 'TRUE']) {
+test('only CERTIFIED publishes — REJECT, ESCALATE and anything else do not', () => {
+  /* ESCALATE is the one that matters and it must NOT publish. src/argus/certify.ts:7-9 defines it
+     as the verdict for a draft that "needs a person who knows the subject" — precisely what an
+     unattended loop has not got. It is also the verdict this pipeline actually reaches today
+     (cert 6, 2026-09-24), so treating it as good enough is the difference between publishing
+     nothing and publishing something nobody checked. */
+  for (const certVerdict of ['REJECT', 'reject', 'ESCALATE', 'escalate', 'PASS', 'REVIEW', 'OK', 'pending']) {
     const d = unattendedPublishDecision({ ...ON, certVerdict });
     assert.equal(d.publish, false, `${certVerdict} must not publish`);
-    assert.match(d.why, /only PASS/);
+    assert.match(d.why, /only CERTIFIED/);
   }
 });
 
-test('PASS is matched case- and whitespace-insensitively, because the column is free text', () => {
-  for (const certVerdict of ['PASS', 'pass', ' Pass ']) {
+test('CERTIFIED is matched case- and whitespace-insensitively, because the column is free text', () => {
+  for (const certVerdict of ['CERTIFIED', 'certified', ' Certified ']) {
     assert.equal(unattendedPublishDecision({ ...ON, certVerdict }).publish, true, `${JSON.stringify(certVerdict)} should pass`);
   }
 });
@@ -91,17 +99,18 @@ test('the human path is unaffected — this function is only consulted unattende
      interactive path too, which would stop a person being able to overrule anything. The
      function has no opinion about interactive runs; it is only ever reached with enabled='1'
      from a loop. Asserted as documentation of that contract. */
-  assert.equal(unattendedPublishDecision({ enabled: undefined, certVerdict: 'PASS', gates: clean }).publish, false);
+  assert.equal(unattendedPublishDecision({ enabled: undefined, certVerdict: 'CERTIFIED', gates: clean }).publish, false);
 });
 
 test('every refusal carries a reason, because it goes straight into the run log', () => {
   const cases: Parameters<typeof unattendedPublishDecision>[0][] = [
-    { enabled: undefined, certVerdict: 'PASS', gates: clean },
+    { enabled: undefined, certVerdict: 'CERTIFIED', gates: clean },
     { enabled: '1', certVerdict: null, gates: clean },
     { enabled: '1', certVerdict: 'REJECT', gates: clean },
-    { enabled: '1', certVerdict: 'PASS', gates: null },
-    { enabled: '1', certVerdict: 'PASS', gates: hardBlocked },
-    { enabled: '1', certVerdict: 'PASS', gates: withAdvisory('duplicate') }
+    { enabled: '1', certVerdict: 'ESCALATE', gates: clean },
+    { enabled: '1', certVerdict: 'CERTIFIED', gates: null },
+    { enabled: '1', certVerdict: 'CERTIFIED', gates: hardBlocked },
+    { enabled: '1', certVerdict: 'CERTIFIED', gates: withAdvisory('duplicate') }
   ];
   for (const c of cases) {
     const d = unattendedPublishDecision(c);
@@ -113,7 +122,7 @@ test('every refusal carries a reason, because it goes straight into the run log'
 test('the one publishing case says why it was allowed, not just that it was', () => {
   const d = unattendedPublishDecision(ON);
   assert.equal(d.publish, true);
-  assert.match(d.why, /PASS/);
+  assert.match(d.why, /CERTIFIED/);
   assert.match(d.why, /no hard block/);
   assert.match(d.why, /no advisory/);
 });

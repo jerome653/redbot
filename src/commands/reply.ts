@@ -33,6 +33,7 @@ import { autoBackup } from '../backup.js';
 import { publishComment } from '../reddit/post.js';
 import { lintDraft, ensureDisclosure } from '../disclosure.js';
 import { evaluateGates } from '../gates.js';
+import { unattendedPublishDecision } from '../autopublish.js';
 import { health } from '../health.js';
 import { viewThread } from '../behavior.js';
 import { makeRng, sessionSeed } from '../rand.js';
@@ -72,7 +73,15 @@ async function askReason(
   return { code, note };
 }
 
-export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Promise<number> {
+export async function reply(
+  draftIdArg?: string,
+  /**
+   * `unattended` is what `redbot auto` passes. It does not loosen anything — it replaces the
+   * approval PROMPT with the rule in src/autopublish.ts, which demands more than the prompt did.
+   * Absent, every path below behaves exactly as it always has.
+   */
+  opts?: { quick?: boolean; unattended?: boolean }
+): Promise<number> {
   say.head('redbot reply');
 
   const drafts = await loadDrafts();
@@ -326,8 +335,42 @@ export async function reply(draftIdArg?: string, opts?: { quick?: boolean }): Pr
       if (preApproved.note) say.step(`  Reason given: ${preApproved.note}`);
     }
 
+    /**
+     * UNATTENDED: decide by rule, because there is nobody to ask.
+     *
+     * `choose()` blocks on a terminal that does not exist inside `redbot auto`, which is why the
+     * loop never called this command at all. With `opts.unattended` the answer comes from
+     * `unattendedPublishDecision` (src/autopublish.ts) instead — and that rule is STRICTER than
+     * the person it replaces: CERTIFIED (not merely ESCALATE), no hard gate, and no advisory of
+     * any kind. An advisory is only overrulable by someone who has read it, and reading is the
+     * one thing a loop cannot do.
+     *
+     * The refusal is recorded with its reason, not just returned, because the whole value of an
+     * unattended decision is being able to ask afterwards why it went the way it did.
+     */
+    if (opts?.unattended) {
+      const auto = unattendedPublishDecision({
+        enabled: process.env.REDBOT_AUTO_PUBLISH,
+        certVerdict: target.certification?.verdict ?? null,
+        gates: pre
+      });
+      if (!auto.publish) {
+        say.fail(`  Not publishing unattended: ${auto.why}`);
+        await record('publish.refused', `unattended publish refused for ${target.id}: ${auto.why}`, {
+          draftId: target.id, why: auto.why, stage: 'unattended'
+        });
+        return 1;
+      }
+      say.ok(`  Publishing unattended: ${auto.why}`);
+      await record('publish.unattended', `unattended publish allowed for ${target.id}: ${auto.why}`, {
+        draftId: target.id, why: auto.why
+      });
+    }
+
     // 'r' is the safe answer: an unclear response must never resolve to publishing.
-    const decision = preApproved ? 'a' : await choose('  Publish this reply?', ['a', 'e', 'r'], 'r');
+    const decision = opts?.unattended ? 'a'
+      : preApproved ? 'a'
+      : await choose('  Publish this reply?', ['a', 'e', 'r'], 'r');
     const reviewSeconds = secondsSince(shownAt);
 
     if (decision === 'r') {
