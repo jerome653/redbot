@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { GateResult } from '../gates.js';
 import { assessQuality } from '../quality.js';
-import { unattendedPublishDecision } from '../autopublish.js';
+import { unattendedPublishDecision, publishBar } from '../autopublish.js';
 
 /* Built from the real GateResult (src/gates.ts:34-48) rather than cast past it: a fixture that
    lies about the shape stops catching the day the shape changes. `quality` is only carried
@@ -52,8 +52,72 @@ test('only CERTIFIED publishes — REJECT, ESCALATE and anything else do not', (
      nothing and publishing something nobody checked. */
   for (const certVerdict of ['REJECT', 'reject', 'ESCALATE', 'escalate', 'PASS', 'REVIEW', 'OK', 'pending']) {
     const d = unattendedPublishDecision({ ...ON, certVerdict });
-    assert.equal(d.publish, false, `${certVerdict} must not publish`);
-    assert.match(d.why, /only CERTIFIED/);
+    assert.equal(d.publish, false, `${certVerdict} must not publish at the default bar`);
+    assert.match(d.why, /requires CERTIFIED/);
+  }
+});
+
+test('the bar is a dial, and its default is the strict end', () => {
+  /**
+   * REDBOT_PUBLISH_MIN_VERDICT, added 2026-09-25. Jerome, after four straight REJECTs and zero
+   * posts: "if the fact check stops it then make it less strict". The dial lives HERE rather than
+   * in src/argus, so the fact-checker keeps recording what it actually found — the REJECT that
+   * prompted this carried three counterexamples backed by official-implementation and
+   * primary-documentation against three claims that were simply false.
+   *
+   * Unset must mean strict. A missing or misspelled value that quietly meant "publish anything"
+   * is the one failure mode this cannot have.
+   */
+  const saved = process.env.REDBOT_PUBLISH_MIN_VERDICT;
+  try {
+    for (const bad of [undefined, '', '   ', 'certified?', 'LENIENT', 'yes', '1']) {
+      if (bad === undefined) delete process.env.REDBOT_PUBLISH_MIN_VERDICT;
+      else process.env.REDBOT_PUBLISH_MIN_VERDICT = bad;
+      assert.equal(publishBar(), 'CERTIFIED', `${JSON.stringify(bad)} must fall back to CERTIFIED`);
+      assert.equal(unattendedPublishDecision({ ...ON, certVerdict: 'REJECT' }).publish, false);
+    }
+
+    process.env.REDBOT_PUBLISH_MIN_VERDICT = 'ESCALATE';
+    assert.equal(publishBar(), 'ESCALATE');
+    assert.equal(unattendedPublishDecision({ ...ON, certVerdict: 'ESCALATE' }).publish, true,
+      'ESCALATE bar admits ESCALATE');
+    assert.equal(unattendedPublishDecision({ ...ON, certVerdict: 'CERTIFIED' }).publish, true,
+      'and still admits CERTIFIED');
+    assert.equal(unattendedPublishDecision({ ...ON, certVerdict: 'REJECT' }).publish, false,
+      'but NOT a REJECT — that is the whole point of having two rungs');
+
+    process.env.REDBOT_PUBLISH_MIN_VERDICT = 'any';
+    assert.equal(publishBar(), 'ANY');
+    const r = unattendedPublishDecision({ ...ON, certVerdict: 'REJECT' });
+    assert.equal(r.publish, true, 'ANY admits a REJECT');
+    assert.match(r.why, /CONTRADICTED/,
+      'and must say so in the reason, because that string is what lands in the history row');
+  } finally {
+    if (saved === undefined) delete process.env.REDBOT_PUBLISH_MIN_VERDICT;
+    else process.env.REDBOT_PUBLISH_MIN_VERDICT = saved;
+  }
+});
+
+test('lowering the bar does NOT stop other advisories refusing', () => {
+  /* The `certification` advisory is dropped from the advisory check because it restates the
+     verdict already judged (gates.ts:384-390 pushes it, and `certification` is not in HARD_GATES).
+     Every other advisory is a live fact about the thread that nothing has judged, and must still
+     refuse even at the loosest bar — otherwise "less strict about facts" silently became "post
+     into locked and archived threads too". */
+  const saved = process.env.REDBOT_PUBLISH_MIN_VERDICT;
+  process.env.REDBOT_PUBLISH_MIN_VERDICT = 'ANY';
+  try {
+    for (const g of ['duplicate', 'locked', 'archived', 'warming:age', 'window', 'health']) {
+      const d = unattendedPublishDecision({ ...ON, certVerdict: 'REJECT', gates: withAdvisory(g) });
+      assert.equal(d.publish, false, `advisory ${g} must still refuse at the ANY bar`);
+      assert.match(d.why, /nobody can overrule unattended/);
+    }
+    /* …while the certification advisory alone no longer blocks, or the dial could never move. */
+    const ok = unattendedPublishDecision({ ...ON, certVerdict: 'REJECT', gates: withAdvisory('certification') });
+    assert.equal(ok.publish, true, 'the certification advisory must not be counted twice');
+  } finally {
+    if (saved === undefined) delete process.env.REDBOT_PUBLISH_MIN_VERDICT;
+    else process.env.REDBOT_PUBLISH_MIN_VERDICT = saved;
   }
 });
 
@@ -124,5 +188,7 @@ test('the one publishing case says why it was allowed, not just that it was', ()
   assert.equal(d.publish, true);
   assert.match(d.why, /CERTIFIED/);
   assert.match(d.why, /no hard block/);
-  assert.match(d.why, /no advisory/);
+  assert.match(d.why, /no other advisory/);
+  assert.match(d.why, /clears the CERTIFIED bar/,
+    'the reason must name the bar in force — that string is the audit record of which one let it through');
 });
