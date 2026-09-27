@@ -123,7 +123,10 @@ export async function reply(
     await s.page.goto(target.permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
 
     if (await isRateLimited(s.page)) {
-      await record('ratelimit', `429 while opening ${target.permalink}`, { permalink: target.permalink });
+      /* The ONLY publish-stage 429. src/health.ts cools the account off on this and nothing else:
+         a throttle HERE means Reddit is pushing back as the account goes to post, which is a real
+         signal about the account. A throttle while collecting is a signal about the read rate. */
+      await record('ratelimit', `429 while opening ${target.permalink}`, { permalink: target.permalink, stage: 'publish' });
       say.fail('Reddit is rate-limiting this browser right now. Stopping — nothing was posted.');
       return 1;
     }

@@ -59,7 +59,11 @@ export async function read(subreddit: string | undefined, limit?: number, sort?:
        collected to keep, and every link we are about to open would meet the same wall. Back off
        once — the budget the config has described since DEFECT-02 — and only then give up. */
     for (let attempt = 0; await isRateLimited(s.page); attempt++) {
-      await record('ratelimit', `429 opening r/${name}`, { subreddit: name, status: 'blocked' });
+      /* `stage: 'read'` is load-bearing, not a label. src/health.ts counts only PUBLISH-stage
+         429s toward a cooldown: a throttle while collecting used to set mayPublish=false, which
+         gates.ts:363 turned into a `health` advisory that refused every unattended publish. This
+         loop reads 25 sources per cycle, so it blocked itself for nine days. */
+      await record('ratelimit', `429 opening r/${name}`, { subreddit: name, status: 'blocked', stage: 'read' });
       if (attempt >= config.budget.maxRateLimitRetries) {
         say.fail(`Rate-limited on r/${name}. Nothing collected; try again in a few minutes.`);
         return 1;
@@ -88,7 +92,7 @@ export async function read(subreddit: string | undefined, limit?: number, sort?:
       fetch: (link) => collectThread(s.page, link, 'read'),
       rateLimited: () => isRateLimited(s.page),
       onRateLimit: (link, hit) => record('ratelimit', `429 while collecting r/${name}`, {
-        subreddit: name, threadUrl: link, status: 'blocked', hit
+        subreddit: name, threadUrl: link, status: 'blocked', hit, stage: 'read'
       }),
       onThread: (t, i, total) => say.step(`  [${i + 1}/${total}] ${t.title.slice(0, 70)}`),
       onSkip: (_l, i, total, why) => say.step(`  [${i + 1}/${total}] skipped — ${why}`),
@@ -116,7 +120,7 @@ export async function read(subreddit: string | undefined, limit?: number, sort?:
     /* A navigation that dies ON a 429 arrives here as ERR_HTTP_RESPONSE_CODE_FAILURE and used to
        be filed as a generic error — invisible to the two counters that read `ratelimit` rows. */
     const throttled = await isRateLimited(s.page).catch(() => false);
-    if (throttled) await record('ratelimit', `429 during read of r/${name}`, { subreddit: name, status: 'blocked' });
+    if (throttled) await record('ratelimit', `429 during read of r/${name}`, { subreddit: name, status: 'blocked', stage: 'read' });
     await record('error', `read r/${name} failed: ${msg}`);
     return 1;
   } finally {

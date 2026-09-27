@@ -201,6 +201,9 @@ const counters = (over: Partial<HealthCounters> = {}): HealthCounters => ({
   // Stage 1 by karma, as both live accounts actually are (measured 2026-07-27: karma 1).
   accountAgeDays: 3, karma: 1,
   lastReplyAt: null, lastRateLimitAt: null, lastRemovalAt: null,
+  /* Split out of lastRateLimitAt 2026-09-27: a 429 while COLLECTING no longer cools the account
+     off, because doing so blocked every publish on the live install for nine days. */
+  lastReadRateLimitAt: null, readRateLimits24h: 0,
   fleetSize: 1, unattributedEvents24h: 0,
   ...over
 });

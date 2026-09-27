@@ -89,7 +89,18 @@ export interface HealthCounters {
   accountAgeDays: number | null;
   karma: number | null;
   lastReplyAt: string | null;
+  /** The last 429 on the PUBLISH path — the only one that cools an account off. */
   lastRateLimitAt: string | null;
+  /**
+   * The last 429 while COLLECTING, kept separate on purpose.
+   *
+   * Reading being throttled is a fact worth reporting and is not evidence that this account must
+   * not post. Folding the two into one field is what blocked every publish on this install for
+   * nine days — see the filter in `counters` for the measurement.
+   */
+  lastReadRateLimitAt: string | null;
+  /** How many read-path 429s in the last 24h. Reported, never blocking. */
+  readRateLimits24h: number;
   lastRemovalAt: string | null;
   /**
    * How many accounts this install has, and how many events in the last 24h named none of them
@@ -201,7 +212,35 @@ export async function counters(
   const within = (ts: string, ms: number) => now.getTime() - new Date(ts).getTime() <= ms;
 
   const publishes = h.filter((e) => e.kind === 'publish.ok');
-  const rateLimits = h.filter((e) => e.kind === 'ratelimit');
+
+  /**
+   * `ratelimit` CARRIES TWO UNRELATED FACTS, and conflating them cost this install nine days.
+   *
+   * src/commands/read.ts writes it from three places (:62, :90, :119) when COLLECTING is
+   * throttled. src/commands/reply.ts:126 writes it when the PUBLISH path is. This filter used to
+   * be `e.kind === 'ratelimit'` with no distinction, so a throttle on READING produced
+   * `mayPublish: false` below, gates.ts:363 turned that into a `health` block, :415 made it an
+   * advisory, and the unattended publish rule refused on it.
+   *
+   * The loop collects 12 subreddits and 13 searches per cycle, so it rate-limited ITSELF and then
+   * declined to post because it was rate-limited. Measured 2026-09-27: 50 `ratelimit` rows, every
+   * one read-path — 43 match read.ts's two message shapes, 7 match its third, and ZERO carry a
+   * permalink, which is reply.ts:126's only shape — against 0 `publish.attempt` rows in the
+   * install's entire history. A cycle spends ~20 minutes collecting against a 30-minute cooldown,
+   * so the window was never open by the time a draft was ready.
+   *
+   * AN UNSTAGED ROW IS READ-PATH. Every existing row predates this field, and the paragraph above
+   * is the evidence that all of them are reads. Defaulting to `publish` would leave all 50
+   * blocking forever on a fact none of them records.
+   *
+   * The read throttle is NOT discarded — it becomes a Caution further down, so the signal is
+   * reclassified rather than lost. Reading being throttled is worth knowing; it is not evidence
+   * that this account must not post.
+   */
+  const isPublishStage = (e: HistoryEntry): boolean =>
+    (e.data as { stage?: unknown } | undefined)?.stage === 'publish';
+  const rateLimits = h.filter((e) => e.kind === 'ratelimit' && isPublishStage(e));
+  const readRateLimits = h.filter((e) => e.kind === 'ratelimit' && !isPublishStage(e));
   const loginFails = h.filter((e) => e.kind === 'login.fail');
 
   /* session durations: pair each start with the next end */
@@ -253,6 +292,8 @@ export async function counters(
     karma: karmaObs ? num(karmaObs.value) : null,
     lastReplyAt: lastTs(publishes),
     lastRateLimitAt: lastTs(rateLimits),
+    lastReadRateLimitAt: lastTs(readRateLimits),
+    readRateLimits24h: readRateLimits.filter((x) => within(x.ts, DAY_MS)).length,
     lastRemovalAt: lastTs(removals),
     fleetSize,
     unattributedEvents24h
@@ -335,6 +376,18 @@ export function assess(c: HealthCounters, now: Date = new Date()): HealthVerdict
   }
   if (c.repliesToday === policy.maxRepliesPerDay.value - 1) {
     caution.push(`${c.repliesToday} replies today — one below the daily ceiling`);
+  }
+  /**
+   * The read throttle, reclassified rather than discarded. It used to be a Cooldown, which is what
+   * stopped every publish on this install; it is said out loud here so the fix does not silently
+   * delete a real signal. A cycle that is being throttled while collecting is worth investigating
+   * — it just is not a reason to refuse to post.
+   */
+  if (c.readRateLimits24h > 0) {
+    caution.push(
+      `${c.readRateLimits24h} rate-limit(s) while COLLECTING in the last 24h ` +
+      `(last ${c.lastReadRateLimitAt}) — reading is being throttled; this does not block publishing`
+    );
   }
   if (c.unattributedEvents24h > 0) {
     /* Said out loud precisely because it is NOT counted above. A block page written by a Chrome
