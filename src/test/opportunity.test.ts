@@ -262,3 +262,40 @@ test('selection never admits a thread the publish gate will refuse', () => {
   assert.ok(policy.warmingMaxThreadAgeHours.value <= policy.maxThreadAgeHoursToPublish.value,
     'the warming ceiling is the tighter question and must stay inside the absolute bound');
 });
+
+/**
+ * THE SAME INVARIANT, ON THE OTHER DIMENSION. src/warming.ts:279-282 refuses a thread with more
+ * than `warmingMaxAnswers` existing answers, and `commentCount` appeared NOWHERE in either
+ * selection file — so selection had no opinion at all about a constraint the publish gate applies.
+ *
+ * MEASURED 2026-09-28, draft d_61dd17759ea3_mukls4ac, r/webdev "Can't get MAMP working with PHP 8+
+ * on Windows":
+ *
+ *   02:02:30  opportunity  11/201 worth contributing to   <- admitted, answers never checked
+ *   02:15:22  refused      warming:target, 10 answers already (max 8)
+ *
+ * The age half of this was fixed in bd3c13d and worked — the thread was 23.20h against the 24h
+ * ceiling. This is the branch of the same gate that bd3c13d did not reach.
+ */
+test('a thread with more answers than the warming gate allows is penalised at selection', () => {
+  const max = policy.warmingMaxAnswers.value;
+  const fresh = { collectedAt: new Date().toISOString(), ageMinutes: 60 };
+
+  const few = assessOpportunity(thread({ ...fresh, commentCount: max }), analysis());
+  const many = assessOpportunity(thread({ ...fresh, commentCount: max + 2 }), analysis());
+
+  assert.ok(!few.reasons.some((r) => /answers already/.test(r)),
+    `exactly ${max} answers is inside the gate: ${JSON.stringify(few.reasons)}`);
+  assert.ok(many.reasons.some((r) => /answers already/.test(r)),
+    `${max + 2} answers is what the gate refuses, so selection must say so too: ${JSON.stringify(many.reasons)}`);
+  assert.ok(many.score <= 10, `and capped: got ${many.score}`);
+});
+
+test('a thread whose answer count is unknown is not penalised for it', () => {
+  /* src/warming.ts:280 guards on `commentCount !== null` before comparing. Selection must make the
+     same distinction: "no answers recorded" is not "too many answers". */
+  const t = thread({ collectedAt: new Date().toISOString(), ageMinutes: 60 });
+  (t as { commentCount: number | null }).commentCount = null;
+  const a = assessOpportunity(t, analysis());
+  assert.ok(!a.reasons.some((r) => /answers already/.test(r)), JSON.stringify(a.reasons));
+});

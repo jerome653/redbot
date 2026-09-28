@@ -165,6 +165,30 @@ export function assessOpportunity(thread: Thread, gap: GapAnalysis): Opportunity
     score = Math.min(score, 10);
   }
 
+  /**
+   * THE SAME INVARIANT, ON THE OTHER DIMENSION. src/warming.ts:279-282 refuses a thread carrying
+   * more than `warmingMaxAnswers` answers, and `commentCount` appeared nowhere in this file or in
+   * src/commands/opportunity.ts — so selection held no opinion about a constraint the publish gate
+   * applies, exactly as it held none about live age before the block above.
+   *
+   * MEASURED 2026-09-28, draft d_61dd17759ea3_mukls4ac, r/webdev:
+   *   02:02:30  opportunity  11/201 worth contributing to     <- answers never examined
+   *   02:15:22  refused      warming:target — 10 answers already (max 8)
+   *
+   * The age fix landed and held on the same draft (23.20h against a 24h ceiling); this is the
+   * branch of the same gate it did not reach.
+   *
+   * `!= null` mirrors warming.ts:280 deliberately: "no answer count recorded" is not "too many
+   * answers", and treating a missing count as a violation would refuse every thread whose feed
+   * row omitted it.
+   */
+  const answers = thread.commentCount;
+  const maxAnswers = policy.warmingMaxAnswers.value;
+  if (answers != null && answers > maxAnswers) {
+    reasons.push(`${answers} answers already (max ${maxAnswers}) — a reply here is one voice in a crowd`);
+    score = Math.min(score, 10);
+  }
+
   score = Math.max(0, Math.min(100, score));
   const verdict: OpportunityAssessment['verdict'] = score >= MIN_OPPORTUNITY_SCORE ? 'contribute' : 'skip';
 
