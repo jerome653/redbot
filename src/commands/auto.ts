@@ -17,6 +17,7 @@ import { loadThreads, loadDrafts } from '../store.js';
 import { selectedAccount, config, DATA } from '../config.js';
 import { checkWindow } from '../window.js';
 import { counters } from '../health.js';
+import { hitCollectionWall } from '../collect-wall.js';
 import { read } from './read.js';
 import { search } from './search.js';
 import { opportunity } from './opportunity.js';
@@ -86,16 +87,51 @@ async function cycle(): Promise<number> {
   }
 
   const before = (await loadThreads()).length;
-  for (const s of subs) {
-    say.step(`Reading r/${s}…`);
-    await read(s);
+
+  /**
+   * STOP WHEN THE HOST IS REFUSING, rather than asking the remaining sources one at a time.
+   *
+   * These two loops discarded the exit code of `read()` and `search()`, both of which return 1 on
+   * a 429 or a block page. Measured 2026-09-28: the first 429 landed at 00:56:06 and the cycle
+   * then navigated into the wall 25 more times in 27 seconds — see src/collect-wall.ts for the
+   * full trace and for why `collected: 0` reading as a quiet hour is the half that cost the posts.
+   *
+   * The sources are flattened into one list so the run of failures is counted ACROSS subreddits
+   * and searches. It was counted nowhere before: collect-run.ts holds a retry budget WITHIN a
+   * source, and nothing held one between them. Order is unchanged — subreddits, then searches.
+   */
+  const sources: Array<{ step: string; run: () => Promise<number> }> = [
+    ...subs.map((s) => ({ step: `Reading r/${s}…`, run: () => read(s) })),
+    ...queries.map((q) => ({ step: `Searching “${q}”…`, run: () => search(q) }))
+  ];
+
+  let failuresInARow = 0;
+  let abandoned = 0;
+  for (let i = 0; i < sources.length; i++) {
+    const wall = hitCollectionWall(failuresInARow, i, sources.length);
+    if (wall.abort) {
+      abandoned = sources.length - i;
+      say.warn(wall.why);
+      /* `stage: 'read'` is load-bearing — src/health.ts counts only PUBLISH-stage 429s toward a
+         cooldown, and a collection wall must not silence publishing on top of everything else. */
+      await record('ratelimit', `collection abandoned after ${failuresInARow} failures in a row`, {
+        status: 'blocked', stage: 'read', abandoned, attempted: i, configured: sources.length
+      });
+      break;
+    }
+    const src = sources[i]!;
+    say.step(src.step);
+    const code = await src.run();
+    failuresInARow = code === 0 ? 0 : failuresInARow + 1;
   }
-  for (const q of queries) {
-    say.step(`Searching “${q}”…`);
-    await search(q);
-  }
+
   const collected = (await loadThreads()).length - before;
   say.step(`Collected ${collected} new thread(s).`);
+  /* A short collection has two causes that send a person to different places, and until now they
+     wrote the same line. Say which one this was. */
+  if (abandoned) {
+    say.warn(`${abandoned} source(s) skipped — scoring what is already collected instead.`);
+  }
 
   say.step('Working out which are worth answering…');
   await opportunity();
