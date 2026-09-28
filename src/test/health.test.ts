@@ -94,7 +94,14 @@ test('a new account is a Caution', async () => {
 });
 
 test('the daily reply ceiling forces a Cooldown that no clock lifts', async () => {
-  const replies = [h('publish.ok', 600), h('publish.ok', 480), h('publish.ok', 360)];
+  /* One publish.ok per allowed reply, generated FROM the policy rather than three literals. The
+     assertion below already read `policy.maxRepliesPerDay.value`, so the fixture and the assertion
+     disagreed the moment the ceiling moved — the test was pinned to 3 in its data and to the policy
+     in its check. */
+  const replies = Array.from(
+    { length: policy.maxRepliesPerDay.value },
+    (_, i) => h('publish.ok', 600 - i * 20)
+  );
   const v = await state(replies);
   assert.equal(v.state, 'Cooldown');
   assert.equal(v.mayPublish, false);

@@ -87,9 +87,19 @@ test('a claim-heavy warming comment warns without blocking', () => {
 /* ---- pace ---- */
 
 test('the daily ceiling holds', () => {
-  const r = checkWarmingPace({ publishedToday: 3, minutesSinceLast: 600, karma: 1 });
+  /* At the ceiling, whatever the ceiling is. A literal 3 here stopped exercising the rule the day
+     the ceiling became 10 — `publishedToday: 3` was simply under it. */
+  const r = checkWarmingPace({ publishedToday: policy.maxRepliesPerDay.value, minutesSinceLast: 600, karma: 1 });
   assert.equal(r.ok, false);
   assert.ok(r.issues.some((i) => i.rule === 'daily-ceiling'));
+});
+
+test('one below the ceiling is allowed — the boundary is pinned from both sides', () => {
+  /* Without this, raising the ceiling could hide a rule that had stopped firing at all. */
+  const r = checkWarmingPace({
+    publishedToday: policy.maxRepliesPerDay.value - 1, minutesSinceLast: 600, karma: 1
+  });
+  assert.ok(!r.issues.some((i) => i.rule === 'daily-ceiling'), JSON.stringify(r.issues));
 });
 
 test('comments arriving in a cluster are refused', () => {
@@ -318,7 +328,9 @@ test('unknown karma fails closed into stage 1 — never measured is not the same
  * conclusion would publish the fourth.
  */
 test('a Healthy verdict does not license a stage-1 burst', () => {
-  const bursting = healthy(counters({ repliesToday: 3 }));
+  /* Read from policy, not pinned at 3. This test is about the GATE firing at the ceiling, and a
+     literal made it fail the day the ceiling moved — which says nothing about the gate. */
+  const bursting = healthy(counters({ repliesToday: policy.maxRepliesPerDay.value }));
   const hit = gatesHit({ health: bursting });
   assert.ok(hit.includes('warming:daily-ceiling'), `got ${hit.join(',') || '(nothing)'}`);
   assert.equal(hit.includes('health'), false, 'the health gate fired, so this proves nothing about warming');

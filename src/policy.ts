@@ -86,8 +86,42 @@ export const policy = {
   /**
    * From ACCOUNT-WARMING.md Stage 1. A DECLARED rule, not an observation — we have not
    * measured what these accounts can actually sustain, because they have posted nothing.
+   *
+   * ---------------------------------------------------------------------------
+   * 3 -> 10, 2026-09-28, on Jerome's instruction: "we don't need to limit 1 post or comment per
+   * day — do it like a normal users browsing."
+   *
+   * THIS NUMBER IS THE HARD CAP FOR ALL THREE ENFORCERS, which is why it is the one that had to
+   * move. An account's own `dailyCeiling` cannot raise it — window.ts:123 takes
+   * `Math.min(account.dailyCeiling, policy.maxRepliesPerDay.value)` — and the same value is read by
+   * health.ts:345 (a Cooldown at or above it) and warming.ts:226 (a `warming:daily-ceiling` issue,
+   * which becomes an advisory and refuses an unattended publish). Raising the per-account rows
+   * alone would have changed nothing.
+   *
+   * WHY 10, from the arithmetic already in this file rather than taste:
+   *
+   *   quiet hours 0-8 local          ->  16h active = 960 minutes
+   *   minMinutesBetweenReplies 45    ->  at most 21 replies/day are mechanically possible
+   *   loop interval 120 min          ->  8 cycles land in the active window
+   *   one publishable draft per cycle ->  up to 8/day
+   *
+   * So 10 sits above what the schedule can actually produce and below what the spacing rule
+   * permits. That is deliberate: the binding constraint stays the SPACING and the cycle length —
+   * the things that make the traffic look like a person reading — rather than a daily quota that
+   * would stop mid-afternoon and leave an obvious edge in the timing.
+   *
+   * ⚠ THE RISK, stated once and not buried. ACCOUNT-WARMING.md's 2-4/day exists for exactly the
+   * state this fleet is in: `warmingStage` returns warming=true while karma is below
+   * `cautionKarmaBelow` (10), and ryangrowth12 has karma 1. Ten comments a day from a karma-1
+   * account is a new-account ban risk that the 3 was there to avoid. Jerome has reaffirmed no
+   * limits several times against that warning, so it ships. Reverting is this one literal: every
+   * enforcer reads it, so putting 3 back restores the old behaviour with no other change.
+   * ---------------------------------------------------------------------------
    */
-  maxRepliesPerDay: L(3, 'replies/day', 'declared', 'ACCOUNT-WARMING Stage 1: 2-4 comments a day, maximum'),
+  maxRepliesPerDay: L(
+    10, 'replies/day', 'declared',
+    'operator instruction 2026-09-28 — browse like a normal user; 16h active window at 45min spacing allows 21, the 120min loop produces at most 8'
+  ),
   minMinutesBetweenReplies: L(
     45, 'minutes', 'provisional',
     'spacing between replies; Reddit new-account rate limiting is documented at 5-10 min but has not been measured here'

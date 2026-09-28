@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkWindow, inQuietRange, localHourFor } from '../window.js';
 import type { AccountRecord } from '../config.js';
+import { policy } from '../policy.js';
 
 const acct = (over: Partial<AccountRecord> = {}): AccountRecord => ({
   handle: 'tester', timezone: 'Asia/Manila', quietHours: [0, 8], dailyCeiling: 2, ...over
@@ -52,8 +53,13 @@ test('refused at the daily ceiling', () => {
 });
 
 test('an account ceiling cannot exceed the global maximum', () => {
-  const v = checkWindow({ account: acct({ dailyCeiling: 99 }), repliesToday: 3, now: AT_NOON_MANILA });
-  assert.equal(v.allowed, false, 'the global cap of 3 still applies');
+  /* window.ts:123 takes Math.min(account.dailyCeiling, policy.maxRepliesPerDay), so an account may
+     lower the cap and never raise it. Read from policy rather than pinning the number: the rule is
+     the subject, and a literal here broke when the ceiling was raised on 2026-09-28 while the rule
+     itself was untouched. */
+  const cap = policy.maxRepliesPerDay.value;
+  const v = checkWindow({ account: acct({ dailyCeiling: cap + 96 }), repliesToday: cap, now: AT_NOON_MANILA });
+  assert.equal(v.allowed, false, `the global cap of ${cap} still applies`);
   assert.equal(v.rule, 'daily-ceiling');
 });
 
