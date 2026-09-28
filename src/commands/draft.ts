@@ -25,6 +25,7 @@ import { lintDraft } from '../disclosure.js';
 import { checkNovelty } from '../novelty.js';
 import { assessQuality } from '../quality.js';
 import { draftTimeBlocks } from '../draft-gate.js';
+import { rankCandidates } from '../pick.js';
 import { warmingStage } from '../warming.js';
 import { counters } from '../health.js';
 import { draftCorrection } from '../prompts.js';
@@ -62,10 +63,19 @@ export async function draft(threadIdArg?: string): Promise<number> {
 
   const drafted = new Set((await loadDrafts()).map((d) => d.threadId));
 
-  const candidates = assessments
-    .filter((a) => a.verdict === 'contribute')
-    .filter((a) => (threadIdArg ? a.threadId === threadIdArg : !drafted.has(a.threadId)))
-    .sort((a, b) => b.score - a.score);
+  /**
+   * RE-DERIVED, not read. This filtered on the STORED `verdict` and sorted by the STORED `score`,
+   * so the pick was the highest-scoring assessment ever recorded for an un-drafted thread rather
+   * than the highest-scoring one still true. src/store.ts:141-144 upserts and never deletes, and
+   * `assessed_at` is on the row but nothing read it.
+   *
+   * MEASURED 2026-09-28 03:42 (d_d61f816d4c59_mukopknx): a row saying 'contribute' score 90,
+   * written 6h earlier, won over both candidates the same run's `opportunity` had just found — for
+   * a thread that was 75.98h old with 20 answers by the time the decision ran. The pool it came
+   * from held 325 assessments, 40 of them 'contribute', 21 assessed over 24h earlier, and its top
+   * two scored 100 on 2026-09-01 — 647.5 hours before the pick. See src/pick.ts.
+   */
+  const candidates = rankCandidates({ assessments, threads, gaps, drafted, threadId: threadIdArg });
 
   const pick = candidates[0];
   if (!pick) {
