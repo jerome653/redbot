@@ -400,11 +400,13 @@ why this thread was selected: ${reason}`;
  * technical" while a rewrite reusing the thread's own "MAMP 6.8", "PHP 8.3" and "php.ini" cleared
  * the same rule unchanged.
  */
-export function draftCorrection(issues: Array<{ code: string; message: string }>): string {
-  const named = issues.map((i) => `  - ${i.code}: ${i.message}`).join('\n');
+export function draftCorrection(issues: Array<{ gate: string; reason: string }>): string {
+  const named = issues.map((i) => `  - ${i.gate}: ${i.reason}`).join('\n');
   /* `generic` gets the mechanism spelled out, because it is the one failure a model cannot fix by
      trying harder — it has to copy strings rather than produce better ones. */
-  const generic = issues.some((i) => i.code === 'generic')
+  /* The gate name, not a bare code: src/gates.ts:137 composes `quality:<code>`, and matching the
+     bare code here would silently stop firing the day the composition changed. */
+  const generic = issues.some((i) => i.gate === 'quality:generic')
     ? '\n\nFor "generic" specifically: the check counts strings that appear in BOTH your reply and '
       + 'the thread. Writing NEW technical detail scores zero no matter how precise it is. Open the '
       + 'post and its comments, take at least one exact string that contains a digit, a dot, a slash '

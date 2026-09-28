@@ -24,6 +24,9 @@ import { draftPrompt } from '../prompts.js';
 import { lintDraft } from '../disclosure.js';
 import { checkNovelty } from '../novelty.js';
 import { assessQuality } from '../quality.js';
+import { draftTimeBlocks } from '../draft-gate.js';
+import { warmingStage } from '../warming.js';
+import { counters } from '../health.js';
 import { draftCorrection } from '../prompts.js';
 import { findReference } from '../corpus.js';
 import { config, selectedAccount } from '../config.js';
@@ -193,9 +196,23 @@ export async function draft(threadIdArg?: string): Promise<number> {
    * first draft is KEPT when the rewrite does not actually clear the gate, so this can improve a
    * draft and cannot degrade one.
    */
-  const blocked = quality.issues.filter((i) => i.severity === 'block');
+  /**
+   * ALL FOUR families the publish gate derives from the draft, not just craft. src/draft-gate.ts
+   * mirrors gates.ts:129-145 and :291-293 and is cross-checked against `evaluateGates` itself, so
+   * this cannot quietly become a second opinion — which is precisely how `assessOpportunity` and
+   * `isWarmingTarget` came to disagree about thread age and then about answer count.
+   */
+  const acct = selectedAccount();
+  /* One call, not one per field: src/health.ts:174 loads the whole history and the observation set
+     on every invocation, so reading two fields from two calls would read both twice. `zone` is
+     passed because the daily counts are bucketed by the account's own timezone (health.ts:169). */
+  const health = await counters(acct?.handle ?? null, new Date(), undefined, acct?.timezone);
+  const warmingNow = warmingStage({ karma: health.karma, accountAgeDays: health.accountAgeDays });
+  let blocked = draftTimeBlocks({
+    body, thread, warming: warmingNow.warming, noveltyIssues: novelty.issues
+  });
   if (blocked.length) {
-    say.warn(`Craft gate would block this draft: ${blocked.map((i) => i.code).join(', ')} — rewriting once.`);
+    say.warn(`The publish gate would refuse this draft: ${blocked.map((b) => b.gate).join(', ')} — rewriting once.`);
     try {
       const second = await complete({
         prompt: basePrompt + draftCorrection(blocked),
@@ -207,7 +224,10 @@ export async function draft(threadIdArg?: string): Promise<number> {
       const newBody = str(reparsed.body);
       if (reparsed.contribute === true && newBody) {
         const newQuality = assessQuality(newBody, { thread });
-        const stillBlocked = newQuality.issues.filter((i) => i.severity === 'block');
+        const newNovelty = checkNovelty(newBody, str(reparsed.whatNew), gap.covered);
+        const stillBlocked = draftTimeBlocks({
+          body: newBody, thread, warming: warmingNow.warming, noveltyIssues: newNovelty.issues
+        });
         if (stillBlocked.length < blocked.length) {
           body = newBody;
           contribution = {
@@ -216,12 +236,15 @@ export async function draft(threadIdArg?: string): Promise<number> {
             whyNotSilent: str(reparsed.whyNotSilent)
           };
           lint = lintDraft(body);
-          novelty = checkNovelty(body, contribution.whatNew, gap.covered);
+          novelty = newNovelty;
           quality = newQuality;
           say.ok(`Rewrite cleared ${blocked.length - stillBlocked.length} of ${blocked.length}.`);
-          await record('draft.rewrite', `rewrote draft for ${thread.id} after ${blocked.map((i) => i.code).join(', ')}`, {
-            threadId: thread.id, fixed: blocked.map((i) => i.code), remaining: stillBlocked.map((i) => i.code)
+          await record('draft.rewrite', `rewrote draft for ${thread.id} after ${blocked.map((b) => b.gate).join(', ')}`, {
+            threadId: thread.id,
+            fixed: blocked.filter((b) => !stillBlocked.some((s2) => s2.gate === b.gate)).map((b) => b.gate),
+            remaining: stillBlocked.map((b) => b.gate)
           });
+          blocked = stillBlocked;
         } else {
           say.warn('Rewrite did not clear the gate — keeping the first draft.');
         }

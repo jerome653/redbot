@@ -12,8 +12,8 @@ import { assessQuality } from '../quality.js';
 
 test('every failure is named, with its own message, not summarised', () => {
   const out = draftCorrection([
-    { code: 'cliche', message: 'AI-register phrase: "hope this helps"' },
-    { code: 'too-long', message: '612 words — past what anyone reads in a comment; cut it' }
+    { gate: 'cliche', reason: 'AI-register phrase: "hope this helps"' },
+    { gate: 'too-long', reason: '612 words — past what anyone reads in a comment; cut it' }
   ]);
   assert.match(out, /cliche: AI-register phrase: "hope this helps"/);
   assert.match(out, /too-long: 612 words/);
@@ -22,25 +22,25 @@ test('every failure is named, with its own message, not summarised', () => {
 });
 
 test('it tells the model not to pad, because "fix it" invites length', () => {
-  const out = draftCorrection([{ code: 'cliche', message: 'x' }]);
+  const out = draftCorrection([{ gate: 'cliche', reason: 'x' }]);
   assert.match(out, /do not\s+lengthen it/);
 });
 
-test('the generic code gets the mechanism, because trying harder cannot fix it', () => {
+test('the quality:generic gate gets the mechanism, because trying harder cannot fix it', () => {
   /**
    * quality.ts:181 fires on `technicalHits === 0 && specificityHits < 3`, and technicalHits counts
    * technical tokens in the INTERSECTION — so a reply cannot raise it with new detail, only by
    * reusing the thread's own strings. An instruction that says "be more specific" is therefore
    * wrong advice for this failure, which is why this branch exists.
    */
-  const out = draftCorrection([{ code: 'generic', message: '2 overlapping terms, 0 technical' }]);
+  const out = draftCorrection([{ gate: 'quality:generic', reason: '2 overlapping terms, 0 technical' }]);
   assert.match(out, /appear in BOTH/);
   assert.match(out, /scores zero/);
   assert.match(out, /verbatim/);
 });
 
 test('a failure list without generic does not carry the generic mechanism', () => {
-  const out = draftCorrection([{ code: 'cliche', message: 'x' }]);
+  const out = draftCorrection([{ gate: 'cliche', reason: 'x' }]);
   assert.doesNotMatch(out, /appear in BOTH/);
 });
 
