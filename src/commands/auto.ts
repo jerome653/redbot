@@ -102,7 +102,33 @@ async function cycle(): Promise<number> {
    */
   const sources: Array<{ step: string; run: () => Promise<number> }> = [
     ...subs.map((s) => ({ step: `Reading r/${s}…`, run: () => read(s) })),
-    ...queries.map((q) => ({ step: `Searching “${q}”…`, run: () => search(q) }))
+    /**
+     * PREVIEW THEN COMMIT, per query. `search(q)` is preview-only (src/commands/search.ts:281
+     * returns `preview(...)`), and nothing on this path ever committed. Measured 2026-09-28 across
+     * the whole database: 177 `search.preview` rows, **0** `search` rows, and 0 of 586 threads
+     * carry `source='search'`. Every search this system has ever run listed candidates and threw
+     * them away.
+     *
+     * That matters because the queries are the most on-domain sources configured — "WordPress
+     * plugins", "plugin conflicts", "multiple WordPress sites" — against a competence profile
+     * anchored on `wordpress` (src/competence.ts), while the subreddits measured 11.8% in scope
+     * overall.
+     *
+     * The commit has to happen HERE, between previews: `commit()` reads
+     * data/search-candidates.json, which holds exactly one preview, and the next query overwrites
+     * it. `'clean'` is the only spec an unattended caller may use — see parsePicks.
+     */
+    ...queries.map((q) => ({
+      step: `Searching “${q}”…`,
+      run: async () => {
+        /* 'day', not the 'week' default (scrape.ts:246). The effective age ceiling at selection is
+           min(maxThreadAgeHoursToPublish, warmingMaxThreadAgeHours) = 24h, so a week-wide search
+           spends page loads collecting threads the very next stage refuses on age. */
+        const previewed = await search(q, undefined, undefined, 'day');
+        if (previewed !== 0) return previewed;
+        return search(undefined, undefined, 'clean');
+      }
+    }))
   ];
 
   let failuresInARow = 0;

@@ -86,3 +86,85 @@ test('a title the listing did not expose is reported as unchecked, not as clean'
   assert.equal(a.clean, false);
   assert.match(a.notes[0]!, /nothing could be checked/);
 });
+
+/* ---------------- the `clean` spec, added 2026-09-28 ---------------- */
+
+/**
+ * WHY. Measured across the whole database: 177 `search.preview` rows, **0** `search` rows, and 0
+ * of 586 threads carrying `source='search'`. Every search ever run listed candidates and discarded
+ * them, because src/commands/auto.ts called the preview and nothing ever called commit.
+ *
+ * `clean` is the subset an unattended caller may take. commit() warns "you picked them anyway" for
+ * flagged candidates and says the mechanical checks "are proxies and a person is entitled to
+ * overrule them" — a loop is not a person.
+ */
+test('the clean spec picks exactly the unflagged candidates', () => {
+  const cands = [
+    { n: 1, url: 'u1', title: 'a', notes: [], clean: true },
+    { n: 2, url: 'u2', title: 'b', notes: ['not a question'], clean: false },
+    { n: 3, url: 'u3', title: 'c', notes: [], clean: true },
+    { n: 4, url: 'u4', title: null, notes: ['title not readable'], clean: false }
+  ];
+  const r = parsePicks('clean', cands as Parameters<typeof parsePicks>[1]);
+  assert.equal(r.error, undefined);
+  assert.deepEqual(r.picked.map((c: { n: number }) => c.n), [1, 3]);
+});
+
+test('clean is case- and whitespace-insensitive, like all', () => {
+  const cands = [{ n: 1, url: 'u', title: 'a', notes: [], clean: true }];
+  for (const spec of ['clean', 'CLEAN', ' Clean ']) {
+    assert.deepEqual(parsePicks(spec, cands as Parameters<typeof parsePicks>[1]).picked.map((c: { n: number }) => c.n), [1], spec);
+  }
+});
+
+test('NO clean candidates is not an error — a quiet query is an ordinary outcome', () => {
+  /**
+   * The numeric path returns 'no candidates were named' on empty, and that error makes commit()
+   * return 1. On the auto path a non-zero exit counts toward the consecutive-failure abort in
+   * src/collect-wall.ts, so a search that simply found nothing usable would be read as Reddit
+   * refusing us. Measured: one cycle's thirteen queries returned 0,2,3,0,0,0,0,1,1,1 clean.
+   */
+  const allFlagged = [
+    { n: 1, url: 'u1', title: 'a', notes: ['flagged'], clean: false },
+    { n: 2, url: 'u2', title: 'b', notes: ['flagged'], clean: false }
+  ];
+  const r = parsePicks('clean', allFlagged as Parameters<typeof parsePicks>[1]);
+  assert.equal(r.error, undefined, 'must not be an error');
+  assert.deepEqual(r.picked, []);
+});
+
+test('clean never returns a flagged candidate, whatever the notes say', () => {
+  /* The guard that matters: `clean` is the stored boolean, not a re-derivation of the notes. */
+  const contradictory = [{ n: 1, url: 'u', title: 'a', notes: ['something objected'], clean: false }];
+  assert.deepEqual(parsePicks('clean', contradictory as Parameters<typeof parsePicks>[1]).picked, []);
+});
+
+test('the numeric and all specs are unchanged by the addition', () => {
+  const cands = [
+    { n: 1, url: 'u1', title: 'a', notes: [], clean: true },
+    { n: 2, url: 'u2', title: 'b', notes: ['x'], clean: false }
+  ];
+  assert.deepEqual(parsePicks('all', cands as Parameters<typeof parsePicks>[1]).picked.map((c: { n: number }) => c.n), [1, 2],
+    'all still means all, flagged included — that path is a person overruling');
+  assert.deepEqual(parsePicks('2', cands as Parameters<typeof parsePicks>[1]).picked.map((c: { n: number }) => c.n), [2]);
+  assert.ok(parsePicks('9', cands as Parameters<typeof parsePicks>[1]).error, 'and an unknown number is still an error');
+});
+
+test('clean carries NO age protection — that lives in the search window and the age ceiling', () => {
+  /**
+   * This file's header records DEFECT-11: "three drafts aimed at threads seven to eight years old,
+   * collected because a bulk `search` committed everything it found." `clean` is a bulk commit, so
+   * where age is bounded matters.
+   *
+   * It is NOT bounded here. `annotate` (src/commands/search.ts:62) receives a title and nothing
+   * else — a listing exposes no age, so no note can mention one and `clean` cannot encode one.
+   * Age is bounded in two other places: the `t=` window on the search itself
+   * (scrape.ts:246 DEFAULT_SEARCH_WINDOW, and the auto path passes 'day'), and the live-age ceiling
+   * at selection (src/opportunity.ts, min of maxThreadAgeHoursToPublish and
+   * warmingMaxThreadAgeHours). Asserted so that a future reader does not mistake `clean` for a
+   * freshness guarantee.
+   */
+  const ancient = [{ n: 1, url: 'https://reddit.com/r/x/comments/old/', title: 'WordPress plugin conflict breaking checkout, what should I check?', notes: [], clean: true }];
+  const r = parsePicks('clean', ancient as Parameters<typeof parsePicks>[1]);
+  assert.deepEqual(r.picked.length, 1, 'clean says nothing about age; it cannot');
+});

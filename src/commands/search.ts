@@ -32,6 +32,7 @@ import { sel } from '../reddit/selectors.js';
 import { config, DATA, ensureData } from '../config.js';
 import { saveThreads } from '../store.js';
 import { record, say } from '../log.js';
+import { sleep, between } from '../pacing.js';
 import { isQuestionShaped } from '../select.js';
 import { assessCompetence } from '../competence.js';
 import type { Thread } from '../types.js';
@@ -159,6 +160,21 @@ async function preview(query: string, max: number, time: SearchWindow): Promise<
 function parsePicks(spec: string, candidates: Candidate[]): { picked: Candidate[]; error?: string } {
   if (spec.trim().toLowerCase() === 'all') return { picked: candidates };
 
+  /**
+   * `clean` — every candidate the mechanical checks did not flag, and nothing else.
+   *
+   * The unattended subset, and the ONLY spec an automated caller may use. `annotate` sets
+   * `clean: notes.length === 0` (:84) and a flagged candidate is explicitly a human overrule —
+   * commit() warns "you picked them anyway" and says the mechanical checks "are proxies and a
+   * person is entitled to overrule them". A loop is not a person, so it takes the clean ones.
+   *
+   * An empty result is NOT an error here, unlike the numeric path below. Zero clean candidates is
+   * an ordinary outcome of a search — measured 2026-09-28, one cycle's thirteen queries returned
+   * 0,2,3,0,0,0,0,1,1,1,… — and returning an error would make a normal quiet query count as a
+   * failure toward the collection-wall counter in src/commands/auto.ts.
+   */
+  if (spec.trim().toLowerCase() === 'clean') return { picked: candidates.filter((c) => c.clean) };
+
   const picked: Candidate[] = [];
   const seen = new Set<number>();
   for (const part of spec.split(',').map((p) => p.trim()).filter(Boolean)) {
@@ -213,6 +229,19 @@ async function commit(spec: string): Promise<number> {
   try {
     let skipped = 0;
     for (const [i, c] of picked.entries()) {
+      /**
+       * Same envelope as src/reddit/collect-run.ts. This loop opens one Reddit page per candidate
+       * and had no pacing at all — the gap bb171d6 named and deliberately left out of scope
+       * because nothing on the auto path reached it. The auto path reaches it now.
+       *
+       * config.ts:456-458: "the previous values (900-2600 ms) produced HTTP 429 after roughly 75
+       * page loads in a few minutes." A cycle already spends ~105 loads on reads, so unpaced
+       * commits on top of that is the measured way back into the wall.
+       */
+      if (i > 0) {
+        await sleep(between(config.pacing.minActionMs, config.pacing.maxActionMs));
+        if (i % config.pacing.burstEvery === 0) await sleep(config.pacing.burstPauseMs);
+      }
       try {
         const t = await collectThread(s.page, c.url, 'search', file.query);
         if (t) {
