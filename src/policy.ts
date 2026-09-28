@@ -188,13 +188,47 @@ export const policy = {
    * which on a subreddit producing a handful of threads a day is satisfied well past 2h — the
    * 6-answer thread at 6.1h had nobody answering the actual question.
    *
-   * `provisional`: 8 is chosen to clear the measured floor with headroom, not derived. A busier
+   * `provisional`: 8 was chosen to clear the measured floor with headroom, not derived. A busier
    * subreddit should lower it. If warming starts finding threads that are already answered by
    * the time we arrive, this is the number that is wrong.
+   *
+   * ---------------------------------------------------------------------------
+   * 8 -> 24, MEASURED 2026-09-28. The headroom above turned out to be smaller than the drift it
+   * had to absorb, and the number was wrong for a reason its own note did not predict: not
+   * "already answered on arrival", but "aged out between being chosen and being posted to".
+   *
+   *   youngest thread the /new feeds offer   6.1h   (the floor 8 was set to clear)
+   *   headroom 8 left above that floor       1.9h
+   *
+   * A thread is scored when it is collected and the gate re-asks when the reply is ready, so that
+   * 1.9h is the entire budget for everything in between. It is not enough. Draft
+   * d_caf11a8a8127_mukjutef, r/webhosting "Best Practice to keep SEO Ranking after Domain
+   * Transfer", is the whole failure in two lines:
+   *
+   *   collected 21:33:13   thread 4.95h old   inside 8h
+   *   decided   01:16:18   thread 8.67h old   OVER by 0.67h -> warming:target -> REFUSED
+   *
+   * A cycle is not slow — 00:47 read to 01:16 decide is 29 minutes. The gap is that
+   * `assessOpportunity` scores the accumulated `threads` table (189 rows that cycle), so a row
+   * collected in an earlier cycle is a normal outcome, not an anomaly, and is guaranteed after a
+   * 429 wall makes the fresh read return "0 new" — which is what happened at 00:56:06, taking 25
+   * sources down in 27 seconds.
+   *
+   * So the ceiling has to hold a thread that was young when chosen and is older when answered.
+   * 24h keeps a real "early enough to be read" bound — it still refuses the 4-day-old thread
+   * `maxThreadAgeHoursToPublish` was written against — while leaving ~18h above the 6.1h feed
+   * floor instead of 1.9h. Still `provisional`: nothing here has yet measured when a Reddit
+   * comment actually stops being read, and the first reply that earns karma is the observation
+   * that would set this properly.
+   *
+   * `src/opportunity.ts:158` now scores against `Math.min` of this and
+   * `maxThreadAgeHoursToPublish`, so raising this number cannot reopen the band where selection
+   * admitted threads the gate refuses.
+   * ---------------------------------------------------------------------------
    */
   warmingMaxThreadAgeHours: L(
-    8, 'hours', 'provisional',
-    'measured: r/WordPress /new youngest was 6.1h, so a 2h ceiling found nothing at all'
+    24, 'hours', 'provisional',
+    'measured: 8h left only 1.9h above the 6.1h feed floor, and a thread chosen at 4.95h was 8.67h when answered'
   ),
   warmingMaxAnswers: L(
     8, 'existing answers', 'declared',
