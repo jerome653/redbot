@@ -39,7 +39,8 @@ import { viewThread } from '../behavior.js';
 import { makeRng, sessionSeed } from '../rand.js';
 import { ask, choose, takeConsoleApproval } from '../ask.js';
 import {
-  recordReview, retentionRatio, REJECT_REASONS, EDIT_REASONS, APPROVE_REASONS, type Decision
+  recordReview, retentionRatio, REJECT_REASONS, EDIT_REASONS, APPROVE_REASONS, approvalReason,
+  type Decision
 } from '../review.js';
 import { record, say, setAccount } from '../log.js';
 import { config, DATA, selectedAccount } from '../config.js';
@@ -355,6 +356,7 @@ export async function reply(
      * The refusal is recorded with its reason, not just returned, because the whole value of an
      * unattended decision is being able to ask afterwards why it went the way it did.
      */
+    let unattendedWhy: string | null = null;
     if (opts?.unattended) {
       const auto = unattendedPublishDecision({
         enabled: process.env.REDBOT_AUTO_PUBLISH,
@@ -369,6 +371,9 @@ export async function reply(
         return 1;
       }
       say.ok(`  Publishing unattended: ${auto.why}`);
+      /* Kept for the approval reason below: `auto` is block-scoped here, and the branch that needs
+         its `why` is outside this block. */
+      unattendedWhy = auto.why;
       await record('publish.unattended', `unattended publish allowed for ${target.id}: ${auto.why}`, {
         draftId: target.id, why: auto.why
       });
@@ -438,15 +443,29 @@ export async function reply(
       await record('review', `review recorded for ${target.id}`, { draftId: target.id, decision: 'edited', reasonCode: code });
     } else {
       /**
-       * Approval reason. A console approval has ALREADY been made by a person and carries its
-       * own note; asking again here calls `choose`/`ask`, which throw NoTerminalError on the
-       * console's non-interactive stdin — so the whole publish died after the single-use token
-       * had already been consumed, and nothing was ever posted (evaluation H1). Use the token's
-       * note on that path; only prompt when a human is actually at the terminal.
+       * Approval reason. `askReason` calls `choose`/`ask`, and src/ask.ts:124 THROWS
+       * NoTerminalError when stdin is not a TTY — so on a non-interactive path this is not a
+       * question, it is an exception, raised AFTER the publish is approved and recorded and BEFORE
+       * publishComment is reached.
+       *
+       * That happened here twice. The console path was evaluation H1, described above this line in
+       * its own words: "the whole publish died after the single-use token had already been consumed,
+       * and nothing was ever posted" — and it was fixed by exempting `preApproved` only.
+       * `opts.unattended` was never added, so the loop kept hitting the identical throw.
+       *
+       * MEASURED 2026-09-28 06:19, draft d_7d762fa0f2b4_muksfd2v: the run printed "Publishing
+       * unattended: certification REJECT clears the ANY bar, no hard block, no other advisory",
+       * wrote the publish.unattended row, then threw inside askReason('approved', ...). Across 708
+       * history rows this install held 0 publish.attempt and 0 publish.ok — publishComment had
+       * never been reached once, and this was the line standing in front of it.
+       *
+       * The decision now lives in src/review.ts approvalReason(), where the cases are enumerable
+       * without a browser, so a third non-interactive caller cannot be added without answering it.
        */
-      const { code, note } = preApproved
-        ? { code: preApproved.reasonCode ?? 'console', note: preApproved.note ?? '' }
-        : await askReason('approved', APPROVE_REASONS);
+      const chosen = approvalReason({ unattended: opts?.unattended, unattendedWhy, preApproved });
+      const { code, note } = chosen === 'prompt'
+        ? await askReason('approved', APPROVE_REASONS)
+        : chosen;
       await recordReview({
         ...snapshot, decision: 'approved', reasonCode: code, note,
         reviewSeconds, totalSeconds: secondsSince(shownAt)
