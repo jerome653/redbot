@@ -197,9 +197,13 @@ export async function reply(
     if (thread && !opts?.quick) {
       say.step('Reading the thread and its comments before replying…');
       const view = await viewThread(s.page, thread, rng, { thorough: true });
-      say.step(`  dwelt ${Math.round(view.dwellMs / 1000)}s over ${view.steps} scroll steps`);
+      say.step(`  dwelt ${Math.round(view.dwellMs / 1000)}s over ${view.steps} scroll steps`
+        + (view.truncated ? ' (cut short by the read budget)' : ''));
+      /* `truncated` is recorded, not swallowed: a read the clock ended is a different fact about
+         the account's behaviour than one that finished, and the metrics read these rows. */
       await record('session.view', `read ${thread.id} before replying`, {
-        threadId: thread.id, dwellMs: view.dwellMs, steps: view.steps, thorough: true, seed: rng.seed
+        threadId: thread.id, dwellMs: view.dwellMs, steps: view.steps, thorough: true, seed: rng.seed,
+        ...(view.truncated ? { truncated: true } : {})
       });
     } else if (opts?.quick) {
       say.warn('--quick: skipped the pre-reply read. Recorded, so the metrics do not overstate behaviour.');

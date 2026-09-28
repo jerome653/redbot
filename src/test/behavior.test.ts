@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeRng, chance, skewedDelay } from '../rand.js';
-import { planSession, dwellMsFor, scrollPlan, nextMove, wordCount } from '../behavior.js';
+import { planSession, dwellMsFor, scrollPlan, nextMove, wordCount, viewThread } from '../behavior.js';
 import { policy } from '../policy.js';
 import type { Thread } from '../types.js';
 
@@ -127,4 +127,68 @@ test('wordCount covers title, body and comments', () => {
     wordCount({ title: 'a b', body: 'c d e', comments: [{ author: null, body: 'f g', depth: 0 }] }),
     7
   );
+});
+
+/* ---------------- viewThread is bounded, added 2026-09-28 ---------------- */
+
+/**
+ * WHY. `policy.ts:80` states maxDwellMs (360_000) is a "cap so one very long thread cannot eat an
+ * entire session". It did not cap that, for two reasons measured on a real 557-word / 5-comment
+ * thread across 500 seeds:
+ *
+ *   - scroll pauses alone summed to 501s, already past the 360s "cap"
+ *   - behavior.ts rolls an idle pause INSIDE the per-step loop, outside the dwell budget, with up
+ *     to 119 steps each able to roll one — worst case total 53 minutes
+ *
+ * Observed 2026-09-28: draft d_7d762fa0f2b4_muksfd2v entered the pre-reply read at 05:19:39 and
+ * had produced no decision 52 minutes later. It is the only draft the pipeline has ever produced
+ * that clears every content gate, and the read stood between it and `publishComment`.
+ *
+ * `page.mouse.wheel` is also raced against a timeout. Its `.catch(() => {})` handles a REJECTION;
+ * a promise that never settles is not a rejection, so the catch cannot end it. The read is
+ * behavioural cover, not a correctness requirement, so a scroll that never lands is skipped.
+ */
+const fakePage = (wheel?: () => Promise<void>) => ({
+  mouse: { wheel: wheel ?? (async () => { /* resolves at once */ }) }
+});
+
+const shortThread = {
+  title: 'Checkout 502s after PHP 8.2 upgrade',
+  body: 'admin-ajax.php returns 502 since the upgrade.',
+  comments: [{ author: 'b', body: 'Check the error log first.', depth: 0 }]
+};
+
+test('a zero budget returns at once rather than walking the plan', async () => {
+  const r = await viewThread(fakePage() as never, shortThread, makeRng(7), { thorough: true, budgetMs: 0 });
+  assert.equal(r.steps, 0, 'no step may run once the budget is gone');
+  assert.equal(r.truncated, true, 'and the result must SAY it was cut short, not imply a full read');
+});
+
+test('the budget bounds real elapsed time, which is what maxDwellMs claims to do', async () => {
+  const started = Date.now();
+  const r = await viewThread(fakePage() as never, shortThread, makeRng(11), { thorough: true, budgetMs: 300 });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 3_000, `bounded by the budget, took ${elapsed}ms`);
+  assert.equal(r.truncated, true);
+});
+
+test('a wheel that NEVER settles does not hang the read', async () => {
+  /* The exact shape of the observed stall: an awaited page call that neither resolves nor rejects.
+     Without the race this test never finishes, which is the point. */
+  const started = Date.now();
+  const r = await viewThread(
+    fakePage(() => new Promise<void>(() => { /* never settles */ })) as never,
+    shortThread, makeRng(3), { thorough: true, budgetMs: 400 }
+  );
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 5_000, `a dead wheel must not block the read, took ${elapsed}ms`);
+  assert.ok(r.steps >= 0);
+});
+
+test('a generous budget still completes normally and is not marked truncated', async () => {
+  /* The guard against "fixed it by always truncating". A tiny thread with a big budget must finish
+     its plan and report truncated: false. */
+  const r = await viewThread(fakePage() as never, shortThread, makeRng(5), { budgetMs: 600_000 });
+  assert.equal(r.truncated, false, 'a read that finished must not claim it was cut short');
+  assert.ok(r.steps > 0, 'and it must actually have done something');
 });
