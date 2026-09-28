@@ -320,7 +320,14 @@ HARD RULES — not style preferences
 6. **Do not state a checkable fact you cannot ground.** If a claim about how software behaves
    is not in the reference material below and not in the thread, either leave it out or write
    it as the check you would run: "I'd confirm X, because if it is Y then Z". A reply that is
-   confidently wrong costs the person who posts it more than a reply that is usefully unsure.${referenceBlock}
+   confidently wrong costs the person who posts it more than a reply that is usefully unsure.
+7. **Quote at least one exact string from the thread.** Copy a filename, version number, path,
+   setting name, command or error message out of the post or its comments, spelled exactly as
+   they spelled it — "PHP 8.3" if they wrote PHP 8.3, "wp-config.php" if they wrote
+   wp-config.php. This is checked mechanically, not judged: a reply whose specifics all appear
+   for the first time in the reply itself is rejected before anyone reads it. Introducing new
+   technical detail does not satisfy this. Reusing theirs does, and it is also the difference
+   between answering this person and answering the topic.${referenceBlock}
 
 DECLINE THESE OUTRIGHT — set "contribute" to false and leave the body empty
 Not every thread is worth answering, and the ones below are worth answering least. Declining
@@ -369,4 +376,48 @@ existing comments (do not repeat what is already said):
 ${topComments || '(none)'}
 
 why this thread was selected: ${reason}`;
+}
+
+
+/**
+ * What to append to `draftPrompt` when the craft gate would block the draft that came back.
+ *
+ * src/commands/draft.ts:170 has always called `assessQuality(body, { thread })` at draft time and
+ * recorded the result — `qualityOk` at :225 and `qualityBlocks` at :240 — and then saved the draft
+ * regardless. src/gates.ts:137 turns those same block-severity issues into a `quality:<code>` gate,
+ * and src/autopublish.ts:184 refuses on any advisory. So the draft stage measured the refusal,
+ * wrote it down, and handed the draft on to be certified anyway.
+ *
+ * MEASURED 2026-09-28, draft d_61dd17759ea3_mukls4ac, r/webdev:
+ *   02:03:07  draft        saved, with quality:generic already recorded against it
+ *   02:10:06  gate.block   argus REJECT      (~7 minutes of certification)
+ *   02:15:22  refused      quality:generic, warming:target
+ *
+ * Feeding the specific failure back is worth more than restating the rule: `quality.ts:181` fires
+ * on `technicalHits === 0 && specificityHits < 3`, and `technicalHits` counts technical tokens in
+ * the INTERSECTION of reply and thread — so it cannot be raised by any string the thread does not
+ * already contain. Reproduced on the real pair: the draft above scored "2 overlapping terms, 0
+ * technical" while a rewrite reusing the thread's own "MAMP 6.8", "PHP 8.3" and "php.ini" cleared
+ * the same rule unchanged.
+ */
+export function draftCorrection(issues: Array<{ code: string; message: string }>): string {
+  const named = issues.map((i) => `  - ${i.code}: ${i.message}`).join('\n');
+  /* `generic` gets the mechanism spelled out, because it is the one failure a model cannot fix by
+     trying harder — it has to copy strings rather than produce better ones. */
+  const generic = issues.some((i) => i.code === 'generic')
+    ? '\n\nFor "generic" specifically: the check counts strings that appear in BOTH your reply and '
+      + 'the thread. Writing NEW technical detail scores zero no matter how precise it is. Open the '
+      + 'post and its comments, take at least one exact string that contains a digit, a dot, a slash '
+      + 'or a dash — a version, a filename, a path, a setting, an error — and use it verbatim.'
+    : '';
+
+  return `
+
+--- REWRITE REQUIRED ---
+Your previous draft was rejected mechanically, before anyone read it. The failures:
+
+${named}
+
+Write the reply again, fixing exactly these. Keep everything that was right about it; do not
+lengthen it to compensate. Return the same JSON shape.${generic}`;
 }

@@ -24,6 +24,7 @@ import { draftPrompt } from '../prompts.js';
 import { lintDraft } from '../disclosure.js';
 import { checkNovelty } from '../novelty.js';
 import { assessQuality } from '../quality.js';
+import { draftCorrection } from '../prompts.js';
 import { findReference } from '../corpus.js';
 import { config, selectedAccount } from '../config.js';
 import { trace } from '../trace.js';
@@ -113,16 +114,20 @@ export async function draft(threadIdArg?: string): Promise<number> {
   );
   say.step(`Drafting with ${config.llm.draftModel}…`);
 
+  /* Hoisted so the rewrite below can re-send it with the failure appended, rather than rebuilding
+     it from the same five arguments and risking the two drifting apart. */
+  const basePrompt = draftPrompt(
+    thread,
+    pick.thesis?.whyThread ?? 'a gap was identified in the discussion',
+    pick.thesis?.whatNew ?? 'answer the question directly',
+    { question: gap.question, covered: gap.covered, gaps: gap.gaps },
+    reference
+  );
+
   let raw: string;
   try {
     raw = await complete({
-      prompt: draftPrompt(
-        thread,
-        pick.thesis?.whyThread ?? 'a gap was identified in the discussion',
-        pick.thesis?.whatNew ?? 'answer the question directly',
-        { question: gap.question, covered: gap.covered, gaps: gap.gaps },
-        reference
-      ),
+      prompt: basePrompt,
       model: config.llm.draftModel,
       maxTokens: 1600,
       temperature: 0.5
@@ -158,16 +163,77 @@ export async function draft(threadIdArg?: string): Promise<number> {
     return 0;
   }
 
-  const body = str(parsed.body);
-  const contribution = {
+  let body = str(parsed.body);
+  let contribution = {
     whyThread: str(parsed.whyThread),
     whatNew: str(parsed.whatNew),
     whyNotSilent: str(parsed.whyNotSilent)
   };
 
-  const lint = lintDraft(body);
-  const novelty = checkNovelty(body, contribution.whatNew, gap.covered);
-  const quality = assessQuality(body, { thread });
+  let lint = lintDraft(body);
+  let novelty = checkNovelty(body, contribution.whatNew, gap.covered);
+  let quality = assessQuality(body, { thread });
+
+  /**
+   * ONE REWRITE WHEN THE CRAFT GATE WOULD BLOCK THIS DRAFT.
+   *
+   * `assessQuality` has always been called here, and its block-severity issues have always been
+   * recorded — `qualityOk` below at the saveDraft call, `qualityBlocks` on the trace — and the
+   * draft was then saved regardless. src/gates.ts:137 turns each of those same issues into a
+   * `quality:<code>` gate and src/autopublish.ts:184 refuses on any advisory, so the refusal was
+   * knowable at this line and was instead discovered several minutes and one certification later.
+   *
+   * MEASURED 2026-09-28, draft d_61dd17759ea3_mukls4ac, r/webdev:
+   *   02:03:07  draft saved, quality:generic already recorded against it
+   *   02:10:06  argus REJECT
+   *   02:15:22  refused — quality:generic, warming:target
+   *
+   * ONE attempt, not a loop: a second failure is evidence about the thread or the prompt, and
+   * retrying until it passes would spend an unbounded number of model calls hiding that. The
+   * first draft is KEPT when the rewrite does not actually clear the gate, so this can improve a
+   * draft and cannot degrade one.
+   */
+  const blocked = quality.issues.filter((i) => i.severity === 'block');
+  if (blocked.length) {
+    say.warn(`Craft gate would block this draft: ${blocked.map((i) => i.code).join(', ')} — rewriting once.`);
+    try {
+      const second = await complete({
+        prompt: basePrompt + draftCorrection(blocked),
+        model: config.llm.draftModel,
+        maxTokens: 1600,
+        temperature: 0.5
+      });
+      const reparsed = extractJson<RawDraft>(second);
+      const newBody = str(reparsed.body);
+      if (reparsed.contribute === true && newBody) {
+        const newQuality = assessQuality(newBody, { thread });
+        const stillBlocked = newQuality.issues.filter((i) => i.severity === 'block');
+        if (stillBlocked.length < blocked.length) {
+          body = newBody;
+          contribution = {
+            whyThread: str(reparsed.whyThread),
+            whatNew: str(reparsed.whatNew),
+            whyNotSilent: str(reparsed.whyNotSilent)
+          };
+          lint = lintDraft(body);
+          novelty = checkNovelty(body, contribution.whatNew, gap.covered);
+          quality = newQuality;
+          say.ok(`Rewrite cleared ${blocked.length - stillBlocked.length} of ${blocked.length}.`);
+          await record('draft.rewrite', `rewrote draft for ${thread.id} after ${blocked.map((i) => i.code).join(', ')}`, {
+            threadId: thread.id, fixed: blocked.map((i) => i.code), remaining: stillBlocked.map((i) => i.code)
+          });
+        } else {
+          say.warn('Rewrite did not clear the gate — keeping the first draft.');
+        }
+      }
+    } catch (e) {
+      /* A failed rewrite must not lose the draft that already exists. Structural, so it is
+         recorded rather than swallowed. */
+      const msg = e instanceof Error ? e.message : String(e);
+      say.warn(`Rewrite failed (${msg}) — keeping the first draft.`);
+      await record('error', `draft rewrite failed for ${thread.id}: ${msg}`);
+    }
+  }
 
   const saved: Draft = {
     id: `d_${thread.id}_${Date.now().toString(36)}`,

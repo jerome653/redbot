@@ -182,6 +182,8 @@ export type HistoryKind =
   | 'draft'
   /** Phase 3: the model was asked to make the case for replying and would not */
   | 'draft.declined'
+  /** the craft gate would have blocked the first attempt; draft.ts re-asked once (0020) */
+  | 'draft.rewrite'
   /** Phase 3: an operator's structured verdict on a draft */
   | 'review'
   | 'approve'
