@@ -19,7 +19,7 @@
  * counting, and a test for them should not need Chromium.
  */
 import { config } from '../config.js';
-import { sleep as realSleep } from '../pacing.js';
+import { sleep as realSleep, between } from '../pacing.js';
 import type { Thread } from '../types.js';
 
 export interface CollectOutcome {
@@ -46,18 +46,53 @@ export interface CollectDeps {
   /** Announced before a backoff so a long silence has a reason on screen. */
   onBackoff?(ms: number, hit: number): void;
   sleep?(ms: number): Promise<void>;
+  /**
+   * Deliberate pacing between opens — a DIFFERENT fact from `sleep`, which is the 429 backoff.
+   * Kept separate so "waited because Reddit refused us" and "waited on purpose" stay
+   * distinguishable in a test and in a log; collapsing them is how a paced run and a throttled
+   * run come to look identical.
+   */
+  pace?(ms: number): Promise<void>;
   budget?: { rateLimitBackoffMs: number; maxRateLimitRetries: number };
+  pacing?: { minActionMs: number; maxActionMs: number; burstEvery: number; burstPauseMs: number };
 }
 
 export async function collectRun(links: string[], deps: CollectDeps): Promise<CollectOutcome> {
   const sleep = deps.sleep ?? realSleep;
+  const pace = deps.pace ?? realSleep;
   const budget = deps.budget ?? config.budget;
+  const pacing = deps.pacing ?? config.pacing;
   const threads: Thread[] = [];
   let skipped = 0;
   let rateLimitHits = 0;
   let retriesUsed = 0;
 
   for (const [i, link] of links.entries()) {
+    /**
+     * PACE BETWEEN OPENS. This loop is the highest-request-rate path in the product — 15 page
+     * opens per subreddit, 11 subreddits and 13 searches per cycle — and it ran with no pacing at
+     * all, while src/reddit/actions.ts calls `pause()` ten times on the reply path, which makes
+     * the fewest requests of anything here.
+     *
+     * The envelope was already measured and already in config, unread. config.ts:456-458:
+     * "DEFECT-02 (2026-07-22): the previous values (900-2600 ms) produced HTTP 429 after roughly
+     * 75 page loads in a few minutes." And config.ts:467-468 defines `burstEvery: 8` /
+     * `burstPauseMs: 20_000` with the comment "extra pause after every N thread fetches" — grep
+     * found no reader for either anywhere in the tree.
+     *
+     * MEASURED 2026-09-28: 6 subreddits x 15 links = 90 page loads, 429 at 00:56:06, then 25
+     * sources dead in 27 seconds (see src/collect-wall.ts). The config predicted that failure at
+     * ~75 loads three months before it happened; nothing read the prediction.
+     *
+     * `i > 0` because pacing is the gap BETWEEN requests: charging the first open 3.2s buys
+     * nothing. The burst pause rides on the same `i > 0`, so a run shorter than `burstEvery`
+     * never takes one.
+     */
+    if (i > 0) {
+      await pace(between(pacing.minActionMs, pacing.maxActionMs));
+      if (i % pacing.burstEvery === 0) await pace(pacing.burstPauseMs);
+    }
+
     /* One attempt, plus at most one more after a backoff — the retry budget is per RUN, not per
        thread, because being throttled is a property of the account and the minute, not the link. */
     let thread: Thread | null = null;

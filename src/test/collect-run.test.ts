@@ -42,9 +42,14 @@ function harness(script: Record<string, 'thread' | 'null' | '429' | 'throw'>, op
   budget?: { rateLimitBackoffMs: number; maxRateLimitRetries: number };
   /** Links whose SECOND opening behaves differently — how a backoff is shown to have worked. */
   onRetry?: Record<string, 'thread' | 'null' | '429'>;
+  pacing?: { minActionMs: number; maxActionMs: number; burstEvery: number; burstPauseMs: number };
 }) {
   const opened: string[] = [];
   const slept: number[] = [];
+  /* Kept SEPARATE from `slept` on purpose. `slept` means "waited because Reddit refused us" and a
+     clean run asserts it stays empty; deliberate pacing is a different fact about the same run,
+     and folding the two together would delete that assertion's meaning. */
+  const paced: number[] = [];
   const throttleRows: Array<{ link: string; hit: number }> = [];
   let throttledNow = false;
 
@@ -61,10 +66,12 @@ function harness(script: Record<string, 'thread' | 'null' | '429' | 'throw'>, op
     async rateLimited() { return throttledNow; },
     async onRateLimit(link, hit) { throttleRows.push({ link, hit }); },
     async sleep(ms) { slept.push(ms); },
-    budget: opts?.budget
+    async pace(ms) { paced.push(ms); },
+    budget: opts?.budget,
+    pacing: opts?.pacing
   };
 
-  return { deps, opened, slept, throttleRows };
+  return { deps, opened, slept, paced, throttleRows };
 }
 
 describe('a clean run', () => {
@@ -163,5 +170,84 @@ describe('the budget in config is the budget that is used', () => {
     assert.equal(out.stoppedEarly, true);
     assert.deepEqual(h.slept, [], 'nothing may sleep once the run has decided to stop');
     assert.equal(out.threads.length, 1);
+  });
+});
+
+
+describe('the DEFECT-02 pacing envelope is actually applied', () => {
+  /**
+   * WHY THESE EXIST. This file's own header says it, about a different key: "config.budget
+   * .rateLimitBackoffMs and maxRateLimitRetries have described a back-off policy since DEFECT-02
+   * in July, and grep found no reader for either." That audit fixed `budget.*` and did not look at
+   * `pacing.*`, which had the same defect and a larger one:
+   *
+   *   config.ts:462-463  minActionMs 3200 / maxActionMs 7000  — reachable only via pacing.ts
+   *                      `pause()`, which this loop never called
+   *   config.ts:467-468  burstEvery 8 / burstPauseMs 20_000, commented "extra pause after every
+   *                      N thread fetches" — grep found NO reader anywhere in the tree
+   *
+   * So the highest-request-rate path in the product — 15 page opens per subreddit — ran with no
+   * pacing at all, while src/reddit/actions.ts calls `pause()` ten times on the reply path, which
+   * makes the fewest requests. config.ts:456-458 records what that costs: "the previous values
+   * (900-2600 ms) produced HTTP 429 after roughly 75 page loads in a few minutes."
+   *
+   * MEASURED 2026-09-28: 6 subreddits x 15 links = 90 page loads, then 429 at 00:56:06, then 25
+   * sources dead in 27 seconds. The config predicted the failure at ~75 loads and was not read.
+   */
+  const FAST = { minActionMs: 10, maxActionMs: 20, burstEvery: 3, burstPauseMs: 500 };
+
+  test('a pause is taken BETWEEN opens — not before the first, not after the last', async () => {
+    const h = harness({}, { pacing: FAST });
+    const out = await collectRun(LINKS, h.deps);
+
+    assert.equal(out.threads.length, 5);
+    const gaps = h.paced.filter((ms) => ms < FAST.burstPauseMs);
+    assert.equal(gaps.length, LINKS.length - 1,
+      `5 links have 4 gaps between them; got ${JSON.stringify(h.paced)}`);
+    for (const ms of gaps) {
+      assert.ok(ms >= FAST.minActionMs && ms <= FAST.maxActionMs,
+        `each pause must come from the configured envelope, got ${ms}`);
+    }
+  });
+
+  test('the burst pause fires after every Nth fetch, which is what burstEvery describes', async () => {
+    const links = Array.from({ length: 7 }, (_, i) => `k${i}`);
+    const h = harness({}, { pacing: FAST });
+    await collectRun(links, h.deps);
+
+    const bursts = h.paced.filter((ms) => ms === FAST.burstPauseMs);
+    assert.equal(bursts.length, 2, `7 fetches at burstEvery 3 breaks twice; got ${JSON.stringify(h.paced)}`);
+  });
+
+  test('a run shorter than burstEvery never takes a burst pause', async () => {
+    const h = harness({}, { pacing: { ...FAST, burstEvery: 99 } });
+    await collectRun(LINKS, h.deps);
+    assert.equal(h.paced.filter((ms) => ms === FAST.burstPauseMs).length, 0);
+  });
+
+  test('a single link is opened with no pacing at all', async () => {
+    /* Pacing is the gap BETWEEN requests. One request has no gap, and charging it 3.2s would be a
+       cost with nothing to show for it. */
+    const h = harness({}, { pacing: FAST });
+    await collectRun(['only'], h.deps);
+    assert.deepEqual(h.paced, []);
+  });
+
+  test('pacing and throttle-backoff stay separate facts about the run', async () => {
+    /* The distinction this file already asserts at "a run that was never throttled must never
+       wait". Pacing must not leak into `slept`, or that assertion stops meaning anything. */
+    const h = harness({}, { pacing: FAST });
+    await collectRun(LINKS, h.deps);
+    assert.deepEqual(h.slept, [], 'no 429 happened, so nothing backed off');
+    assert.ok(h.paced.length > 0, 'and yet the run was paced');
+  });
+
+  test('the real envelope is the one from config, not a literal in the loop', async () => {
+    const { config } = await import('../config.js');
+    const h = harness({}, { pacing: undefined });
+    await collectRun(['a', 'b'], h.deps);
+    assert.equal(h.paced.length, 1);
+    assert.ok(h.paced[0]! >= config.pacing.minActionMs && h.paced[0]! <= config.pacing.maxActionMs,
+      `the default must read config.pacing (${config.pacing.minActionMs}-${config.pacing.maxActionMs}), got ${h.paced[0]}`);
   });
 });
