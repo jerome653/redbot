@@ -43,6 +43,33 @@ export function checkpointFor(elapsedMinutes: number): Checkpoint {
   return '7d';
 }
 
+/**
+ * The address to navigate to for a published draft, always absolute.
+ *
+ * `commentPermalink` is NOT always absolute. The 2026-09-28 06:43 publish was recorded after the
+ * fact and stored Reddit's own relative form, `/r/Wordpress/comments/1wrudhq/comment/pcizrg8/`;
+ * the absolute `publishedUrl` on the same row never got a turn, because a relative string is
+ * non-null and wins a `??` chain. Playwright then refused it outright — measured 2026-09-28:
+ * "page.goto: Protocol error (Page.navigate): Cannot navigate to invalid URL" — so that comment
+ * could not be observed at all, while the two rows written by the normal path observed fine.
+ *
+ * A blank string is treated as absent for the same reason: `''` is non-null and would otherwise
+ * shadow a usable value and resolve to the site root, which `lookFor` would then report as a
+ * missing comment rather than a missing address.
+ *
+ * Same shape as reddit/post.ts:130 and reddit/scrape.ts:197, which already resolve Reddit's
+ * relative hrefs against `config.redditBase`.
+ */
+export function observeUrl(draft: {
+  commentPermalink?: string | null;
+  publishedUrl?: string | null;
+  permalink: string;
+}): string {
+  const candidates = [draft.commentPermalink, draft.publishedUrl, draft.permalink];
+  const raw = (candidates.find((u) => typeof u === 'string' && u.trim() !== '') ?? draft.permalink).trim();
+  return raw.startsWith('http') ? raw : config.redditBase + raw;
+}
+
 export interface CommentSighting {
   present: boolean;
   /** Reddit's own notice, verbatim, when the comment is shown as removed or deleted. */
@@ -216,7 +243,7 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
   try {
     for (const draft of targets) {
       const threadRec = threads.find((t) => t.id === draft.threadId);
-      const url = draft.commentPermalink ?? draft.publishedUrl ?? draft.permalink;
+      const url = observeUrl(draft);
       const publishedAt = draft.decidedAt ?? draft.createdAt;
       const elapsedMinutes = Math.round((Date.now() - Date.parse(publishedAt)) / 60_000);
       const checkpoint = (forced as Checkpoint) ?? checkpointFor(elapsedMinutes);
