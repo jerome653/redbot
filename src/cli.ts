@@ -34,7 +34,7 @@ import { auto } from './commands/auto.js';
 import { warmup } from './commands/warmup.js';
 import { jobList, jobAdd, jobCancel, work } from './commands/job.js';
 import {
-  healthCmd, metricsCmd, policyCmd, selectCmd, reviewCmd, reportCmd, insightsCmd
+  healthCmd, metricsCmd, policyCmd, selectCmd, reviewCmd, reportCmd, insightsCmd, outcomesCmd
 } from './commands/status.js';
 import { say } from './log.js';
 import { provision, describeProvision } from './provision.js';
@@ -125,6 +125,7 @@ redbot — Reddit engagement assistant
     redbot provision             what this install creates for itself, and where
     redbot doctor                is the INSTALL sound? build, auth, data, secrets, staleness
     redbot insights              where the pipeline is losing candidates, and which stage to fix
+    redbot outcomes              of what was published, what is still there — by subreddit
     redbot health [account]      is the ACCOUNT sound? karma, removals, cooldowns
     redbot metrics [--json]      reliability metrics from the activity log
     redbot review                operator decisions, by reason
@@ -447,6 +448,7 @@ async function main(): Promise<number> {
     case 'doctor':   return doctor();
     case 'backup':   return backupCmd({ list: flags.has('--list'), verify: flags.has('--verify') });
     case 'insights': return insightsCmd();
+    case 'outcomes': return outcomesCmd();
     case 'health':  return healthCmd(positional[0]);
     case 'metrics': return metricsCmd(flags.has('--json'));
     case 'review':  return reviewCmd();

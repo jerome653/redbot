@@ -218,8 +218,25 @@ export async function draft(threadIdArg?: string): Promise<number> {
      passed because the daily counts are bucketed by the account's own timezone (health.ts:169). */
   const health = await counters(acct?.handle ?? null, new Date(), undefined, acct?.timezone);
   const warmingNow = warmingStage({ karma: health.karma, accountAgeDays: health.accountAgeDays });
+  /**
+   * This account's own recent comments, most recent first, for the repetition family.
+   *
+   * `decidedAt ?? createdAt` because `decidedAt` is when it actually went out and is what a
+   * reader would have seen in order; `createdAt` is the fallback for a row written before the
+   * field existed rather than a reason to drop the comment from the comparison.
+   *
+   * Filtered to THIS account. A template is only recognisable when the same name carries it, and
+   * comparing a draft against a different account's history would block on a repetition no reader
+   * could ever see.
+   */
+  const previousBodies = (await loadDrafts())
+    .filter((d) => d.status === 'published' && d.body
+      && (acct?.handle ? d.account === acct.handle : true))
+    .sort((a, b) => (b.decidedAt ?? b.createdAt).localeCompare(a.decidedAt ?? a.createdAt))
+    .map((d) => d.body);
+
   let blocked = draftTimeBlocks({
-    body, thread, warming: warmingNow.warming, noveltyIssues: novelty.issues
+    body, thread, warming: warmingNow.warming, noveltyIssues: novelty.issues, previousBodies
   });
   if (blocked.length) {
     say.warn(`The publish gate would refuse this draft: ${blocked.map((b) => b.gate).join(', ')} — rewriting once.`);
@@ -236,7 +253,8 @@ export async function draft(threadIdArg?: string): Promise<number> {
         const newQuality = assessQuality(newBody, { thread });
         const newNovelty = checkNovelty(newBody, str(reparsed.whatNew), gap.covered);
         const stillBlocked = draftTimeBlocks({
-          body: newBody, thread, warming: warmingNow.warming, noveltyIssues: newNovelty.issues
+          body: newBody, thread, warming: warmingNow.warming, noveltyIssues: newNovelty.issues,
+          previousBodies
         });
         if (stillBlocked.length < blocked.length) {
           body = newBody;

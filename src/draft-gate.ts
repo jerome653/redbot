@@ -33,6 +33,7 @@
 import { lintDraft } from './disclosure.js';
 import { assessQuality } from './quality.js';
 import { checkWarmingComment } from './warming.js';
+import { assessRepetition } from './repetition.js';
 import type { Thread } from './types.js';
 
 export interface DraftTimeBlock {
@@ -58,6 +59,19 @@ export function draftTimeBlocks(input: {
   thread?: Pick<Thread, 'title' | 'body' | 'comments'> | undefined;
   /** `warmingStage(...).warming` — when false, gates.ts:290 skips the whole warming block. */
   warming: boolean;
+  /**
+   * This account's recently published comment bodies, MOST RECENT FIRST.
+   *
+   * Optional, and absent is NOT the same as empty: an empty array is a positive statement that the
+   * account has posted nothing, while `undefined` means the caller did not look. Both skip the
+   * check, but only one of them is a fact, and a future reader of this signature should not have to
+   * guess which the caller meant.
+   *
+   * Unlike the other four families this one is NOT mirrored from src/gates.ts. It has no gate there
+   * to mirror: repetition is a fact about the ACCOUNT'S HISTORY, not about the live thread, so it is
+   * fully knowable at draft time and there is nothing a later re-check against the page could add.
+   */
+  previousBodies?: readonly string[] | undefined;
 }): DraftTimeBlock[] {
   const out: DraftTimeBlock[] = [];
 
@@ -77,6 +91,14 @@ export function draftTimeBlocks(input: {
   if (input.warming) {
     const comment = checkWarmingComment(input.body);
     for (const i of comment.issues) out.push({ gate: `warming:${i.rule}`, reason: i.detail });
+  }
+
+  /* Last, because it is the only family that compares the draft to something other than the thread
+     — and because the rewrite prompt reads this list in order, so the thread-local failures should
+     be the ones it sees first. */
+  if (input.previousBodies) {
+    const rep = assessRepetition(input.body, input.previousBodies);
+    for (const i of rep.issues) out.push({ gate: `repetition:${i.rule}`, reason: i.detail });
   }
 
   return out;

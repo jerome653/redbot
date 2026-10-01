@@ -145,6 +145,22 @@ export const policy = {
   removalsBeforeStop: L(2, 'observed removals', 'declared', 'two removals is a pattern, not noise — stop and reassess'),
   loginFailuresBeforeStop: L(2, 'failures', 'declared', 'repeated auth failure may be a suspension; stop rather than probe'),
 
+  /**
+   * How many of this account's recent comments a new draft is compared against for repetition
+   * (src/repetition.ts).
+   *
+   * DECLARED, not measured, and the distinction matters: there is no measurement of how many
+   * consecutive comments a reader needs to see before a template becomes obvious. What IS measured
+   * is that six comments in a row shared one opening move and four of them were removed — so the
+   * right window is small enough to catch consecutive repetition and no larger.
+   *
+   * Five, because that is the span over which the real repetition happened: all six published
+   * comments fell inside 41 hours. Raising this cannot make the gate safer, only noisier, and a
+   * noisy gate is one people learn to ignore.
+   */
+  repetitionWindow: L(5, 'recent comments', 'declared',
+    'a template is what a reader notices across consecutive comments; six in 41 hours shared one opener and four were removed'),
+
   /* ---------------- publishing gates ---------------- */
 
   /**
