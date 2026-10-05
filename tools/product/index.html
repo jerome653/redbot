@@ -1330,9 +1330,12 @@ button.mini.ic[aria-expanded="true"]{color:var(--ink);border-color:var(--ink-3)}
  */
 .grid3{display:grid;grid-template-columns:minmax(272px,19%) minmax(0,1fr) minmax(316px,23%);gap:1rem;margin-bottom:1.6rem}
 .grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,25%);gap:1rem;margin-bottom:1.6rem}
-.grid3>*,.grid2>*{min-width:0}
+/* Narrow rail LEFT, work right — the mirror of .grid2. Threads reads funnel-then-list, so
+   reusing .grid2 there would have made the funnel the wide column. */
+.grid2l{display:grid;grid-template-columns:minmax(272px,19%) minmax(0,1fr);gap:1rem;margin-bottom:1.6rem}
+.grid3>*,.grid2>*,.grid2l>*{min-width:0}
 /* The row sets the height; the panel has to actually take it, or the border still stops short. */
-.grid3 .panel,.grid2 .panel{height:100%}
+.grid3 .panel,.grid2 .panel,.grid2l .panel{height:100%}
 /**
  * `minmax(0,1fr)`, NOT `1fr`.
  *
@@ -1346,7 +1349,7 @@ button.mini.ic[aria-expanded="true"]{color:var(--ink);border-color:var(--ink-3)}
  * This is the same automatic-minimum-size trap `.wrap`, `.collect` and `.panel` each document
  * above; it was just never carried into the media query.
  */
-@media (max-width:1200px){.grid3,.grid2{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:1200px){.grid3,.grid2,.grid2l{grid-template-columns:minmax(0,1fr)}}
 
 .panel{
   border:1px solid var(--edge);border-radius:var(--r);overflow:hidden;flex:none;min-width:0;
@@ -1355,7 +1358,7 @@ button.mini.ic[aria-expanded="true"]{color:var(--ink);border-color:var(--ink-3)}
   box-shadow:inset 0 1px 0 var(--sheen),var(--lift);
   margin-bottom:1rem;
 }
-.grid3 .panel,.grid2 .panel{margin-bottom:0}
+.grid3 .panel,.grid2 .panel,.grid2l .panel{margin-bottom:0}
 .ph{
   display:flex;align-items:center;justify-content:space-between;gap:.6rem;
   padding:.75rem .95rem;border-bottom:1px solid var(--edge);
@@ -2430,6 +2433,80 @@ function review(){
     cw.append(conf,why,goBtn);panel.append(whoRow);panel.append(cw);panel.append(note);
     sendBtn.replaceWith(panel);conf.focus();
   };
+  /**
+   * SEND, IN ONE CLICK — advisories carried, not read first.
+   *
+   * Added 2026-10-05 on Jerome's explicit instruction, after being shown what it gives up. The
+   * ask was that the OPERATOR'S manual actions are never blocked while the unattended loop stays
+   * gated, and this is that: one click, no typed word, no reading step.
+   *
+   * HOW IT GETS THROUGH. src/commands/reply.ts:311 refuses a console approval that has not
+   * acknowledged the advisories found after it was given, prints them, and prints their NAMES
+   * behind a `::gates` marker precisely so a console can put them in `overrule` and send again.
+   * The guarded `sendBtn` above makes a person read them between those two clicks. This button
+   * performs both halves itself.
+   *
+   * WHAT IT GIVES UP, stated rather than buried: the override stops being INFORMED. The gates are
+   * named in the toast and in `reason`, so the record is complete and the operator is told — but
+   * afterwards, with the comment already live. On 2026-10-05 the gate this most often crosses is
+   * `health`, which is standing because moderators removed four of the six comments this install
+   * has ever published.
+   *
+   * WHAT IT DOES NOT TOUCH:
+   *   - `identity`, the only HARD gate (src/gates.ts:80). A block is not an advisory and no
+   *     amount of `overrule` passes one — posting as the wrong account still refuses.
+   *   - the unattended loop. src/autopublish.ts still refuses on every advisory, because nothing
+   *     there can read one. Auto is unchanged.
+   *   - the server's contract. `confirm` must still be the exact string SEND; this supplies it.
+   *
+   * ONE retry, never a loop. If the second call returns advisories again they are genuinely new
+   * — found after the override was given — and sending a third time would be a program deciding
+   * to publish over findings that keep arriving. That refuses and says so.
+   */
+  const quickBtn=actionButton('Send',doAction(async say=>{
+    /**
+     * THE ACCOUNT, resolved here rather than borrowed.
+     *
+     * `sendAcct` is declared inside `sendBtn.onclick`'s closure, so reading it from this button
+     * threw "sendAcct is not defined" on every click — this button never worked once between
+     * being added and this fix, and the UI test is what caught it.
+     *
+     * Same source as the guarded panel (`sendAcctGet` over the configured accounts), so both
+     * buttons publish as the same operator-chosen handle. The server refuses to guess an account
+     * and that refusal is the safety property; the console's job is to answer it.
+     */
+    const acctList=(S.accounts||[]).filter(a=>a&&a.configured&&a.handle);
+    const who=sendAcctGet(acctList);
+    const post=(body)=>fetch('/api/publish',{method:'POST',
+      headers:{'content-type':'application/json'},body:JSON.stringify(body)}).then(x=>x.json());
+
+    say('Publishing…');
+    let r=await post({draftId:d.id,confirm:'SEND',reason:'one-click send from Review',
+      account:who||undefined});
+    if(r.output&&LAST_DETAIL)LAST_DETAIL(r.output);
+
+    let overrode=[];
+    if(!r.ok&&Array.isArray(r.advisories)&&r.advisories.length){
+      overrode=r.advisories.slice();
+      say(overrode.length+' check(s) objected — overruling: '+overrode.join(', '));
+      r=await post({draftId:d.id,confirm:'SEND',overrule:overrode,
+        /* The reason is the audit trail. It names every gate crossed, so the review row says what
+           was published over and that a one-click send is what crossed it. */
+        reason:'one-click send from Review — operator overruled: '+overrode.join(', '),
+        account:who||undefined});
+      if(r.output&&LAST_DETAIL)LAST_DETAIL(r.output);
+      if(!r.ok&&Array.isArray(r.advisories)&&r.advisories.length){
+        throw new Error('still refused after overruling '+overrode.join(', ')+' — '
+          +r.advisories.length+' further check(s) objected: '+r.advisories.join(', ')
+          +'. Nothing was posted. Use "Send it…" to read them.');
+      }
+    }
+
+    if(!r.ok)throw new Error(r.error||'The send did not complete');
+    /* Named, not counted: "sent over 2 checks" tells nobody which safety they just spent. */
+    return overrode.length?'Sent — overruled '+overrode.join(', '):'Sent';
+  },{stoppable:false}),'danger');
+  acts.append(quickBtn);
   acts.append(sendBtn);
   doBox.append(acts);
 
@@ -3325,7 +3402,20 @@ function discovery(){
   /* The funnel and what came back go first; the collect controls sit under them. Reading the
      result is the frequent task and collecting is the occasional one — leading with the tall
      sources panel pushed every figure on this screen below the fold. */
-  const grid=el('div','grid3');
+  /**
+   * TWO COLUMNS, not three. The Dropped panel was removed 2026-10-05 on request, to give the
+   * thread list — and the per-row Reply cell in it — the 23% the right rail was holding.
+   *
+   * `grid2l` rather than `grid2`: `grid2` puts its WIDE column first and the narrow rail second,
+   * which is the opposite of this screen's order (funnel, then list). Reusing it would have made
+   * the funnel the wide one.
+   *
+   * WHAT WENT WITH IT, said plainly rather than quietly dropped: the per-rule breakdown
+   * ("older than the 72h ceiling", "not a question") lived only in that panel. The same reason is
+   * still on every row of the "Collected, not assessed" table lower down, which names the rule
+   * that refused each thread in that rule's own words, and `redbot insights` prints the funnel.
+   */
+  const grid=el('div','grid2l');
 
   /* ---- left: the funnel, every step read from the record ---- */
   const fun=panel('Funnel',`${d.threadsCollected} read`);
@@ -3429,46 +3519,6 @@ function discovery(){
   }));
   grid.append(list);
 
-  /* ---- right: what never got that far ----
-   * The rule that caught each thread is recorded now (0014_thread_prefilter), so this shows
-   * the real split instead of a total with an apology. What it must NOT do is call the whole
-   * remainder "filtered": threads the prefilter KEPT but that have not been analysed yet live
-   * in the same arithmetic, and attributing them to a rule that never fired would be exactly
-   * the made-up figure this panel used to refuse to print. */
-  const dropped=Math.max(0,d.threadsCollected-d.assessed);
-  const pf=d.prefilter;
-  const filtered=pf?pf.total:0;
-  const notYet=Math.max(0,dropped-filtered);
-  const DROPWORD={
-    'outside-pilot':'outside the pilot subreddits',
-    'too-old':'older than the 72h ceiling',
-    'not-a-question':'not a question — a guide, showcase or announcement',
-    'age-unknown':'age unknown, so recency could not be confirmed'
-  };
-  const drop=panel('Dropped','before any model call');
-  drop.append(barRow('collected',String(d.threadsCollected)));
-  drop.append(barRow('never assessed',String(dropped)));
-  drop.append(barRow('assessed, then skipped',String(d.skip)));
-
-  if(pf&&pf.byKind.length){
-    drop.append(el('div','ph','<h2>Why they were dropped</h2>'));
-    pf.byKind.forEach(k=>drop.append(barRow(DROPWORD[k.kind]||k.kind,String(k.n))));
-    /* Named separately because it is a different fact: nothing rejected these, the analyser
-       has not reached them. `redbot opportunity` takes fifteen at a time. */
-    if(notYet)drop.append(barRow('kept, not looked at yet',String(notYet)));
-  }
-  drop.append(el('div','prose',
-    `The prefilter is mechanical and runs first, so <b>nothing is spent</b> on a thread that `+
-    `was never eligible. A high drop rate here is not waste — it is the cheapest possible `+
-    `refusal.`));
-  if(!pf||!pf.byKind.length){
-    /* Still honest about the empty case: no rows means the filter has not run and recorded
-       itself yet, which is not the same as nothing having been dropped. */
-    drop.append(el('div','prose',
-      `No reasons are on record yet — they are written when <code>redbot opportunity</code> `+
-      `runs. Until then the total is all this screen can honestly show.`));
-  }
-  grid.append(drop);
   r.append(grid);
 
   /**
@@ -3483,6 +3533,20 @@ function discovery(){
    * words — and links out, because the honest check on "was this really not a question" is the
    * page itself.
    */
+  /**
+   * The rule names, in a person's words. Moved here 2026-10-05 when the Dropped panel was
+   * removed: it used to live in that panel and the table below ALSO reads it, so deleting the
+   * panel left `DROPWORD` referenced and undefined — every dropped row would have thrown.
+   *
+   * This table is now the only place the per-rule reason is shown, which is why the map followed
+   * the surviving reader rather than going with the panel.
+   */
+  const DROPWORD={
+    'outside-pilot':'outside the pilot subreddits',
+    'too-old':'older than the 72h ceiling',
+    'not-a-question':'not a question — a guide, showcase or announcement',
+    'age-unknown':'age unknown, so recency could not be confirmed'
+  };
   if((d.dropped||[]).length){
     const seen=el('div','collect');
     seen.append(el('div','collect-h',
