@@ -229,12 +229,38 @@ export async function detectFromBrowser(
   try {
     const session = await attach(opts.endpoint);
     try {
-      try {
-        await session.page.goto(origin, { timeout: timeoutMs, waitUntil: 'domcontentloaded' });
-      } catch (e) {
+      /**
+       * ONE RETRY, and the retry is the measured fix rather than a bigger guess.
+       *
+       * MEASURED 2026-10-05 on this machine: six of eight accounts failed this navigation at
+       * boot, every one at exactly `timeoutMs` — the timeout, never an error — while two
+       * succeeded. The same Chrome, once warm, loaded the same kind of local origin in well under
+       * 15s and reached example.com straight after. So the browser is not misconfigured and the
+       * network is not blocked: a COLD Chrome on a loaded box is not ready to serve a page at the
+       * moment its debug port starts answering, and `waitForDebugPort` can only prove the port.
+       *
+       * Raising the ceiling would be picking a number off a single machine's load. Retrying is
+       * what the measurement actually supports — the second attempt runs against the browser the
+       * first attempt warmed.
+       *
+       * STILL FAILS CLOSED. Two timeouts is a refusal, and the message says it was two so the
+       * next reader is not left wondering whether one slow load was unlucky.
+       */
+      let loaded = false;
+      let lastErr: Error | null = null;
+      for (let attempt = 1; attempt <= 2 && !loaded; attempt++) {
+        try {
+          await session.page.goto(origin, { timeout: timeoutMs, waitUntil: 'domcontentloaded' });
+          loaded = true;
+        } catch (e) {
+          lastErr = e as Error;
+        }
+      }
+      if (!loaded) {
         throw new DetectionError(
-          `${where}: the browser could not load the local origin ${origin} within ${timeoutMs}ms — `
-          + `${(e as Error).message}. No location was established, so none is being reported.`
+          `${where}: the browser could not load the local origin ${origin} within ${timeoutMs}ms, `
+          + `twice — ${lastErr?.message ?? 'no error reported'}. No location was established, so `
+          + 'none is being reported.'
         );
       }
 
