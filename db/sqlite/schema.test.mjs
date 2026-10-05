@@ -474,12 +474,27 @@ describe('the composite CHECKs that encode project rules', () => {
       P('aaaaaaaaaaaa', '/r/x/1', 'T', 'contribute', 9, ISO, 'only one third'), /thesis_is_whole/);
   });
 
-  test('a REJECTed draft can never be published — evaluation H6', () => {
+  // 0021 replaced reject_is_never_published with published_has_proof: the REJECT bar moved to
+  // publishBar() in src/autopublish.ts, and the schema now refuses a 'published' row with no URL.
+  test('a published draft must carry its URL — 0021 published_has_proof', () => {
     assertRefused(
       `INSERT INTO drafts (id,thread_id,permalink,title,body,has_disclosure,created_at,model,status,cert_verdict,cert_at,cert_claims,cert_fatal_contradictions)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       P('d_h6', 'aaaaaaaaaaaa', '/r/x/1', 'T', 'B', 0, ISO, 'm', 'published', 'REJECT', ISO, 3, 1),
-      /reject_is_never_published/);
+      /published_has_proof/);
+    assertRefused(
+      `INSERT INTO drafts (id,thread_id,permalink,title,body,has_disclosure,created_at,model,status,published_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      P('d_blank', 'aaaaaaaaaaaa', '/r/x/1', 'T', 'B', 0, ISO, 'm', 'published', '   '),
+      /published_has_proof/);
+  });
+
+  test('a REJECTed draft that WAS published can be recorded — 0021 keeps the evidence', () => {
+    assert.equal(refused(
+      `INSERT INTO drafts (id,thread_id,permalink,title,body,has_disclosure,created_at,model,status,cert_verdict,cert_at,cert_claims,cert_fatal_contradictions,published_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      P('d_h6_rec', 'aaaaaaaaaaaa', '/r/x/1', 'T', 'B', 0, ISO, 'm', 'published', 'REJECT', ISO, 3, 1,
+        'https://www.reddit.com/r/x/comments/1/t/c1/')), null);
   });
 
   test('a half-recorded certification is not storable', () => {

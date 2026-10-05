@@ -361,12 +361,12 @@ describe('transactions', () => {
   test('a constraint violation inside a transaction rolls the whole thing back', async () => {
     await assert.rejects(() => withTransaction(async (c) => {
       await c.query('INSERT INTO accounts (handle) VALUES ($1)', ['partial-1']);
-      // 'published' + REJECT is the H6 invariant; 0006 makes it unstorable.
+      // 'published' with no published_url; 0021's published_has_proof makes it unstorable.
       await c.query(
         `INSERT INTO drafts (id,thread_id,permalink,title,body,has_disclosure,created_at,model,status,cert_verdict,cert_at,cert_claims,cert_fatal_contradictions)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         ['d-h6', 'aaaaaaaaaaaa', '/r/devops/1', 'T', 'B', false, ISO, 'm', 'published', 'REJECT', ISO, 1, 1]);
-    }), /reject_is_never_published/);
+    }), /published_has_proof/);
 
     const r = await getPool().query('SELECT handle FROM accounts WHERE handle = $1', ['partial-1']);
     assert.equal(r.rowCount, 0, 'the earlier insert in the same transaction must be gone too');
