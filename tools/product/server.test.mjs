@@ -1156,6 +1156,26 @@ test('an account’s description can be edited, in the record and the seed alike
     assert.equal(r.status, 200, `update was refused: ${JSON.stringify(body)}`);
     assert.equal(body.account.role, 'After');
 
+    /**
+     * THE ZONE IS REFUSED, AND THE REFUSAL IS REPORTED.
+     *
+     * This test used to post `timezone: 'Europe/London'` and assert the column held it. That
+     * contract is over: `accounts.timezone` is a record of a measurement — written only by a
+     * detection, from what the browser's own network reported — so the field is no longer
+     * editable. The request above still NAMES it, deliberately, so that the refusal is exercised
+     * rather than assumed. Deleting the test would have removed the only place that proves a
+     * posted zone cannot reach the column.
+     *
+     * NAMED BACK rather than silently dropped. A form that posts a field and gets a cheerful 200
+     * has taught the person something false about what was saved, and they will go on believing
+     * the zone on screen is the one the browser announces. `ignored` is the console's only way to
+     * say "that one did not take".
+     */
+    assert.ok(Array.isArray(body.ignored),
+      `a refused field must be reported back, not dropped: ${JSON.stringify(body)}`);
+    assert.ok(body.ignored.includes('timezone'),
+      'an update naming the zone must say it was ignored, rather than accept it quietly');
+
     /* Both stores, because the CLI reads the seed file synchronously and the database is the
        record: an edit that lands in one is an account that behaves differently depending on
        which half of redbot is asking. */
@@ -1165,7 +1185,12 @@ test('an account’s description can be edited, in the record and the seed alike
     assert.equal(row.rows[0].role, 'After');
     assert.equal(row.rows[0].speaks, 'plugin conflicts');
     assert.deepEqual(row.rows[0].subreddits, ['Wordpress_Help', 'woocommerce']);
-    assert.equal(row.rows[0].timezone, 'Europe/London');
+    /* The column, which is the load-bearing half — the response could be polite and the row
+       could still have moved. This account has never been measured, so the zone stays NULL, and
+       NULL is exactly what src/window.ts refuses to schedule on. */
+    assert.equal(row.rows[0].timezone, null,
+      'a posted zone must not reach the column: it is a measurement, and nothing has measured this '
+      + 'account');
     assert.equal(row.rows[0].quiet_start, 1);
     assert.equal(row.rows[0].daily_ceiling, 4);
 
@@ -1173,6 +1198,11 @@ test('an account’s description can be edited, in the record and the seed alike
     const mirrored = seeded.accounts.filter((a) => a.handle === 'Edit_Me');
     assert.equal(mirrored.length, 1, 'editing must REPLACE the seed entry, never append a second');
     assert.equal(mirrored[0].role, 'After');
+    /* And the seed file did not take it either. src/config.ts reads this file synchronously as a
+       fallback, so a zone that landed only here would be the one an unprimed process announces —
+       the stale-store failure 0018's header describes. */
+    assert.ok(!mirrored[0].timezone,
+      `the seed mirror must not accept a posted zone either: ${JSON.stringify(mirrored[0])}`);
   } finally {
     await forgetAccount('Edit_Me');
   }
@@ -1425,6 +1455,83 @@ test('the LLM path can be switched, and only to a value redbot understands', asy
                'a refused value must not have changed anything');
 
   await set('cli');   // leave it as found
+});
+
+test('the unattended loop is written down, and a stop is written down too', async () => {
+  /**
+   * THE DEFECT THIS PINS. `autoProc` (server.mjs) was a module-level `let` and nothing wrote it
+   * down, so a restart of the app — or of the machine, which has no boot unit at all — stopped
+   * the loop with no record anywhere that it had been running. Measured 2026-09-24: no systemd
+   * unit at system or user level, no autostart entry, no cron.
+   *
+   * Asserted on data/push-state.json rather than on a status call, for the same reason as the
+   * provider test above: reading it back from the process still holding it in a variable proves
+   * nothing about a restart.
+   */
+  const post = (path, body) => fetch(`http://127.0.0.1:${PORT}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  }).then((r) => r.json());
+  const onDisk = () => {
+    const f = join(DATA, 'push-state.json');
+    return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')).autoLoop : undefined;
+  };
+
+  const accounts = await getJson('/api/state');
+  const handle = (accounts.accounts || [])[0]?.handle;
+  if (!handle) { assert.ok(true, 'no account configured in this fixture — nothing to start a loop as'); return; }
+
+  try {
+    const started = await post('/api/auto/start', { account: handle, everyMinutes: 180 });
+    if (!started.ok) { assert.ok(true, `loop refused in this fixture: ${started.error}`); return; }
+    assert.deepEqual(onDisk(), { account: handle, everyMinutes: 180 },
+      'a running loop must be on disk — that file is the only thing a restart can read');
+
+    await post('/api/auto/stop', {});
+    assert.equal(onDisk(), undefined,
+      'a deliberate stop must survive a restart too — resuming a loop somebody switched off is worse than not resuming');
+  } finally {
+    await post('/api/auto/stop', {}).catch(() => {});
+  }
+});
+
+test('the provider choice is written down, so a restart does not silently revert it', async () => {
+  /**
+   * THE DEFECT THIS PINS. `selectedProvider` was a module-level `let` seeded from
+   * `process.env.REDBOT_LLM` and mutated here, and NOTHING WROTE IT DOWN. `launch-redbot.sh`
+   * runs `npm start`, which exports no `REDBOT_LLM`, so every restart of the desktop app reset
+   * the choice to `cli` — the one provider that cannot raise the `empty completion` thrown at
+   * src/llm.ts:292 and :381. Three such failures sat in the live database from 2026-09-21
+   * naming a provider that, by the time anyone looked, existed nowhere on the machine.
+   *
+   * Asserted on the FILE, not on a second GET: reading the value back from the same process
+   * that is holding it in a variable would pass with no persistence at all. That is precisely
+   * how this went unnoticed.
+   */
+  const set = (provider) => fetch(`http://127.0.0.1:${PORT}/api/llm/provider`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider })
+  }).then((r) => r.json());
+  const onDisk = () => {
+    const f = join(DATA, 'push-state.json');
+    return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')).llmProvider : undefined;
+  };
+
+  try {
+    const r = await set('deepseek');
+    assert.equal(r.ok, true);
+    assert.equal(r.provider, 'deepseek');
+    assert.equal(r.saved, true, 'the route must report whether the choice was KEPT, not just applied');
+    assert.equal(onDisk(), 'deepseek', 'the next boot reads this file — if it is not here, the choice is gone');
+
+    await set('api');
+    assert.equal(onDisk(), 'api', 'a second change must replace the first, not sit beside it');
+
+    /* A refused value must not reach the file either — the 400 path returns before the write. */
+    await set('gpt-9');
+    assert.equal(onDisk(), 'api', 'a rejected provider must leave the stored one alone');
+  } finally {
+    await set('cli').catch(() => {});
+  }
 });
 
 test('the Claude CLI stops being a required dependency the moment a key path is selected', async () => {
@@ -2527,4 +2634,60 @@ test('no console button hands doAction a click event instead of its button', () 
     'doAction must recover the element when it is handed an Event');
   assert.match(ui, /if\(!bt\|\|!bt\.style\|\|!bt\.parentElement\)/,
     'doAction must refuse a non-button BEFORE it takes the busy lock');
+});
+
+/**
+ * THE TIMEZONE IS NOT A FIELD, AND A ZONE WITHOUT A DATE IS NOT A MEASUREMENT.
+ *
+ * `accounts.timezone` was typed into a box on the Accounts screen whose placeholder was
+ * `Asia/Manila`. On the machine this was found on, all eight accounts therefore announced Manila
+ * while the connection egressed from San Jose — and nothing on the card could reveal it, because a
+ * zone printed on its own looks identical whether a person guessed it or a browser reported it.
+ *
+ * So two things have to stay true together, and neither is sufficient alone: nothing may offer a
+ * box to type a zone into, and nothing may print a zone without the moment it was measured. The
+ * second is the one a well-meaning edit undoes — restoring `esc(a.timezone||'')` to a card is a
+ * one-character-looking change that silently puts the guess back on screen wearing the same
+ * clothes as a fact.
+ *
+ * A source-shape test because the rendering needs a DOM: `server.test.mjs` drives HTTP and never
+ * loads the page. The render itself — both states, side by side — is asserted in
+ * `tools/product/ui.test.mjs`, which has a browser. This is the half that runs in `npm test`.
+ */
+test('no box types a timezone, and no card prints one without a date', () => {
+  const ui = readFileSync(join(HERE, 'index.html'), 'utf8');
+
+  /* Comments are dropped the same way the doAction test above drops them, and for the same
+     reason: the comments EXPLAIN the removed field and quote its old shape. */
+  const code = ui.split('\n').filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join('\n');
+
+  assert.ok(!/f\('Timezone'/.test(code),
+    "the account editor must not offer a Timezone box — a measured zone is not an editable field");
+  /**
+   * Not a ban on the WORDS "Asia/Manila" — the editor panel now explains, in prose, that a box
+   * defaulting to that zone is why every account here announced the wrong hemisphere, and a test
+   * that forbade the string would forbid the explanation. What must never come back is a FIELD
+   * seeded with a zone, whatever zone it is: `f('Timezone', a.timezone, 'America/Los_Angeles')`
+   * would be the same defect wearing a better default, and a literal-string check would wave it
+   * straight through.
+   */
+  const seeded = [...code.matchAll(/f\('([^']+)'[^\n]*'([A-Za-z]+\/[A-Za-z_]+)'\)/g)];
+  assert.deepEqual(seeded.map((m) => `${m[1]} = ${m[2]}`), [],
+    'no editor field may be seeded with an IANA timezone — the zone is measured, not offered');
+  assert.ok(!/timezone\s*:\s*eTz\.value/.test(code),
+    'and nothing may submit a hand-typed zone to /api/account/update');
+
+  const bare = [...code.matchAll(/esc\(\s*a\.timezone\s*\|\|\s*''\s*\)/g)];
+  assert.deepEqual(bare.map((m) => m[0]), [],
+    'a card that prints the zone alone cannot be told apart from the old guess — that '
+    + 'indistinguishability is the whole defect, so the timestamp is not decoration');
+
+  assert.match(code, /const zoneRead=/,
+    'one helper renders the measurement, so the card and the limits rail cannot drift apart');
+  assert.match(code, /never measured/,
+    'and it must say "never measured" rather than showing a zone nothing has checked');
+
+  const sites = [...code.matchAll(/zoneRead\(a\.location\)/g)];
+  assert.equal(sites.length, 2,
+    `both surfaces that used to print a.timezone must read the measurement instead — found ${sites.length}`);
 });

@@ -409,7 +409,20 @@ export const config = {
      * host — which is why src/llm.ts has a third function rather than a second base URL.
      */
     deepseekUrl: 'https://api.deepseek.com/chat/completions',
-    deepseekAnalyzeModel: 'deepseek-v4-flash',
+    /**
+     * `deepseek-flash`, NOT `deepseek-v4-flash`.
+     *
+     * The id written here was never one DeepSeek serves. Measured against the vendor's own
+     * `GET https://api.deepseek.com/models` on 2026-09-24 with this install's key: the list is
+     * exactly two entries — `deepseek-flash` (DeepSeek-V4.1-Flash) and `deepseek-v4-pro`
+     * (DeepSeek-V4-Pro). The draft id below was right; this one named a model that does not
+     * exist, so every analyze call on the DeepSeek path asked for nothing.
+     *
+     * The `v4` in the sibling id is not a version this file gets to infer from — `deepseek-flash`
+     * is V4.1 and carries no version in its id at all. Re-run that endpoint before changing
+     * either; the vendor's list is the spec, and nothing here can check it at build time.
+     */
+    deepseekAnalyzeModel: 'deepseek-flash',
     deepseekDraftModel: 'deepseek-v4-pro',
 
     anthropicAnalyzeModel: 'claude-haiku-4-5-20251001',

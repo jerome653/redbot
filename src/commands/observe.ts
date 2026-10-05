@@ -43,10 +43,53 @@ export function checkpointFor(elapsedMinutes: number): Checkpoint {
   return '7d';
 }
 
+/**
+ * The address to navigate to for a published draft, always absolute.
+ *
+ * `commentPermalink` is NOT always absolute. The 2026-09-28 06:43 publish was recorded after the
+ * fact and stored Reddit's own relative form, `/r/Wordpress/comments/1wrudhq/comment/pcizrg8/`;
+ * the absolute `publishedUrl` on the same row never got a turn, because a relative string is
+ * non-null and wins a `??` chain. Playwright then refused it outright — measured 2026-09-28:
+ * "page.goto: Protocol error (Page.navigate): Cannot navigate to invalid URL" — so that comment
+ * could not be observed at all, while the two rows written by the normal path observed fine.
+ *
+ * A blank string is treated as absent for the same reason: `''` is non-null and would otherwise
+ * shadow a usable value and resolve to the site root, which `lookFor` would then report as a
+ * missing comment rather than a missing address.
+ *
+ * Same shape as reddit/post.ts:130 and reddit/scrape.ts:197, which already resolve Reddit's
+ * relative hrefs against `config.redditBase`.
+ */
+export function observeUrl(draft: {
+  commentPermalink?: string | null;
+  publishedUrl?: string | null;
+  permalink: string;
+}): string {
+  const candidates = [draft.commentPermalink, draft.publishedUrl, draft.permalink];
+  const raw = (candidates.find((u) => typeof u === 'string' && u.trim() !== '') ?? draft.permalink).trim();
+  return raw.startsWith('http') ? raw : config.redditBase + raw;
+}
+
 export interface CommentSighting {
   present: boolean;
   /** Reddit's own notice, verbatim, when the comment is shown as removed or deleted. */
   removalNotice: string | null;
+  /**
+   * The `author` attribute Reddit renders on the node. `[deleted]` here alongside a removal
+   * notice is the pair that distinguishes a removed comment from an intact one — measured
+   * 2026-09-30 on t1_pcizrg8, t1_pcm3zpx and t1_pcup48f, all three signed-out:
+   * `author="[deleted]"`, no `[slot="comment"]` child of their own, and the rendered text
+   * "Comment removed by moderator".
+   */
+  author: string | null;
+  /**
+   * PRESENT BUT NOT THERE. Reddit leaves the `shreddit-comment` node in place after a removal
+   * and replaces the body with its own notice, so `present` — which is true as soon as a node
+   * with our thingid is found — cannot answer this file's own question at the top: "is it there
+   * for everyone else?" This field answers it. `present && !removed` is the only combination
+   * that means a reader saw the reply.
+   */
+  removed: boolean;
   score: number | null;
   childReplies: number | null;
   /** How the node was located, so a null result is debuggable. */
@@ -72,6 +115,38 @@ export interface CommentSighting {
   }>;
 }
 
+/**
+ * Is this node a removal stub, and what did Reddit write on it?
+ *
+ * Pure, and exported, because the three readings it decides from come out of `page.evaluate` —
+ * which runs in the browser and cannot call anything importable. Keeping the RULE here and the
+ * READING there means one implementation that a unit test can drive.
+ *
+ * `text` must be the comment's OWN text with nested `shreddit-comment` subtrees stripped. Pass a
+ * whole subtree and a child's `[deleted]` is attributed to the parent — measured 2026-09-30 on
+ * t1_pcm3zpx, whose subtree carried its own removal stub plus a Wordpress-ModTeam reply.
+ */
+export function readRemoval(input: {
+  ownText: string;
+  author: string | null;
+  hasOwnSlot: boolean;
+}): { removalNotice: string | null; removed: boolean } {
+  /* The explicit phrase wins over the bare marker. A moderator removal renders the author as
+     `[deleted]`, so matching `[deleted]` first filed real removals as "deleted" — and
+     src/health.ts:263 counts only `reply-marked-removed` toward the stop, so the kind decides
+     whether three removals are seen as a pattern or as nothing. */
+  const removalNotice =
+    /comment (?:removed|deleted) by moderator|removed by moderator|removed by reddit|\[removed\]/i
+      .exec(input.ownText)?.[0]
+    ?? /\[deleted\]/i.exec(input.ownText)?.[0]
+    ?? null;
+
+  /* Either Reddit wrote a removal notice on our node, or the node lost its body entirely while
+     rendering `[deleted]` as its author. In both cases a reader does not see the reply. */
+  const removed = removalNotice !== null || (input.author === '[deleted]' && !input.hasOwnSlot);
+  return { removalNotice, removed };
+}
+
 async function lookFor(page: Page, draft: Draft): Promise<CommentSighting> {
   const probe = draft.body.slice(0, 60);
 
@@ -94,9 +169,15 @@ async function lookFor(page: Page, draft: Draft): Promise<CommentSighting> {
       if (!hit) {
         const bodyText = document.body.innerText;
         return {
-          present: false,
+          /* `as const` so the two branches form a DISCRIMINATED union: with a widened
+             `boolean` the narrowing below cannot tell a found node from a missing one. */
+          present: false as const,
           removalNotice:
             /\[removed\]|\[deleted\]|comment (?:removed|deleted) by moderator|removed by reddit/i.exec(bodyText)?.[0] ?? null,
+          author: null as string | null,
+          /* Not-found is not a removal. The notice above was matched against the WHOLE page, so it
+             may belong to any other comment on it; `removed` is only ever set from our own node. */
+          removed: false,
           score: null as number | null,
           childReplies: null as number | null,
           via: `not found among ${nodes.length} rendered comment nodes`,
@@ -123,7 +204,34 @@ async function lookFor(page: Page, draft: Draft): Promise<CommentSighting> {
       const kids = thingId
         ? nodes.filter((n) => (n.getAttribute('parentid') ?? n.getAttribute('parent-id')) === thingId)
         : [];
-      const text = (hit as HTMLElement).innerText;
+
+      /**
+       * OUR OWN TEXT, NOT OUR SUBTREE'S.
+       *
+       * `shreddit-comment` NESTS — a reply is a DOM descendant of the comment it answers, and
+       * `querySelectorAll` returns both. So `hit.innerText` contains every nested reply's text,
+       * and a `[deleted]` child was attributed to the parent. Measured 2026-09-30 on t1_pcm3zpx:
+       * `hit.innerText` carried its own removal stub AND a Wordpress-ModTeam reply, and the
+       * `[slot="comment"]` lookup returned the TEXT OF A CHILD because the parent had no slot of
+       * its own left.
+       *
+       * Strip the nested comments from a clone and read what remains. `textContent` rather than
+       * `innerText` because a detached clone has no layout, so `innerText` would return ''.
+       */
+      const clone = hit.cloneNode(true) as Element;
+      for (const nested of Array.from(clone.querySelectorAll('shreddit-comment'))) nested.remove();
+      const text = (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+      /**
+       * The classification is NOT done here. `page.evaluate` runs its argument in the browser, so
+       * nothing it calls can be imported — a rule written inside this function could only be
+       * tested by driving a real page. It returns the three raw readings instead and
+       * `readRemoval()` below decides, in Node, where a unit test can reach it.
+       */
+      const author = hit.getAttribute('author');
+      /* Our own body slot, not a nested reply's: `closest` walks back up to the owning comment. */
+      const hasOwnSlot = Array.from(hit.querySelectorAll('[slot="comment"]'))
+        .some((el) => el.closest('shreddit-comment') === hit);
 
       // Every comment beneath ours, verbatim. Read defensively: an attribute Reddit does not
       // render becomes null, never a guess and never an omitted key.
@@ -142,8 +250,10 @@ async function lookFor(page: Page, draft: Draft): Promise<CommentSighting> {
       });
 
       return {
-        present: true,
-        removalNotice: /\[removed\]|\[deleted\]|removed by moderator/i.exec(text)?.[0] ?? null,
+        present: true as const,
+        ownText: text,
+        author,
+        hasOwnSlot,
         score: scoreAttr != null && scoreAttr !== '' && Number.isFinite(Number(scoreAttr)) ? Number(scoreAttr) : null,
         childReplies: kids.length,
         via,
@@ -153,9 +263,18 @@ async function lookFor(page: Page, draft: Draft): Promise<CommentSighting> {
     { needle: probe, id: draft.commentId ?? null }
   ).catch(() => null);
 
+  if (found && found.present) {
+    const { removalNotice, removed } = readRemoval(found);
+    const { ownText: _ownText, hasOwnSlot: _hasOwnSlot, ...rest } = found;
+    return { ...rest, removalNotice, removed };
+  }
+  if (found) return found;
+
   return found ?? {
     present: false,
     removalNotice: null,
+    author: null,
+    removed: false,
     score: null,
     childReplies: null,
     via: 'page could not be read',
@@ -216,7 +335,7 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
   try {
     for (const draft of targets) {
       const threadRec = threads.find((t) => t.id === draft.threadId);
-      const url = draft.commentPermalink ?? draft.publishedUrl ?? draft.permalink;
+      const url = observeUrl(draft);
       const publishedAt = draft.decidedAt ?? draft.createdAt;
       const elapsedMinutes = Math.round((Date.now() - Date.parse(publishedAt)) / 60_000);
       const checkpoint = (forced as Checkpoint) ?? checkpointFor(elapsedMinutes);
@@ -261,7 +380,10 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
       if (inView.removalNotice) {
         await recordObservation({
           account: me.username,
-          kind: /deleted/i.test(inView.removalNotice) ? 'reply-marked-deleted' : 'reply-marked-removed',
+          /* `removed` wins over `deleted`: a moderator removal renders the author as `[deleted]`,
+             and keying off that marker filed real removals under the wrong kind — which matters,
+             because src/health.ts:263 counts only `reply-marked-removed` toward the stop. */
+          kind: /removed/i.test(inView.removalNotice) ? 'reply-marked-removed' : 'reply-marked-deleted',
           vector: 'signed-in',
           permalink: url,
           checkpoint,
@@ -293,20 +415,51 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
         const outView = await lookFor(out.page, draft);
         outSight = outView;
 
-        say.step(`  signed out: ${outView.present ? 'visible' : 'NOT VISIBLE'}` +
-          `${outView.removalNotice ? ` — notice: "${outView.removalNotice}"` : ''}`);
+        say.step(`  signed out: ${outView.removed ? 'REMOVED' : outView.present ? 'visible' : 'NOT VISIBLE'}` +
+          `${outView.removalNotice ? ` — notice: "${outView.removalNotice}"` : ''}` +
+          `${outView.author ? ` — author rendered as "${outView.author}"` : ''}`);
 
+        /**
+         * A REMOVAL IS RECORDED AS ABSENT, AND THE NOTICE IS RECORDED AT ALL.
+         *
+         * Both halves were defects. `present` is true the moment a node with our thingid is
+         * found, and Reddit leaves that node behind after a removal — so three moderator-removed
+         * comments were stored as `reply-visible-signed-out = true` on 2026-09-30, and the
+         * removal notice this function had already computed was printed to the terminal and
+         * never written to the database. The record therefore said six live comments while four
+         * were gone, and `removalsObserved30d` (src/health.ts:263) counted zero of them.
+         *
+         * `reply-absent-signed-out` is the honest kind: the schema has no "stub" kind, and the
+         * question this vector answers — "is it there for everyone else?" — is answered no. The
+         * note says the node was present so the two cases stay distinguishable in the record.
+         */
+        const publiclyVisible = outView.present && !outView.removed;
         await recordObservation({
           account: me.username,
-          kind: outView.present ? 'reply-visible-signed-out' : 'reply-absent-signed-out',
+          kind: publiclyVisible ? 'reply-visible-signed-out' : 'reply-absent-signed-out',
           vector: 'signed-out',
           permalink: url,
           checkpoint,
-          value: outView.present,
+          value: publiclyVisible,
           note:
             `${outView.via}; elapsed ${elapsedMinutes} min. ` +
+            (outView.removed
+              ? `The node was PRESENT but carried Reddit's removal text${outView.author ? ` and rendered its author as "${outView.author}"` : ''} — a reader does not see the reply. `
+              : '') +
             `Records only what a logged-out browser rendered — not why.`
         });
+
+        if (outView.removalNotice) {
+          await recordObservation({
+            account: me.username,
+            kind: /removed/i.test(outView.removalNotice) ? 'reply-marked-removed' : 'reply-marked-deleted',
+            vector: 'signed-out',
+            permalink: url,
+            checkpoint,
+            value: outView.removalNotice,
+            note: 'Reddit rendered this notice verbatim to a logged-out browser; it does not say who removed it or why'
+          });
+        }
 
         if (inView.present && !outView.present) {
           say.warn('  visible signed in, not visible signed out. That is the observation; it does not');

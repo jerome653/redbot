@@ -10,7 +10,7 @@
  * opportunity in every thread has not found any.
  */
 import { policy } from './policy.js';
-import { isQuestionShaped } from './select.js';
+import { isQuestionShaped, currentAgeHours } from './select.js';
 import { assessCompetence } from './competence.js';
 import type { Thread, GapAnalysis, OpportunityAssessment, ContributionThesis } from './types.js';
 
@@ -124,9 +124,68 @@ export function assessOpportunity(thread: Thread, gap: GapAnalysis): Opportunity
     score = Math.min(score, 15);
   }
 
-  const ageHours = thread.ageMinutes != null ? thread.ageMinutes / 60 : null;
-  if (ageHours != null && ageHours > policy.maxThreadAgeHoursToPublish.value) {
-    reasons.push(`thread is ${Math.round(ageHours)}h old — past the ${policy.maxThreadAgeHoursToPublish.value}h ceiling`);
+  /**
+   * AGE AS IT STANDS NOW, AND AGAINST THE TIGHTER OF THE TWO CEILINGS.
+   *
+   * This line read `thread.ageMinutes / 60` — the age at COLLECTION — and compared it only to
+   * `maxThreadAgeHoursToPublish` (72h). Both halves were wrong, and together they cost every post
+   * this loop has ever tried to make.
+   *
+   * (a) `src/select.ts:236` exists precisely because a frozen age drifts, and its docstring
+   *     claims "every caller that asked the old question now asks the right one". This caller was
+   *     never migrated, so that sentence was false. `src/commands/opportunity.ts:79` and
+   *     `src/gates.ts:256` both already ask `currentAgeHours`; this one did not, so selection and
+   *     the gate answered the same question with numbers that diverged by the elapsed time.
+   *
+   * (b) Two ceilings for one question. `opportunity` capped at 72h while `warming.ts:275` refuses
+   *     above `warmingMaxThreadAgeHours`, so every thread between the two was drafted, certified
+   *     and then refused — the whole cost of a cycle, spent on something unpublishable before it
+   *     started. Scoring against `Math.min` of the two makes that band empty by construction
+   *     rather than by whichever numbers the policy happens to hold.
+   *
+   * MEASURED, 2026-09-28 — draft d_caf11a8a8127_mukjutef, r/webhosting "Best Practice to keep SEO
+   * Ranking after Domain Transfer":
+   *
+   *     collected 21:33:13  thread 4.95h old  -> 4.95h vs 72h  : contribute
+   *     decided   01:16:18  thread 8.67h old  -> 8.67h vs  8h  : warming:target, REFUSED
+   *
+   * The 3.72h between the two readings is not latency — one cycle measured 29 minutes (00:47 read
+   * -> 01:16 decide). It is that this function scores the whole accumulated `threads` table (189
+   * rows that cycle), so after 25 sources died on a 429 wall and the fresh read returned "0 new",
+   * it reached back for a row written in an earlier cycle. A stale row is exactly what a frozen
+   * age cannot describe.
+   */
+  const ageHours = currentAgeHours(thread);
+  const ageCeiling = Math.min(
+    policy.maxThreadAgeHoursToPublish.value,
+    policy.warmingMaxThreadAgeHours.value
+  );
+  if (ageHours != null && ageHours > ageCeiling) {
+    reasons.push(`thread is ${Math.round(ageHours)}h old — past the ${ageCeiling}h ceiling`);
+    score = Math.min(score, 10);
+  }
+
+  /**
+   * THE SAME INVARIANT, ON THE OTHER DIMENSION. src/warming.ts:279-282 refuses a thread carrying
+   * more than `warmingMaxAnswers` answers, and `commentCount` appeared nowhere in this file or in
+   * src/commands/opportunity.ts — so selection held no opinion about a constraint the publish gate
+   * applies, exactly as it held none about live age before the block above.
+   *
+   * MEASURED 2026-09-28, draft d_61dd17759ea3_mukls4ac, r/webdev:
+   *   02:02:30  opportunity  11/201 worth contributing to     <- answers never examined
+   *   02:15:22  refused      warming:target — 10 answers already (max 8)
+   *
+   * The age fix landed and held on the same draft (23.20h against a 24h ceiling); this is the
+   * branch of the same gate it did not reach.
+   *
+   * `!= null` mirrors warming.ts:280 deliberately: "no answer count recorded" is not "too many
+   * answers", and treating a missing count as a violation would refuse every thread whose feed
+   * row omitted it.
+   */
+  const answers = thread.commentCount;
+  const maxAnswers = policy.warmingMaxAnswers.value;
+  if (answers != null && answers > maxAnswers) {
+    reasons.push(`${answers} answers already (max ${maxAnswers}) — a reply here is one voice in a crowd`);
     score = Math.min(score, 10);
   }
 

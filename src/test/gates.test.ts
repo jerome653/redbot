@@ -68,6 +68,9 @@ const COUNTERS: HealthCounters = {
   removalsObserved30d: 0, absentSignedOut30d: 0, suspensionNotices: 0,
   accountAgeDays: 400, karma: 500,
   lastReplyAt: null, lastRateLimitAt: null, lastRemovalAt: null,
+  /* Split out of lastRateLimitAt 2026-09-27: a 429 while COLLECTING no longer cools the account
+     off, because doing so blocked every publish on the live install for nine days. */
+  lastReadRateLimitAt: null, readRateLimits24h: 0,
   fleetSize: 1, unattributedEvents24h: 0
 };
 

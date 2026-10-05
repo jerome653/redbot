@@ -140,6 +140,12 @@ export function scrollPlan(rng: Rng, dwellMs: number, opts?: { thorough?: boolea
   return plan;
 }
 
+/**
+ * How long one scroll may take before the read moves on without it. Not a policy value: this is a
+ * liveness bound on a single CDP round trip, not a behavioural choice anyone would tune.
+ */
+const WHEEL_TIMEOUT_MS = 10_000;
+
 export interface ThreadViewResult {
   dwellMs: number;
   steps: number;
@@ -147,6 +153,12 @@ export interface ThreadViewResult {
   idled: boolean;
   /** True when the reader left before finishing — no action taken on this thread. */
   abandoned: boolean;
+  /**
+   * True when the BUDGET ended the read, not the plan. Distinct from `abandoned`, which is a
+   * simulated reader losing interest and means no action is taken on the thread; this is the clock
+   * running out and carries no such meaning.
+   */
+  truncated: boolean;
 }
 
 /**
@@ -160,11 +172,34 @@ export async function viewThread(
   page: Page,
   thread: Pick<Thread, 'title' | 'body' | 'comments'>,
   rng: Rng,
-  opts?: { thorough?: boolean; onStep?: (i: number, total: number) => void }
+  opts?: { thorough?: boolean; onStep?: (i: number, total: number) => void; budgetMs?: number }
 ): Promise<ThreadViewResult> {
   const thorough = opts?.thorough ?? false;
   const dwellMs = dwellMsFor(thread, rng, { thorough });
   const plan = scrollPlan(rng, dwellMs, { thorough });
+
+  /**
+   * A REAL CEILING ON ELAPSED TIME.
+   *
+   * `policy.maxDwellMs` (policy.ts:80) describes itself as a "cap so one very long thread cannot
+   * eat an entire session", and `dwellMsFor` clamps its return to it. That clamped number bounded
+   * nothing, because it is only an input to `scrollPlan`, and two things spend time outside it:
+   * the plan's own `pauseMs` values, and the idle pause rolled per step below.
+   *
+   * MEASURED 2026-09-28 on a real 557-word / 5-comment thread, 500 seeds: dwellMs hit the 360s
+   * clamp, the plan reached 119 steps, its pauses alone summed to 501s, and the worst-case total
+   * with idles was 53 minutes against a stated 6-minute cap.
+   *
+   * What that cost: draft d_7d762fa0f2b4_muksfd2v entered this function at 05:19:39 and produced
+   * no publish decision for the next 52 minutes. It is the only draft this pipeline has produced
+   * that clears every content gate, and src/commands/reply.ts awaits this call before deciding.
+   *
+   * Every sleep below is clamped to what remains, so the budget bounds wall-clock time rather than
+   * describing an intention.
+   */
+  const budgetMs = opts?.budgetMs ?? policy.maxDwellMs.value;
+  const deadline = Date.now() + budgetMs;
+  const remaining = (): number => Math.max(0, deadline - Date.now());
 
   // A reply candidate is never abandoned — we are there to read it properly.
   const abandonAt = !thorough && chance(rng, policy.abandonThreadRate.value)
@@ -176,22 +211,35 @@ export async function viewThread(
 
   for (const [i, step] of plan.entries()) {
     if (abandonAt >= 0 && i >= abandonAt) {
-      return { dwellMs, steps: executed, idled, abandoned: true };
+      return { dwellMs, steps: executed, idled, abandoned: true, truncated: false };
+    }
+    if (remaining() === 0) {
+      return { dwellMs, steps: executed, idled, abandoned: false, truncated: true };
     }
 
     // A pause with no interaction: the tab is open, nothing is happening.
     if (chance(rng, policy.idlePauseRate.value)) {
       idled = true;
-      await sleep(skewedDelay(rng, 4500, { heavyTailP: 0.3, tailMult: 5 }));
+      await sleep(Math.min(remaining(), skewedDelay(rng, 4500, { heavyTailP: 0.3, tailMult: 5 })));
     }
 
-    await page.mouse.wheel(0, step.deltaY).catch(() => {});
-    await sleep(step.pauseMs);
+    /**
+     * RACED, because `.catch(() => {})` handles a REJECTION and the failure seen here was neither
+     * a resolve nor a reject — an awaited page call that never settles is not caught by anything,
+     * and this await was the last line the loop printed before 52 minutes of silence. Scrolling is
+     * behavioural cover rather than a correctness requirement, so a wheel that never lands is
+     * skipped and the read carries on.
+     */
+    await Promise.race([
+      page.mouse.wheel(0, step.deltaY).catch(() => { /* a refused scroll is not a failed read */ }),
+      sleep(Math.min(remaining(), WHEEL_TIMEOUT_MS))
+    ]);
+    await sleep(Math.min(remaining(), step.pauseMs));
     executed++;
     opts?.onStep?.(i + 1, plan.length);
   }
 
-  return { dwellMs, steps: executed, idled, abandoned: false };
+  return { dwellMs, steps: executed, idled, abandoned: false, truncated: false };
 }
 
 /* ------------------------------------------------------------------ *

@@ -235,15 +235,75 @@ them something they would be comfortable putting their name on.
 SUGGESTED ANGLE: ${angle}
 
 WHAT MAKES IT GOOD
-Solve the actual problem, concretely. Name the setting, the file, the command, the thing to
-check first and what the result tells them. If the fix depends on something they did not
-say, ask for exactly that one thing.
+Short and useful beats thorough. One helpful observation, offered plainly, is the whole job.
+
+LENGTH: two to four sentences. That is a ceiling, not a target — one sentence is fine when
+one sentence answers it. Do not write an essay, a numbered plan, a list of options, or a
+"hope this helps" wrapper. No headings. Usually no code block; include one only when a single
+short command or setting IS the answer.
+
+Name the one thing you would check first and what the result would tell them. If the fix
+depends on something they did not say, ask for exactly that one thing and stop.
 
 If you are not confident, say what you would check and why, rather than guessing with
 confidence. "I'd start by checking X, because it usually explains Y" is a useful reply.
 An invented certainty is not.
 
-Length follows the problem. Two sentences if that solves it. Do not pad to look thorough.
+NEVER WRITE "X REQUIRES Y", "X NEEDS Y", "YOU CAN'T DO X WITHOUT Y", OR ANY OTHER ABSOLUTE ABOUT
+HOW SOFTWARE WORKS. Measured: a draft asserting "comments require server-side processing",
+"contact forms require server-side processing" and "search requires server-side processing" was
+refused with a documented counterexample to each — client-side comment widgets, a mailto form, and
+a pre-built static search index. All three were FALSE, and a false reply costs the account more
+than no reply. There is almost always a tool, a service or a config that does the thing you just
+said was impossible, and the fact-check will find it.
+
+If a limit genuinely matters to the answer, make it a QUESTION or a CHECK, not a statement:
+  ✗ "Static exports can't do comments, forms or search."
+  ✓ "Do you need the comments and the contact form to keep working, or just the pages? That
+     changes what will actually break."
+
+TWO KINDS OF SENTENCE SURVIVE A FACT-CHECK. Write those and stop.
+
+  1. AN OBSERVATION — something already in the thread. "The LCP breakdown you shared names the
+     Jarallax image." Nobody can argue with what is on the page.
+  2. A NEXT STEP — what you would do or check. "I'd check what Lighthouse reports as the LCP
+     element now." A suggestion is not a claim about the world, so there is nothing to refute.
+
+THE KIND THAT DOES NOT SURVIVE IS AN INFERENCE — a statement about what something would prove,
+mean, show, rule out, distinguish, or cause. "Checking X would tell you whether it is Y or Z."
+"That would rule out W." For anything not written in the thread, an alternative explanation
+almost always exists, and the fact-check finds it.
+
+So: GIVE THE STEP, NOT THE THEORY BEHIND IT. "I'd check the LCP element first" stands. "…because
+that distinguishes a render delay from a preload problem" is the half that gets refused, and
+dropping it costs the reader almost nothing — they asked what to do, not for a lecture.
+
+A CONDITIONAL IS NOT A LICENCE TO BE CERTAIN EITHER. "If A, then B" reads as hedged and is not:
+it asserts B outright for every case where A holds. So:
+
+  - Do NOT rule a cause in or out from one observation. "If it still shows X, then Y isn't the
+    problem" and "then the cause is Z" are both forbidden — one reading narrows the field, it
+    does not settle it, and there is nearly always a case where A holds and B is false.
+  - Say what the observation would NARROW instead: "if it still shows X, that points away from
+    Y and I'd look at Z next" — same information, and it is true.
+  - NO MECHANISM SENTENCES. "X causes Y", "X can cause Y", "that happens because Z" are read as
+    statements of fact however softly they are phrased, and a reply that does not contain one
+    cannot be contradicted about one. Drop it, or write it as an explicit guess (below).
+  - IF YOU KEEP A GUESS, SAY IN THE WORDS THAT IT IS ONE. "My guess is…", "I'd bet…", "I'm not
+    sure, but…", "I've seen that happen when…". The fact-check classifies the sentence it is
+    given, not what you meant by it: an unmarked guess is read as a measurement and refused,
+    and the same sentence prefixed with "my guess is" is accepted as a guess.
+  - THE FACT-CHECK READS A CONFIDENCE OFF EVERY SENTENCE, and a flat declarative reads as HIGH.
+    Measured: one draft had seven claims and the checker scored all seven "high" on
+    reasoned-inference evidence, then refused each one with "asserted with high confidence, but
+    reasoned-inference supports medium at best". Unless a fact is in the thread or the reference
+    material above, the sentence carrying it must be visibly less than certain. This is not
+    style — it is the difference between a reply that posts and one that does not.
+
+STAY NEUTRAL. Answer the practical question and nothing around it. Do not take a side, do not
+argue with another commenter, do not correct someone unless the correction IS the answer, and
+do not volunteer an opinion nobody asked for. If two approaches both work, say so and move on
+rather than ranking them.
 
 HARD RULES — not style preferences
 1. **Never mention any company, product, brand or service you are affiliated with.** No
@@ -260,7 +320,27 @@ HARD RULES — not style preferences
 6. **Do not state a checkable fact you cannot ground.** If a claim about how software behaves
    is not in the reference material below and not in the thread, either leave it out or write
    it as the check you would run: "I'd confirm X, because if it is Y then Z". A reply that is
-   confidently wrong costs the person who posts it more than a reply that is usefully unsure.${referenceBlock}
+   confidently wrong costs the person who posts it more than a reply that is usefully unsure.
+7. **Quote at least one exact string from the thread.** Copy a filename, version number, path,
+   setting name, command or error message out of the post or its comments, spelled exactly as
+   they spelled it — "PHP 8.3" if they wrote PHP 8.3, "wp-config.php" if they wrote
+   wp-config.php. This is checked mechanically, not judged: a reply whose specifics all appear
+   for the first time in the reply itself is rejected before anyone reads it. Introducing new
+   technical detail does not satisfy this. Reusing theirs does, and it is also the difference
+   between answering this person and answering the topic.${referenceBlock}
+
+DECLINE THESE OUTRIGHT — set "contribute" to false and leave the body empty
+Not every thread is worth answering, and the ones below are worth answering least. Declining
+costs nothing; a reply that draws an argument costs the account it was posted from.
+
+  - anything debatable or contentious: politics, religion, identity, moral arguments, or a
+    thread whose question is "which is better" rather than "why is this broken"
+  - a thread that is already an argument, or where commenters are attacking each other
+  - a complaint, a rant, a drama thread, or a callout — there is no practical question in it
+  - anything where a correct answer would require taking a side
+  - anything you would need to speculate about to answer at all
+
+There is no credit for participating. Silence on a thread like this is the right output.
 
 MAKE THE CASE, OR DECLINE
 Before the reply, state three things. If you cannot state all three honestly, set
@@ -296,4 +376,50 @@ existing comments (do not repeat what is already said):
 ${topComments || '(none)'}
 
 why this thread was selected: ${reason}`;
+}
+
+
+/**
+ * What to append to `draftPrompt` when the craft gate would block the draft that came back.
+ *
+ * src/commands/draft.ts:170 has always called `assessQuality(body, { thread })` at draft time and
+ * recorded the result — `qualityOk` at :225 and `qualityBlocks` at :240 — and then saved the draft
+ * regardless. src/gates.ts:137 turns those same block-severity issues into a `quality:<code>` gate,
+ * and src/autopublish.ts:184 refuses on any advisory. So the draft stage measured the refusal,
+ * wrote it down, and handed the draft on to be certified anyway.
+ *
+ * MEASURED 2026-09-28, draft d_61dd17759ea3_mukls4ac, r/webdev:
+ *   02:03:07  draft        saved, with quality:generic already recorded against it
+ *   02:10:06  gate.block   argus REJECT      (~7 minutes of certification)
+ *   02:15:22  refused      quality:generic, warming:target
+ *
+ * Feeding the specific failure back is worth more than restating the rule: `quality.ts:181` fires
+ * on `technicalHits === 0 && specificityHits < 3`, and `technicalHits` counts technical tokens in
+ * the INTERSECTION of reply and thread — so it cannot be raised by any string the thread does not
+ * already contain. Reproduced on the real pair: the draft above scored "2 overlapping terms, 0
+ * technical" while a rewrite reusing the thread's own "MAMP 6.8", "PHP 8.3" and "php.ini" cleared
+ * the same rule unchanged.
+ */
+export function draftCorrection(issues: Array<{ gate: string; reason: string }>): string {
+  const named = issues.map((i) => `  - ${i.gate}: ${i.reason}`).join('\n');
+  /* `generic` gets the mechanism spelled out, because it is the one failure a model cannot fix by
+     trying harder — it has to copy strings rather than produce better ones. */
+  /* The gate name, not a bare code: src/gates.ts:137 composes `quality:<code>`, and matching the
+     bare code here would silently stop firing the day the composition changed. */
+  const generic = issues.some((i) => i.gate === 'quality:generic')
+    ? '\n\nFor "generic" specifically: the check counts strings that appear in BOTH your reply and '
+      + 'the thread. Writing NEW technical detail scores zero no matter how precise it is. Open the '
+      + 'post and its comments, take at least one exact string that contains a digit, a dot, a slash '
+      + 'or a dash — a version, a filename, a path, a setting, an error — and use it verbatim.'
+    : '';
+
+  return `
+
+--- REWRITE REQUIRED ---
+Your previous draft was rejected mechanically, before anyone read it. The failures:
+
+${named}
+
+Write the reply again, fixing exactly these. Keep everything that was right about it; do not
+lengthen it to compensate. Return the same JSON shape.${generic}`;
 }

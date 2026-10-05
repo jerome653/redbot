@@ -361,12 +361,12 @@ describe('transactions', () => {
   test('a constraint violation inside a transaction rolls the whole thing back', async () => {
     await assert.rejects(() => withTransaction(async (c) => {
       await c.query('INSERT INTO accounts (handle) VALUES ($1)', ['partial-1']);
-      // 'published' + REJECT is the H6 invariant; 0006 makes it unstorable.
+      // 'published' with no published_url; 0021's published_has_proof makes it unstorable.
       await c.query(
         `INSERT INTO drafts (id,thread_id,permalink,title,body,has_disclosure,created_at,model,status,cert_verdict,cert_at,cert_claims,cert_fatal_contradictions)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         ['d-h6', 'aaaaaaaaaaaa', '/r/devops/1', 'T', 'B', false, ISO, 'm', 'published', 'REJECT', ISO, 1, 1]);
-    }), /reject_is_never_published/);
+    }), /published_has_proof/);
 
     const r = await getPool().query('SELECT handle FROM accounts WHERE handle = $1', ['partial-1']);
     assert.equal(r.rowCount, 0, 'the earlier insert in the same transaction must be gone too');
@@ -423,8 +423,18 @@ describe('the schema-derived column map', () => {
     // it to decide whether an account's exit still matches its vetted address, and a raw 0 is
     // truthy in JavaScript — so an un-coerced column would report every observation as a match and
     // silently disable the check.
+    // Migration 0018 (account_locations) moved both counts again, and again because a column was
+    // ADDED rather than because the numbers were loosened:
+    //   date    43 -> 44   account_locations.at
+    //   boolean 11 -> 13   account_locations.proxy, account_locations.hosting
+    // The two booleans are the pair that would bite here, and they bit already. Both are NULLABLE,
+    // because "the provider did not say" is a different answer from "the provider said no" — and an
+    // un-coerced 0 is truthy in JavaScript, so a column that stopped coercing would report every
+    // exit as proxied and hosted. src/db/locations.ts was first written against a hand-rolled
+    // `x.proxy === 1` and returned false for a stored 1; the `false` case asserted correctly while
+    // being wrong for the same reason, so only the `true` case could tell the two apart.
     const expected = {
-      date: 43, json: 20, boolean: 11, blob: 3
+      date: 44, json: 20, boolean: 13, blob: 3
     };
 
     const rows = await getPool().query<{ name: string; sql: string }>(

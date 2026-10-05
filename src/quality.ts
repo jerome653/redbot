@@ -248,7 +248,21 @@ export function assessQuality(body: string, ctx: QualityContext = {}): QualityRe
     issues.push({ severity: 'warn', code: 'bold-heavy', message: `${boldSpans} bold spans — reads as a formatted document` });
   }
 
-  if (lengths.length >= 4 && spread < 2.5) {
+  /**
+   * UNREACHABLE AS WRITTEN UNTIL 2026-10-01, and the fix is the threshold, not the rule.
+   *
+   * This fired only at four or more sentences. `src/prompts.ts:240` caps the drafting output at
+   * "two to four sentences" and in practice delivers two or three — all six comments this install
+   * published had 2 or 3 (62–87 words, spread 0–14). So the one check in this module aimed at
+   * machine cadence could not fire for any draft the drafting prompt is capable of producing, while
+   * its own message calls uniform length "the flattest machine tell there is".
+   *
+   * THREE, because that is the floor at which a spread is a fact rather than an artefact. Two
+   * sentences have a spread but no rhythm — any two lengths differ by some amount and calling that
+   * uniform or varied is reading a pattern into a single difference. At three there is a shape.
+   * The 2.5-word band is unchanged: it was never the half that was broken.
+   */
+  if (lengths.length >= 3 && spread < 2.5) {
     issues.push({
       severity: 'warn',
       code: 'uniform-rhythm',

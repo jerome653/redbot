@@ -22,7 +22,7 @@ import { mkdirSync, existsSync } from 'node:fs';
 import { delimiter as pathDelimiter, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
-import { config, anthropicKey, deepseekKey, claudeConfigDir, operatorRecord } from './config.js';
+import { config, anthropicKey, deepseekKey, claudeConfigDir, operatorRecord, type LlmProvider } from './config.js';
 import { say } from './log.js';
 
 /** One announcement per process for a declared credential location. */
@@ -298,6 +298,35 @@ async function completeViaApi(opts: CompleteOpts): Promise<string> {
 /* ------------------------------------------------------------------ *
  * Provider: DeepSeek API
  * ------------------------------------------------------------------ */
+
+/**
+ * The smallest budget worth sending to a DeepSeek reasoning model.
+ *
+ * Every `maxTokens` in this repository was sized for the Anthropic endpoint, where `max_tokens`
+ * bounds the ANSWER. Here it bounds reasoning AND answer, so those numbers ask for a fraction of
+ * what the model needs and the first attempts are billed for producing nothing:
+ *
+ *     src/gap.ts:96             1600     measured need ~9,905 completion tokens
+ *     src/commands/draft.ts:127 1600     measured need ~3,255
+ *     src/argus/extract.ts   3000/1400
+ *     src/commands/warmup.ts     700
+ *
+ * MEASURED 2026-09-24, thread 869b0d4176e9, deepseek-flash, prompt ~1,800 tokens:
+ * `max_tokens=16000` → `finish_reason=stop`, `reasoning_tokens=9053`, `completion_tokens=9905`.
+ * The same call at 1600 truncates, and the retry ladder then spends 1600 and 4800 before its
+ * third attempt has any chance — three calls billed, two of them guaranteed to return nothing.
+ * Production had already shown this: `gap analysis failed for 869b0d4176e9` on this box.
+ *
+ * WHY A FLOOR RATHER THAN RETUNING FIVE CALL SITES. `max_tokens` is a ceiling, not a
+ * reservation — the bill is the tokens actually generated, so a call that finishes in 800 costs
+ * 800 whether the ceiling was 1,600 or 16,000. Raising it is therefore free on every call that
+ * already fits, and the five call sites keep expressing what their ANSWER needs rather than each
+ * carrying a private guess about how much this vendor's model thinks.
+ *
+ * It lifts, it never caps: a caller that asks for more keeps what it asked for. The model's own
+ * `max_output_tokens` is 393,216, so there is room above this by three orders of magnitude.
+ */
+const REASONING_FLOOR = 16_000;
 /**
  * DeepSeek chat completions, per https://api-docs.deepseek.com (read 2026-09-03).
  *
@@ -324,6 +353,31 @@ async function completeViaDeepseek(opts: CompleteOpts): Promise<string> {
   const key = await deepseekKey();
   const { prompt, model, maxTokens = 1600, temperature = 0.4 } = opts;
   let lastError: Error | null = null;
+  /**
+   * A FOURTH THING THAT DIFFERS, and it is the one that cost three production drafts.
+   *
+   * `max_tokens` here bounds REASONING PLUS ANSWER. On the Anthropic endpoint it bounds the
+   * answer alone, and every maxTokens in this repository was sized for that second meaning. A
+   * reasoning model handed 1600 spends 1600 thinking and emits nothing, and the call then looks
+   * exactly like a model that returned nothing.
+   *
+   * MEASURED 2026-09-24 against thread 77d6fe170b77 — the thread that produced
+   * `draft failed for 77d6fe170b77: empty completion` three times on 2026-09-21 — at
+   * src/commands/draft.ts's own settings (deepseek-v4-pro, temperature 0.5):
+   *
+   *     max_tokens=1600  finish_reason=length  content=0ch     reasoning_tokens=1600
+   *     max_tokens=4000  finish_reason=length  content=0ch     reasoning_tokens=4000
+   *     max_tokens=8000  finish_reason=stop    content=1093ch  reasoning_tokens=3014
+   *
+   * `effort: 'low'` was tested at 1600 and 4000 and changed nothing, so the budget is the lever.
+   *
+   * RAISED BY RETRY RATHER THAN BY A CONSTANT, deliberately. A fixed headroom is a guess that
+   * goes stale the next time the vendor retunes how much a model thinks — 4000 was not enough
+   * on one attempt and 3255 sufficed on another, so the figure is not even stable across calls
+   * of the same prompt. Growing the budget only when the endpoint says `length` costs nothing
+   * on the calls that already fit, and needs no number anybody has to maintain.
+   */
+  let budget = Math.max(maxTokens, REASONING_FLOOR);
 
   for (let attempt = 1; attempt <= config.llm.maxRetries; attempt++) {
     let res: Response;
@@ -335,7 +389,7 @@ async function completeViaDeepseek(opts: CompleteOpts): Promise<string> {
           authorization: `Bearer ${key}`
         },
         body: JSON.stringify({
-          model, max_tokens: maxTokens, temperature, stream: false,
+          model, max_tokens: budget, temperature, stream: false,
           messages: [{ role: 'user', content: prompt }]
         })
       });
@@ -375,11 +429,38 @@ async function completeViaDeepseek(opts: CompleteOpts): Promise<string> {
     }
 
     const json = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string | null; reasoning_content?: string | null } }>;
+      choices?: Array<{
+        finish_reason?: string | null;
+        message?: { content?: string | null; reasoning_content?: string | null };
+      }>;
+      usage?: { completion_tokens_details?: { reasoning_tokens?: number } };
     };
     const out = (json.choices?.[0]?.message?.content ?? '').trim();
-    if (!out) throw new LlmError('empty completion');
-    return out;
+    if (out) return out;
+
+    /**
+     * NO ANSWER — and the two reasons are not the same failure.
+     *
+     * `finish_reason: 'length'` means the budget ran out, which the operator can fix and which
+     * a retry with a bigger one usually fixes by itself. Anything else means the model answered
+     * with nothing, which a bigger budget will not change. Reporting both as `empty completion`
+     * is what put three causeless rows in data/redbot.db on 2026-09-21.
+     */
+    const finish = json.choices?.[0]?.finish_reason ?? null;
+    if (finish === 'length') {
+      const spent = json.usage?.completion_tokens_details?.reasoning_tokens ?? null;
+      if (attempt < config.llm.maxRetries) {
+        budget *= 3;
+        continue;   // not a backoff — nothing is overloaded, the answer simply had no room
+      }
+      throw new LlmError(
+        `the model spent its whole ${budget}-token budget on reasoning and never began the ` +
+        `answer (finish_reason=length${spent === null ? '' : `, reasoning_tokens=${spent}`}). ` +
+        'On DeepSeek max_tokens bounds reasoning AND answer, unlike the Anthropic endpoint. ' +
+        `Raise maxTokens at the call site above ${maxTokens}, or use a model that reasons less.`
+      );
+    }
+    throw new LlmError('empty completion');
   }
   throw lastError ?? new LlmError('exhausted retries');
 }
@@ -391,7 +472,54 @@ async function completeViaDeepseek(opts: CompleteOpts): Promise<string> {
 let warnedNonDeterministic = false;
 
 /* ------------------------------------------------------------------ */
+/**
+ * The provider this INSTALL is restricted to, or null when it is not restricted.
+ *
+ * Set per machine (this box sets it in /etc/systemd/system/redbot.service), never in the
+ * repository: it is a prohibition about one operator's costs, not a property of the product.
+ *
+ * READ PER CALL, not captured at module load. `config.llm.provider` is resolved once at import,
+ * and src/requirements.ts:101-105 records what that cost — the Setup screen and the spawned
+ * child disagreed about which provider was in use because one of them had frozen the answer.
+ *
+ * FAILS OPEN on an unrecognised value, deliberately, and this is the opposite of the reader in
+ * src/push/state.ts. There, junk would reach a spawn, so it fails closed. Here, a typo in a unit
+ * file would refuse every provider and brick generation with no obvious symptom — worse than the
+ * prohibition silently not applying, which at least leaves a working install.
+ */
+export function onlyProvider(): LlmProvider | null {
+  const raw = (process.env.REDBOT_ONLY_PROVIDER ?? '').trim();
+  return raw === 'cli' || raw === 'api' || raw === 'deepseek' ? raw : null;
+}
+
+/**
+ * Refuse a provider this install has forbidden.
+ *
+ * Thrown rather than logged: a warning on a metered path is a warning nobody reads until the
+ * bill arrives, and the whole point is that the forbidden path is one nobody CHOSE — `cli` is
+ * what src/config.ts:362-364 falls back to whenever `REDBOT_LLM` is unset, which is how this
+ * very box spent 2026-09-21 to 09-24 on the Claude CLI without anyone selecting it.
+ */
+export function assertProviderAllowed(provider: LlmProvider): void {
+  const only = onlyProvider();
+  if (!only || only === provider) return;
+  throw new LlmError(
+    `this install is restricted to the "${only}" model provider, and "${provider}" was requested. ` +
+    (provider === 'cli'
+      ? 'Note that "cli" is also what src/config.ts falls back to when REDBOT_LLM is unset or ' +
+        'unrecognised — so this is most likely a silent default, not a choice, and it would have ' +
+        'billed a Claude subscription. '
+      : '') +
+    `Set REDBOT_LLM=${only}, or lift the restriction by changing REDBOT_ONLY_PROVIDER ` +
+    '(on this machine: /etc/systemd/system/redbot.service).'
+  );
+}
+
 export async function complete(opts: CompleteOpts): Promise<string> {
+  /* Before anything else, including the warning below: a forbidden provider must not reach a
+     network call, a spawn, or even a message that implies it is about to run. */
+  assertProviderAllowed(config.llm.provider);
+
   /**
    * The Claude Code CLI (`claude -p`) exposes no temperature control, so a caller asking for
    * `temperature: 0` — Argus does, to make a certification pass reproducible — silently gets the

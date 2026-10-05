@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { computeHeadroom, commentsHaveSubstance } from '../gap.js';
 import { assessOpportunity, MIN_OPPORTUNITY_SCORE } from '../opportunity.js';
 import type { Thread, Gap, GapAnalysis } from '../types.js';
+import { policy } from '../policy.js';
 
 const gap = (kind: Gap['kind'], fillable = true): Gap => ({ kind, what: `a ${kind} gap`, fillable });
 
@@ -180,4 +181,121 @@ test('every assessment explains itself', () => {
     assert.ok(a.reasons.length > 0, 'an assessment with no reason is not reviewable');
     for (const r of a.reasons) assert.ok(r.length > 10);
   }
+});
+
+/* ---------------- age is asked at publish time, not at collection ---------------- */
+
+/**
+ * `src/select.ts:236` exists because `thread.ageMinutes / 60` is the age at COLLECTION and drifts
+ * from the moment the row is written. Its own docstring says the failure is silent: "The gate
+ * does not fail loudly; it passes something it was built to stop." It then claims "every caller
+ * that asked the old question now asks the right one" — and `src/opportunity.ts:127` was not
+ * migrated, so that sentence was false.
+ *
+ * MEASURED, 2026-09-28. Draft d_caf11a8a8127_mukjutef, r/webhosting "Best Practice to keep SEO
+ * Ranking after Domain Transfer":
+ *
+ *   collected 21:33:13, thread 4.95h old      -> selection saw 4.95h against a 72h ceiling: pass
+ *   decided   01:16:18, thread 8.67h old      -> gates.ts:256 saw 8.67h against warming's 8h: REFUSE
+ *
+ * The 3.72h between them is not pipeline latency — one cycle measured 29 minutes (00:47 read ->
+ * 01:16 decide). It is that `opportunity` scores the whole accumulated `threads` table (189 rows
+ * that cycle), so it reached back for a row collected in an earlier cycle after 25 sources died
+ * on a 429 wall and the fresh read returned "0 new". A stale row is exactly what a frozen age
+ * cannot describe.
+ */
+test('a thread that aged past the ceiling AFTER collection is penalised, not admitted', () => {
+  /* The EFFECTIVE ceiling, read the way the code reads it — src/opportunity.ts:159. Pinning
+     `maxThreadAgeHoursToPublish` here instead put a 70h thread in the fixture and made this test
+     fail on the ceiling rather than on the drift it exists to catch. */
+  const ceiling = Math.min(
+    policy.maxThreadAgeHoursToPublish.value,
+    policy.warmingMaxThreadAgeHours.value
+  );
+
+  /* 2h under the ceiling when the row was written, 3h over it now. Only a live age can tell. */
+  const fresh = thread({ ageMinutes: (ceiling - 2) * 60, collectedAt: new Date().toISOString() });
+  const stale = thread({
+    ageMinutes: (ceiling - 2) * 60,
+    collectedAt: new Date(Date.now() - 5 * 3_600_000).toISOString()
+  });
+
+  const a = assessOpportunity(fresh, analysis());
+  const b = assessOpportunity(stale, analysis());
+
+  assert.ok(!a.reasons.some((r) => /past the .*h ceiling/.test(r)),
+    `a ${ceiling - 2}h thread collected now is inside the ceiling: ${JSON.stringify(a.reasons)}`);
+  assert.ok(b.reasons.some((r) => /past the .*h ceiling/.test(r)),
+    `the SAME row read 5h later is ${ceiling + 3}h old and must be called out: ${JSON.stringify(b.reasons)}`);
+  assert.ok(b.score <= 10, `and capped: got ${b.score}`);
+});
+
+/**
+ * The second half of the same defect: the two ceilings disagreed about the same thread.
+ * Selection capped at `maxThreadAgeHoursToPublish` (72h, policy.ts:128) while the publish gate
+ * capped at `warmingMaxThreadAgeHours` (8h, policy.ts:195) via warming.ts:275. Every thread
+ * between those two numbers was drafted, certified, and then refused — work spent to produce
+ * something unpublishable by construction.
+ *
+ * This does not demand they be equal; it demands the gap be smaller than one loop cycle's drift,
+ * so a thread admitted by selection is still admissible when the gate re-asks ~30 minutes later.
+ */
+test('selection never admits a thread the publish gate will refuse', () => {
+  /**
+   * THE INVARIANT, not a tolerance. The previous version of this test allowed a 48h gap and
+   * justified it as "smaller than one loop cycle's drift" — a cycle measures 29 minutes, so the
+   * bound and its own reason disagreed by two orders of magnitude. A tolerance nobody can derive
+   * is a number that will be widened again the next time it fires.
+   *
+   * There is one question here — is this thread young enough that a comment gets read — and it
+   * had two unmeasured answers: `maxThreadAgeHoursToPublish` (72h, 'declared', policy.ts:128) at
+   * selection and `warmingMaxThreadAgeHours` (8h, 'provisional', policy.ts:195) at the gate. Two
+   * numbers for one question is the defect; every thread between them was work spent to produce
+   * something unpublishable by construction.
+   */
+  const effectiveSelectionCeiling = Math.min(
+    policy.maxThreadAgeHoursToPublish.value,
+    policy.warmingMaxThreadAgeHours.value
+  );
+  assert.equal(effectiveSelectionCeiling, policy.warmingMaxThreadAgeHours.value,
+    'whatever the two numbers are, selection must score against the tighter of them');
+  assert.ok(policy.warmingMaxThreadAgeHours.value <= policy.maxThreadAgeHoursToPublish.value,
+    'the warming ceiling is the tighter question and must stay inside the absolute bound');
+});
+
+/**
+ * THE SAME INVARIANT, ON THE OTHER DIMENSION. src/warming.ts:279-282 refuses a thread with more
+ * than `warmingMaxAnswers` existing answers, and `commentCount` appeared NOWHERE in either
+ * selection file — so selection had no opinion at all about a constraint the publish gate applies.
+ *
+ * MEASURED 2026-09-28, draft d_61dd17759ea3_mukls4ac, r/webdev "Can't get MAMP working with PHP 8+
+ * on Windows":
+ *
+ *   02:02:30  opportunity  11/201 worth contributing to   <- admitted, answers never checked
+ *   02:15:22  refused      warming:target, 10 answers already (max 8)
+ *
+ * The age half of this was fixed in bd3c13d and worked — the thread was 23.20h against the 24h
+ * ceiling. This is the branch of the same gate that bd3c13d did not reach.
+ */
+test('a thread with more answers than the warming gate allows is penalised at selection', () => {
+  const max = policy.warmingMaxAnswers.value;
+  const fresh = { collectedAt: new Date().toISOString(), ageMinutes: 60 };
+
+  const few = assessOpportunity(thread({ ...fresh, commentCount: max }), analysis());
+  const many = assessOpportunity(thread({ ...fresh, commentCount: max + 2 }), analysis());
+
+  assert.ok(!few.reasons.some((r) => /answers already/.test(r)),
+    `exactly ${max} answers is inside the gate: ${JSON.stringify(few.reasons)}`);
+  assert.ok(many.reasons.some((r) => /answers already/.test(r)),
+    `${max + 2} answers is what the gate refuses, so selection must say so too: ${JSON.stringify(many.reasons)}`);
+  assert.ok(many.score <= 10, `and capped: got ${many.score}`);
+});
+
+test('a thread whose answer count is unknown is not penalised for it', () => {
+  /* src/warming.ts:280 guards on `commentCount !== null` before comparing. Selection must make the
+     same distinction: "no answers recorded" is not "too many answers". */
+  const t = thread({ collectedAt: new Date().toISOString(), ageMinutes: 60 });
+  (t as { commentCount: number | null }).commentCount = null;
+  const a = assessOpportunity(t, analysis());
+  assert.ok(!a.reasons.some((r) => /answers already/.test(r)), JSON.stringify(a.reasons));
 });

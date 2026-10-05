@@ -62,6 +62,22 @@ db/.env
 !.env.test
 !*.env.test
 
+# A SECOND SHAPE THE BLOCK ABOVE MISSES: `<something>.env`, not `.env<something>`.
+#
+# `.env` and `.env.*` cover a dotfile and its suffixed variants. Neither matches `vault.env` —
+# the name does not begin with a dot, and `.env.*` requires the dot at the START. So the one file
+# on this machine that holds REDBOT_VAULT_KEY, the key to every stored secret in
+# data.credentials, was untracked-but-not-ignored: one `git add -A` from a PUBLIC remote.
+# Measured 2026-09-24: `git status` listed it as `??` alongside four other stray files, which is
+# exactly how a bulk add gets used.
+#
+# `*.env` matches `vault.env` and misses every deliberately committed template — `db/.env.example`
+# ends in `.example` and the two `.env.test` files end in `.test`, so neither is caught, and the
+# negations above keep standing either way. The `.bak*` line is for the timestamped copies a
+# rotation leaves behind: a superseded key is still a key.
+*.env
+*.env.bak*
+
 # Tokens and keys saved beside the work. Named by SHAPE rather than by exact filename, because
 # the file you are about to create is never the one you thought to list.
 *TOKEN*.txt

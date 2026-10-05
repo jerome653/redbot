@@ -1,0 +1,198 @@
+/**
+ * Whether an UNATTENDED run may publish a reply.
+ *
+ * Jerome, 2026-09-24: *"no user interaction all redbot engine"* — the engine is to post by
+ * itself. `src/commands/auto.ts` refuses to, by design and in its own words ("The line it will
+ * not cross: it never publishes"), so the decision that used to be a person at a prompt has to
+ * become a rule that can be read, tested, and pointed at afterwards.
+ *
+ * ---------------------------------------------------------------------------
+ * THE UNATTENDED PATH IS STRICTER THAN THE HUMAN ONE. THAT IS THE WHOLE DESIGN.
+ *
+ * src/gates.ts splits its findings in two: `blocks` (HARD_GATES — only `identity` today) refuse
+ * outright, and `advisories` are things a person "may overrule". That split assumes a person is
+ * looking: src/commands/reply.ts prints every advisory immediately above the prompt, so
+ * approving there IS an informed override.
+ *
+ * An unattended loop reads nothing and overrules nothing. So an advisory it cannot see must
+ * count as a refusal, not as a warning it silently accepts. Treating advisories as ignorable
+ * here would take the one safeguard that requires a reader and delete the reader.
+ *
+ * The same reasoning is already written into reply.ts for the console-approval path: a token
+ * typed in the browser "does not carry permission for advisories nobody showed anyone", and
+ * that path REFUSES rather than prompts, "because there is no terminal to prompt on". This is
+ * that argument applied to a loop, where there is not even a browser.
+ * ---------------------------------------------------------------------------
+ *
+ * WHY A PURE FUNCTION AND NOT A BRANCH INSIDE reply(). `reply()` drives a real Chrome through
+ * `publishComment(s.page, ...)`, so a test of the decision inside it needs a browser, a Reddit
+ * session and a thread — which is exactly why the rule would end up untested and drift. Every
+ * judgement lives here, where it costs nothing to enumerate the cases; reply() and auto.ts
+ * carry the plumbing and none of the judgement.
+ */
+import type { GateResult } from './gates.js';
+
+/** What the caller knows at the moment it must decide. */
+export interface UnattendedInput {
+  /** `REDBOT_AUTO_PUBLISH` as the process actually has it. Anything but "1" is off. */
+  enabled: string | undefined;
+  /** The draft's recorded certification verdict, exactly as `drafts.cert_verdict` holds it. */
+  certVerdict: string | null | undefined;
+  /** What src/gates.ts found for this publish, or null when the gates have not been run. */
+  gates: GateResult | null;
+}
+
+export interface UnattendedDecision {
+  publish: boolean;
+  /** Why, in words that go straight into the run log. Never empty. */
+  why: string;
+}
+
+/**
+ * The verdict a certification must carry before anything posts unattended.
+ *
+ * Measured 2026-09-24: of four certifications on record, four are REJECT — the three from
+ * 2026-09-14/18 on the old verbose prompt (20, 17 and 18 claims) and one from today on the
+ * rewritten prompt (4 claims, 4 fatal contradictions). So this gate is not theoretical
+ * throttling: at the time it was written it refused 100% of everything the pipeline had ever
+ * produced, and enabling unattended publishing changed the number of posts by zero.
+ *
+ * That is the intended rollout. The quality gate IS the throttle, and it opens only when a
+ * draft genuinely survives it.
+ */
+const PUBLISHABLE_VERDICT = 'CERTIFIED';
+
+/**
+ * `CERTIFIED`, not `PASS`.
+ *
+ * This constant read 'PASS' when the module was first written, and every test asserted 'PASS'
+ * against it — so the suite was green while the value could never have matched anything. The
+ * real domain is `src/argus/types.ts:191`: `type Verdict = 'CERTIFIED' | 'ESCALATE' | 'REJECT'`,
+ * persisted onto the draft at `src/types.ts:121`. Caught by reading the Draft type while wiring
+ * the publish path, not by a test — a constant compared only with itself proves nothing about
+ * whether it is right, which is the same defect this repository already paid for once with
+ * `deepseek-v4-flash`.
+ *
+ * ESCALATE IS NOT ENOUGH, and that is not a judgement call. `src/argus/certify.ts:7-9` defines
+ * it as the verdict for a draft that "needs a person who knows the subject" — a sentence that
+ * describes the exact thing an unattended loop does not have. Only CERTIFIED means every claim
+ * was adequately supported.
+ */
+
+/**
+ * Whether THIS INSTALL has been switched to autonomous publishing.
+ *
+ * One reader for the four places that otherwise refuse outright, so they cannot drift into
+ * disagreeing about it — a machine where the loop believes one thing and the job queue believes
+ * another is worse than either answer on its own.
+ *
+ * Read per call, never captured at import: src/requirements.ts:101-105 records what a value
+ * frozen at module load cost last time — the Setup screen and a spawned child disagreed about
+ * which provider was in use, because one of them had already decided.
+ *
+ * Exactly "1", so "0" and "false" cannot both read as on.
+ */
+export function autoPublishEnabled(): boolean {
+  return process.env.REDBOT_AUTO_PUBLISH === '1';
+}
+
+/**
+ * How good a verdict has to be before an unattended run will post. A DIAL, not a rewrite.
+ *
+ * Jerome, 2026-09-25, after four straight REJECTs and zero posts: "if the fact check stops it then
+ * make it less strict … but do A first."
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE DIAL IS HERE AND NOT IN THE FACT-CHECKER.
+ *
+ * The obvious way to "make it less strict" is to stop src/argus marking counterexamples fatal, so
+ * a REJECT becomes an ESCALATE. That would be the wrong place: the checker's findings are the most
+ * useful thing this system produces, and they would stop being recorded truthfully. Measured
+ * 2026-09-25, the REJECT that prompted this carried three counterexamples backed by
+ * `official-implementation` and `primary-documentation` against three claims that were simply
+ * FALSE ("comments require server-side processing", and the same for forms and search).
+ *
+ * So the checker keeps saying exactly what it found, in the certification tables, unchanged. What
+ * changes is only how high a bar THIS INSTALL requires before posting anyway. The verdict is still
+ * written, still auditable, and `publish.unattended` records which bar was in force.
+ * ---------------------------------------------------------------------------
+ *
+ *   CERTIFIED (default) — every claim adequately supported
+ *   ESCALATE            — also post what "needs a person who knows the subject"
+ *   ANY                 — also post what the checker REJECTED as contradicted or false
+ *
+ * `ANY` means publishing statements the fact-checker has positively shown to be wrong. It exists
+ * because the owner asked for it; it is not a recommendation, and the reason string says so on
+ * every post so the choice is visible in the record rather than buried in a unit file.
+ */
+type VerdictBar = 'CERTIFIED' | 'ESCALATE' | 'ANY';
+
+export function publishBar(): VerdictBar {
+  const raw = (process.env.REDBOT_PUBLISH_MIN_VERDICT ?? '').trim().toUpperCase();
+  return raw === 'ESCALATE' || raw === 'ANY' ? raw : 'CERTIFIED';
+}
+
+/** Does `verdict` clear the configured bar? */
+function clearsBar(verdict: string, bar: VerdictBar): boolean {
+  if (bar === 'ANY') return verdict === 'CERTIFIED' || verdict === 'ESCALATE' || verdict === 'REJECT';
+  if (bar === 'ESCALATE') return verdict === 'CERTIFIED' || verdict === 'ESCALATE';
+  return verdict === 'CERTIFIED';
+}
+
+export function unattendedPublishDecision(input: UnattendedInput): UnattendedDecision {
+  /* Off unless switched on explicitly, and only by exactly "1". A truthy-string check would
+     make REDBOT_AUTO_PUBLISH=0 and =false both mean ON, which is the shape of switch that gets
+     left on by accident. */
+  if (input.enabled !== '1') {
+    return { publish: false, why: 'unattended publishing is off (REDBOT_AUTO_PUBLISH is not "1")' };
+  }
+
+  /* No certification at all is not the same as a failed one, and neither may publish. A draft
+     that was never certified has had no claim checked against anything. */
+  const verdict = (input.certVerdict ?? '').trim().toUpperCase();
+  if (!verdict) {
+    return { publish: false, why: 'the draft carries no certification verdict — nothing has checked its claims' };
+  }
+  const bar = publishBar();
+  if (!clearsBar(verdict, bar)) {
+    return { publish: false, why: `certification verdict is ${verdict}, and this install requires ${bar === 'ANY' ? 'a verdict' : bar} to publish unattended` };
+  }
+
+  /* Gates not run is a refusal, not a pass. `evaluateGates` is what knows about duplicates,
+     locked and archived threads, the warming rules and the window — every live-page fact that
+     does not exist until the thread has been probed. */
+  if (!input.gates) {
+    return { publish: false, why: 'the publish gates were not run, so nothing is known about the thread' };
+  }
+  if (!input.gates.allow) {
+    const named = input.gates.blocks.map((b) => b.gate).join(', ') || 'unnamed';
+    return { publish: false, why: `a hard gate refused: ${named}` };
+  }
+
+  /**
+   * THE STRICTER RULE. An advisory is overrulable by a person who has read it; there is nobody
+   * here to read it. See the header.
+   *
+   * ONE EXCEPTION, and it is not a loophole: the `certification` advisory. gates.ts:384-390 pushes
+   * it for exactly the verdict already judged two checks above — a REJECT reaches here as an
+   * advisory because `certification` is not in HARD_GATES. Refusing on it as well would mean the
+   * bar above could never be lowered at all, since every ESCALATE and REJECT arrives carrying its
+   * own advisory. So it is dropped from this check and only this check: the verdict decides the
+   * verdict, once. Every OTHER advisory — duplicate, locked, archived, warming, window, health —
+   * still refuses, because each is a live fact about the thread that nothing here has judged.
+   */
+  const unread = input.gates.advisories.filter((b) => b.gate !== 'certification');
+  if (unread.length) {
+    const named = unread.map((b) => b.gate).join(', ');
+    return {
+      publish: false,
+      why: `${unread.length} advisory finding(s) nobody can overrule unattended: ${named}`
+    };
+  }
+
+  const caveat = verdict === PUBLISHABLE_VERDICT ? ''
+    : verdict === 'ESCALATE'
+      ? ' — ESCALATE means the checker wanted a person to confirm the facts and nobody did'
+      : ' — REJECT means the checker found this CONTRADICTED and it is being published anyway';
+  return { publish: true, why: `certification ${verdict} clears the ${bar} bar, no hard block, no other advisory${caveat}` };
+}

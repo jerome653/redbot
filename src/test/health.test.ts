@@ -94,7 +94,14 @@ test('a new account is a Caution', async () => {
 });
 
 test('the daily reply ceiling forces a Cooldown that no clock lifts', async () => {
-  const replies = [h('publish.ok', 600), h('publish.ok', 480), h('publish.ok', 360)];
+  /* One publish.ok per allowed reply, generated FROM the policy rather than three literals. The
+     assertion below already read `policy.maxRepliesPerDay.value`, so the fixture and the assertion
+     disagreed the moment the ceiling moved — the test was pinned to 3 in its data and to the policy
+     in its check. */
+  const replies = Array.from(
+    { length: policy.maxRepliesPerDay.value },
+    (_, i) => h('publish.ok', 600 - i * 20)
+  );
   const v = await state(replies);
   assert.equal(v.state, 'Cooldown');
   assert.equal(v.mayPublish, false);
@@ -109,14 +116,50 @@ test('replies are spaced — a Cooldown right after one, with a resume time', as
   assert.ok(v.resumeAt, 'spacing cooldown should say when it lifts');
 });
 
-test('a 429 cools the account off, and the cooldown expires', async () => {
-  const hot = await state([h('ratelimit', 5)]);
+test('a PUBLISH-path 429 cools the account off, and the cooldown expires', async () => {
+  const hot = await state([h('ratelimit', 5, { stage: 'publish' })]);
   assert.equal(hot.state, 'Cooldown');
   assert.equal(hot.mayPublish, false);
 
-  const cooled = await state([h('ratelimit', 31)]);
+  const cooled = await state([h('ratelimit', 31, { stage: 'publish' })]);
   assert.equal(cooled.state, 'Healthy');
   assert.equal(cooled.mayPublish, true);
+});
+
+test('a READ-path 429 is a Caution, not a Cooldown — it must not block publishing', async () => {
+  /**
+   * THE DEFECT THIS PINS, and it is why this install posted nothing for nine days.
+   *
+   * `ratelimit` was one kind covering two unrelated facts. src/commands/read.ts writes it from
+   * three places (:62, :90, :119) when COLLECTING is throttled; src/commands/reply.ts:126 writes
+   * it when the PUBLISH path is. health.ts filtered on the kind alone, so a throttle on reading
+   * produced `mayPublish: false`, gates.ts:363 turned that into a `health` block, :415 made it an
+   * advisory, and the unattended publish rule refused on it.
+   *
+   * The loop reads 12 subreddits and 13 searches per cycle, so it rate-limited ITSELF and then
+   * declined to post because it was rate-limited. Measured 2026-09-27: 50 `ratelimit` rows, all
+   * read-path (43 matching read.ts's two message shapes, 7 matching its third, ZERO carrying a
+   * permalink from reply.ts:126) against 0 `publish.attempt` rows ever. A cycle spends ~20
+   * minutes collecting and the cooldown is 30, so the window was never open when drafting
+   * finished.
+   *
+   * A read throttle is still worth SAYING — it stays a Caution, visible in the reasons, because
+   * losing the signal entirely would be the opposite mistake.
+   */
+  const v = await state([h('ratelimit', 5, { stage: 'read' })]);
+  assert.equal(v.state, 'Caution', 'a read throttle is worth noting');
+  assert.equal(v.mayPublish, true, 'but it must NOT stop a publish');
+  assert.ok(v.reasons.some((r) => /rate.?limit|throttl/i.test(r)),
+    'and the reason must still be reported, or the signal is lost rather than reclassified');
+});
+
+test('a legacy 429 with no stage is treated as read-path', async () => {
+  /* Every one of the 50 rows already on this install predates the `stage` field, and all 50 were
+     proven read-path: 0 carry a permalink (reply.ts:126's only shape) and `publish.attempt` has
+     never been written, so the publish path has never run. Defaulting an unstaged row to
+     `publish` would keep every one of them blocking forever, on a fact none of them records. */
+  const v = await state([h('ratelimit', 5)]);
+  assert.equal(v.mayPublish, true, 'an unstaged legacy row must not block publishing');
 });
 
 test('one observed removal blocks posting for a day', async () => {

@@ -24,6 +24,11 @@ import { draftPrompt } from '../prompts.js';
 import { lintDraft } from '../disclosure.js';
 import { checkNovelty } from '../novelty.js';
 import { assessQuality } from '../quality.js';
+import { draftTimeBlocks } from '../draft-gate.js';
+import { rankCandidates } from '../pick.js';
+import { warmingStage } from '../warming.js';
+import { counters } from '../health.js';
+import { draftCorrection } from '../prompts.js';
 import { findReference } from '../corpus.js';
 import { config, selectedAccount } from '../config.js';
 import { trace } from '../trace.js';
@@ -58,10 +63,19 @@ export async function draft(threadIdArg?: string): Promise<number> {
 
   const drafted = new Set((await loadDrafts()).map((d) => d.threadId));
 
-  const candidates = assessments
-    .filter((a) => a.verdict === 'contribute')
-    .filter((a) => (threadIdArg ? a.threadId === threadIdArg : !drafted.has(a.threadId)))
-    .sort((a, b) => b.score - a.score);
+  /**
+   * RE-DERIVED, not read. This filtered on the STORED `verdict` and sorted by the STORED `score`,
+   * so the pick was the highest-scoring assessment ever recorded for an un-drafted thread rather
+   * than the highest-scoring one still true. src/store.ts:141-144 upserts and never deletes, and
+   * `assessed_at` is on the row but nothing read it.
+   *
+   * MEASURED 2026-09-28 03:42 (d_d61f816d4c59_mukopknx): a row saying 'contribute' score 90,
+   * written 6h earlier, won over both candidates the same run's `opportunity` had just found — for
+   * a thread that was 75.98h old with 20 answers by the time the decision ran. The pool it came
+   * from held 325 assessments, 40 of them 'contribute', 21 assessed over 24h earlier, and its top
+   * two scored 100 on 2026-09-01 — 647.5 hours before the pick. See src/pick.ts.
+   */
+  const candidates = rankCandidates({ assessments, threads, gaps, drafted, threadId: threadIdArg });
 
   const pick = candidates[0];
   if (!pick) {
@@ -113,16 +127,20 @@ export async function draft(threadIdArg?: string): Promise<number> {
   );
   say.step(`Drafting with ${config.llm.draftModel}…`);
 
+  /* Hoisted so the rewrite below can re-send it with the failure appended, rather than rebuilding
+     it from the same five arguments and risking the two drifting apart. */
+  const basePrompt = draftPrompt(
+    thread,
+    pick.thesis?.whyThread ?? 'a gap was identified in the discussion',
+    pick.thesis?.whatNew ?? 'answer the question directly',
+    { question: gap.question, covered: gap.covered, gaps: gap.gaps },
+    reference
+  );
+
   let raw: string;
   try {
     raw = await complete({
-      prompt: draftPrompt(
-        thread,
-        pick.thesis?.whyThread ?? 'a gap was identified in the discussion',
-        pick.thesis?.whatNew ?? 'answer the question directly',
-        { question: gap.question, covered: gap.covered, gaps: gap.gaps },
-        reference
-      ),
+      prompt: basePrompt,
       model: config.llm.draftModel,
       maxTokens: 1600,
       temperature: 0.5
@@ -158,16 +176,115 @@ export async function draft(threadIdArg?: string): Promise<number> {
     return 0;
   }
 
-  const body = str(parsed.body);
-  const contribution = {
+  let body = str(parsed.body);
+  let contribution = {
     whyThread: str(parsed.whyThread),
     whatNew: str(parsed.whatNew),
     whyNotSilent: str(parsed.whyNotSilent)
   };
 
-  const lint = lintDraft(body);
-  const novelty = checkNovelty(body, contribution.whatNew, gap.covered);
-  const quality = assessQuality(body, { thread });
+  let lint = lintDraft(body);
+  let novelty = checkNovelty(body, contribution.whatNew, gap.covered);
+  let quality = assessQuality(body, { thread });
+
+  /**
+   * ONE REWRITE WHEN THE CRAFT GATE WOULD BLOCK THIS DRAFT.
+   *
+   * `assessQuality` has always been called here, and its block-severity issues have always been
+   * recorded — `qualityOk` below at the saveDraft call, `qualityBlocks` on the trace — and the
+   * draft was then saved regardless. src/gates.ts:137 turns each of those same issues into a
+   * `quality:<code>` gate and src/autopublish.ts:184 refuses on any advisory, so the refusal was
+   * knowable at this line and was instead discovered several minutes and one certification later.
+   *
+   * MEASURED 2026-09-28, draft d_61dd17759ea3_mukls4ac, r/webdev:
+   *   02:03:07  draft saved, quality:generic already recorded against it
+   *   02:10:06  argus REJECT
+   *   02:15:22  refused — quality:generic, warming:target
+   *
+   * ONE attempt, not a loop: a second failure is evidence about the thread or the prompt, and
+   * retrying until it passes would spend an unbounded number of model calls hiding that. The
+   * first draft is KEPT when the rewrite does not actually clear the gate, so this can improve a
+   * draft and cannot degrade one.
+   */
+  /**
+   * ALL FOUR families the publish gate derives from the draft, not just craft. src/draft-gate.ts
+   * mirrors gates.ts:129-145 and :291-293 and is cross-checked against `evaluateGates` itself, so
+   * this cannot quietly become a second opinion — which is precisely how `assessOpportunity` and
+   * `isWarmingTarget` came to disagree about thread age and then about answer count.
+   */
+  const acct = selectedAccount();
+  /* One call, not one per field: src/health.ts:174 loads the whole history and the observation set
+     on every invocation, so reading two fields from two calls would read both twice. `zone` is
+     passed because the daily counts are bucketed by the account's own timezone (health.ts:169). */
+  const health = await counters(acct?.handle ?? null, new Date(), undefined, acct?.timezone);
+  const warmingNow = warmingStage({ karma: health.karma, accountAgeDays: health.accountAgeDays });
+  /**
+   * This account's own recent comments, most recent first, for the repetition family.
+   *
+   * `decidedAt ?? createdAt` because `decidedAt` is when it actually went out and is what a
+   * reader would have seen in order; `createdAt` is the fallback for a row written before the
+   * field existed rather than a reason to drop the comment from the comparison.
+   *
+   * Filtered to THIS account. A template is only recognisable when the same name carries it, and
+   * comparing a draft against a different account's history would block on a repetition no reader
+   * could ever see.
+   */
+  const previousBodies = (await loadDrafts())
+    .filter((d) => d.status === 'published' && d.body
+      && (acct?.handle ? d.account === acct.handle : true))
+    .sort((a, b) => (b.decidedAt ?? b.createdAt).localeCompare(a.decidedAt ?? a.createdAt))
+    .map((d) => d.body);
+
+  let blocked = draftTimeBlocks({
+    body, thread, warming: warmingNow.warming, noveltyIssues: novelty.issues, previousBodies
+  });
+  if (blocked.length) {
+    say.warn(`The publish gate would refuse this draft: ${blocked.map((b) => b.gate).join(', ')} — rewriting once.`);
+    try {
+      const second = await complete({
+        prompt: basePrompt + draftCorrection(blocked),
+        model: config.llm.draftModel,
+        maxTokens: 1600,
+        temperature: 0.5
+      });
+      const reparsed = extractJson<RawDraft>(second);
+      const newBody = str(reparsed.body);
+      if (reparsed.contribute === true && newBody) {
+        const newQuality = assessQuality(newBody, { thread });
+        const newNovelty = checkNovelty(newBody, str(reparsed.whatNew), gap.covered);
+        const stillBlocked = draftTimeBlocks({
+          body: newBody, thread, warming: warmingNow.warming, noveltyIssues: newNovelty.issues,
+          previousBodies
+        });
+        if (stillBlocked.length < blocked.length) {
+          body = newBody;
+          contribution = {
+            whyThread: str(reparsed.whyThread),
+            whatNew: str(reparsed.whatNew),
+            whyNotSilent: str(reparsed.whyNotSilent)
+          };
+          lint = lintDraft(body);
+          novelty = newNovelty;
+          quality = newQuality;
+          say.ok(`Rewrite cleared ${blocked.length - stillBlocked.length} of ${blocked.length}.`);
+          await record('draft.rewrite', `rewrote draft for ${thread.id} after ${blocked.map((b) => b.gate).join(', ')}`, {
+            threadId: thread.id,
+            fixed: blocked.filter((b) => !stillBlocked.some((s2) => s2.gate === b.gate)).map((b) => b.gate),
+            remaining: stillBlocked.map((b) => b.gate)
+          });
+          blocked = stillBlocked;
+        } else {
+          say.warn('Rewrite did not clear the gate — keeping the first draft.');
+        }
+      }
+    } catch (e) {
+      /* A failed rewrite must not lose the draft that already exists. Structural, so it is
+         recorded rather than swallowed. */
+      const msg = e instanceof Error ? e.message : String(e);
+      say.warn(`Rewrite failed (${msg}) — keeping the first draft.`);
+      await record('error', `draft rewrite failed for ${thread.id}: ${msg}`);
+    }
+  }
 
   const saved: Draft = {
     id: `d_${thread.id}_${Date.now().toString(36)}`,

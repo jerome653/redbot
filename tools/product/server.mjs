@@ -50,6 +50,10 @@ import { spawn } from 'node:child_process';
 import { exitPosture } from './exit-posture.mjs';
 import { fleetProblems } from './fleet-posture.mjs';
 import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
+/* The order a browser start follows. Out here for the reason the module's header gives: the
+   decisions were unreachable without spawning Chrome, which is why nothing tested them and
+   why the two halves of detection could both be green while nothing connected them. */
+import { startAlignedBrowser } from './browser-start.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -126,7 +130,11 @@ let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccou
     dbStatus = null, dbPing = null, sourcesApi = null, requirementsApi = null, configApi = null,
     updateApi = null, pushApi = null, pushStateApi = null, pushSchedulerApi = null,
     pushClientApi = null, pushAccountsApi = null, dependenciesApi = null, profilesApi = null,
-    proxiesApi = null, relayApi = null, alignApi = null, exitApi = null, webshareApi = null;
+    proxiesApi = null, relayApi = null, alignApi = null, exitApi = null, webshareApi = null,
+    /* The three this change adds: ask the browser where it is, write that down, read it back. */
+    detectApi = null, detectionApi = null, locationsApi = null,
+    /* src/llm.ts, for `onlyProvider()` — an install's per-machine provider prohibition. */
+    llmApi = null;
 
 /**
  * The push scheduler lives HERE rather than in the Electron shell.
@@ -147,7 +155,7 @@ let pushScheduler = null;
  */
 let vaultApi = null;
 try {
-  const [d, a, db, src, cred, ports, dbAccounts, machine, pages, sum, pre, dbProxies, relay, align, relayCore, proxyCred, webshare] = await Promise.all([
+  const [d, a, db, src, cred, ports, dbAccounts, machine, pages, sum, pre, dbProxies, relay, align, relayCore, proxyCred, webshare, detect, dbLocations] = await Promise.all([
     import('../../dist/console-data.js'),
     import('../../dist/console-accounts.js'),
     import('../../dist/db.js'),
@@ -170,7 +178,11 @@ try {
     import('../../dist/proxy/credential.js'),
     /* Webshare: an OPTIONAL convenience — turning a stored API key into a US-proxy list the exit
        form can be filled from. No network happens here; only when /api/webshare/proxies is asked. */
-    import('../../dist/proxy/webshare.js')
+    import('../../dist/proxy/webshare.js'),
+    /* Where the browser ACTUALLY is, read from the browser itself. Cheap to load for the same
+       reason align.js is: it imports nothing heavy until a detection actually runs. */
+    import('../../dist/proxy/detect.js'),
+    import('../../dist/db/locations.js')
   ]);
   domain = d.loadConsoleDomain;
   consoleAccounts = d.loadConsoleAccounts;
@@ -236,6 +248,21 @@ try {
      Read-only and vendor-optional — see src/proxy/webshare.ts for why it is not on any run path. */
   webshareApi = { fetchUsProxies: webshare.fetchUsProxies };
   /**
+   * THE MEASUREMENT, AND THE RECORD OF IT — the two halves this console had but never called.
+   *
+   * `detectFromBrowser` and `recordAccountDetection` both existed, both were tested, and both had
+   * ZERO production callers: every reference to either outside its own definition was a comment or
+   * a test. Meanwhile 0018 cleared every stored zone and src/window.ts refuses an account whose
+   * zone is NULL, so the shipped state was a fleet that stopped with no in-product way to start it
+   * again. Binding them here is what closes that: a browser is measured on every start, the
+   * measurement is written down, and the zone comes back from evidence rather than from a form.
+   */
+  detectApi = { fromBrowser: detect.detectFromBrowser, DetectionError: detect.DetectionError };
+  detectionApi = { record: a.recordAccountDetection };
+  /* Read-back, for /api/state. The console renders `location` — the measurement and when it was
+     taken — and must never fall back to accounts.timezone, which may still hold something typed. */
+  locationsApi = { latest: (handle) => dbLocations.latestAccountLocation(db.getPool(), handle) };
+  /**
    * Which account this machine acts as (migration 0015).
    *
    * This is the control that makes the desktop app usable at all: `selectedAccount()` used to read
@@ -271,6 +298,9 @@ try {
     draftCounts: () => pages.draftCounts(db.getPool()),
     funnel: () => pages.threadFunnel(db.getPool()),
     checkpoints: () => pages.checkpointSummary(db.getPool()),
+    /* COUNTs and MAXes only — see src/db/pages.ts. Safe on the fifteen-second pulse, which is
+       the whole reason it is not a /api/state read. */
+    fingerprint: () => pages.dataFingerprint(db.getPool()),
     clamp: pages.clampPage,
     DEFAULT_PAGE: pages.DEFAULT_PAGE
   };
@@ -306,6 +336,9 @@ try {
    */
   configApi = (await import('../../dist/config.js'));
   updateApi = (await import('../../dist/update.js'));
+  /* Read the provider prohibition from the SAME module that enforces it at generation time, so
+     the Setup screen cannot offer a provider src/llm.ts would then refuse. */
+  llmApi = (await import('../../dist/llm.js'));
   /* Dashboard sync: the same module the CLI uses, so the Setup screen and `redbot push` cannot
      disagree about where the endpoint is or which secret name holds a token. */
   pushApi = (await import('../../dist/push/index.js'));
@@ -346,6 +379,30 @@ const meta = (rel) => {
 /* ------------------------------------------------------------------ *
  * state
  * ------------------------------------------------------------------ */
+/**
+ * One account's latest detection, in the five fields the console renders — or null.
+ *
+ * NULL MEANS NEVER MEASURED, and it is a real answer rather than a gap. It is deliberately not
+ * filled in from `accounts.timezone`: that column may still hold whatever was typed before 0018
+ * cleared it, and echoing it back here would put the old guess on screen wearing a measurement's
+ * clothes — which is the precise indistinguishability this whole change removes.
+ *
+ * `at` is normalised to an ISO string. src/db.ts hands the column back as a Date (it carries the
+ * timestamp CHECK marker), JSON.stringify would serialise that to the same text anyway, and the
+ * console calls Date.parse on it — so this states the contract rather than relying on three
+ * layers agreeing by accident.
+ */
+function locationOf(row) {
+  if (!row) return null;
+  return {
+    timezone: row.timezone,
+    at: row.at instanceof Date ? row.at.toISOString() : (row.at ?? null),
+    countryCode: row.countryCode ?? null,
+    city: row.city ?? null,
+    via: row.via ?? null
+  };
+}
+
 async function buildState(opts = {}) {
   /**
    * The domain, from Postgres. These were nine reads of data/*.json and data/*.jsonl —
@@ -516,6 +573,14 @@ async function buildState(opts = {}) {
       permalink: d.permalink,
       body: d.body,
       createdAt: d.createdAt,
+      /**
+       * WHO WOULD POST IT. `drafts.account` has existed since 2026-07-27 and this payload never
+       * carried it, so Review could not be filtered or even grouped by account while the console
+       * ran eight of them. Nullable on purpose and sent as null rather than omitted: a draft
+       * written before the column existed has no owner, and showing one as unassigned is the
+       * truth, where inventing the currently-selected account would be a guess printed as a fact.
+       */
+      account: d.account ?? null,
       model: d.model,
       lintIssues: d.lintIssues || [],
       hasDisclosure: !!d.hasDisclosure,
@@ -578,6 +643,26 @@ async function buildState(opts = {}) {
 
   /* union: everything configured, plus anything the logs name that nobody configured */
   const handles = [...new Set([...configured.map((a) => a.handle), ...namedInLogs])];
+
+  /**
+   * The latest detection per account, read once for the whole page rather than per card.
+   *
+   * The console renders `a.location` and, until this, /api/state never served the key — so every
+   * card read "timezone never measured" whatever the ledger held. One small indexed query per
+   * handle, issued together: account_locations_by_handle is (handle, at DESC), which is exactly
+   * this lookup.
+   *
+   * A failure is swallowed per account, on purpose. A console that cannot reach the database must
+   * still render, and a missing location reads as "never measured" — which is the honest answer
+   * when redbot cannot tell you otherwise.
+   */
+  const locations = new Map();
+  if (locationsApi) {
+    await Promise.all(handles.map(async (h) => {
+      try { const row = await locationsApi.latest(h); if (row) locations.set(h, row); }
+      catch { /* unreadable for this account — the card says never measured */ }
+    }));
+  }
   const accounts = handles.map((handle) => {
     const cfg = configured.find((c) => c.handle === handle) || null;
     /**
@@ -599,6 +684,18 @@ async function buildState(opts = {}) {
       knows: cfg ? cfg.knows || [] : [],
       subreddits: cfg ? cfg.subreddits || [] : [],
       timezone: cfg ? cfg.timezone : null,
+      /**
+       * WHERE THIS ACCOUNT'S BROWSER SAID IT WAS, and when it said so.
+       *
+       * Separate from `timezone` above and not a replacement for it. That column is what
+       * src/window.ts and src/health.ts read to decide scheduling; this is the evidence behind
+       * it. They can legitimately differ for one moment — a detection lands in the ledger and
+       * the column in the same transaction, but a card rendered from a stale seed-file fallback
+       * would show the old column beside the new measurement, and seeing that is the point.
+       *
+       * `{ timezone, at, countryCode, city, via } | null`, and null means never measured.
+       */
+      location: locationOf(locations.get(handle)),
       quietHours: cfg ? cfg.quietHours : null,
       dailyCeiling: cfg ? cfg.dailyCeiling : null,
       profileDir: cfg ? cfg.profileDir : null,
@@ -868,7 +965,13 @@ async function buildState(opts = {}) {
 
     /* The last forty events. `history` is already bounded to that by the scope passed to the
        domain read, so this slice is a safety net rather than the thing doing the limiting. */
-    activity: history.slice(-40).reverse().map((h) => ({ ts: h.ts, kind: h.kind, summary: h.summary })),
+    /* `account` is on every history row in the schema and was dropped here, so the activity
+       feed could not say which of eight accounts an entry belonged to. Null stays null — an
+       unattributed event is a real category (src/health.ts counts them as unattributedEvents24h)
+       and must not be folded into whoever is selected. */
+    activity: history.slice(-40).reverse().map((h) => ({
+      ts: h.ts, kind: h.kind, summary: h.summary, account: h.account ?? null
+    })),
 
     /**
      * Where the numbers on this screen came from.
@@ -1510,7 +1613,35 @@ let selectedOperator = process.env.REDBOT_OPERATOR || configApi.storedOperatorSe
  * the screen would name one provider while the child ran another.
  */
 const PROVIDERS = ['cli', 'api', 'deepseek'];
-let selectedProvider = PROVIDERS.includes(process.env.REDBOT_LLM) ? process.env.REDBOT_LLM : 'cli';
+
+/**
+ * The Setup screen's provider choice, and it OUTLIVES THE PROCESS.
+ *
+ * THE DEFECT THIS FIXES. This was `let selectedProvider = <env> ?? 'cli'` and nothing wrote it
+ * down. `launch-redbot.sh` runs `npm start`, which exports no `REDBOT_LLM`, so every restart of
+ * the desktop app silently reset the choice to `cli` — the one provider that cannot raise the
+ * `empty completion` thrown at src/llm.ts:292 and :381. Measured 2026-09-24: the running app's
+ * environ carried no `REDBOT_LLM` while the database held three such failures from 2026-09-21,
+ * naming a provider that by then existed nowhere on the machine.
+ *
+ * PRECEDENCE, and each step is deliberate:
+ *   1. `REDBOT_LLM` — an explicit environment override still wins, so a terminal run and the
+ *      test suite can pin the provider without touching the operator's saved choice.
+ *   2. the saved choice — `data/push-state.json`, beside `syncUrl`, which src/push/state.ts
+ *      persists on exactly this argument: a desktop app has no shell to export a variable in.
+ *   3. `cli` — the unmetered default. Unchanged.
+ *
+ * Reading through `pushStateApi` rather than the file: one implementation validates the value
+ * (src/push/state.ts drops anything outside PROVIDERS), and it is the same reader `redbot push`
+ * uses, so the console and the CLI cannot disagree about what is stored.
+ */
+const savedProvider = () => {
+  try { return pushStateApi ? pushStateApi.readPushState().llmProvider ?? null : null; }
+  catch { return null; }   // an unreadable state file is "nothing chosen", never a crash on boot
+};
+let selectedProvider = PROVIDERS.includes(process.env.REDBOT_LLM)
+  ? process.env.REDBOT_LLM
+  : (savedProvider() ?? 'cli');
 
 /** Last answer from the update check, so the page asking on every load costs one request a day. */
 /** Last dependency scan. Locating executables spawns processes; see the /api/dependencies route. */
@@ -1877,6 +2008,11 @@ async function createAccount(body) {
   return createAccountImpl(body);
 }
 
+/* Where a covered browser is sent once it has been measured and covered — and never before.
+   Module scope because both the spawn path and `startAlignedBrowser` reason about it, and a
+   second copy of this string is how one of them would end up pointing somewhere else. */
+const REDDIT_LOGIN = 'https://www.reddit.com/login';
+
 /**
  * Opens that account's own Chrome. Detached — closing the console must not close it.
  *
@@ -1905,9 +2041,30 @@ async function launchChrome(handle, { background = false } = {}) {
    * before a window is opened that would look like success.
    */
   const [live] = await portStatusImpl([a]);
-  if (live && live.ours) {
-    return { ok: true, handle, port: a.debugPort, profileDir: a.profileDir, alreadyRunning: true };
-  }
+  /**
+   * ALREADY OPEN IS NOT ALREADY DONE — and this line used to say it was.
+   *
+   * It read:
+   *
+   *     if (live && live.ours) return { ok: true, ..., alreadyRunning: true };
+   *
+   * which returned from HERE, above every step that follows: the exit, the detection, the
+   * persistence, both country checks, the timezone and locale cover and the WebRTC fence. An open
+   * browser was reported as a successful open having been measured by nothing, and `/api/account/open`
+   * forwarded that verdict to the console unchanged.
+   *
+   * The gap pre-dates the detection work. Migration 0018 is what turned it into a trap: it sets
+   * every `accounts.timezone` NULL, src/window.ts refuses a NULL zone with `rule: 'bad-timezone'`,
+   * and the ONLY production code that writes a zone back is the detect-then-persist path below.
+   * So an account whose Chrome happened to be open could never become schedulable again, and the
+   * remedy — close it and press the button — is written down nowhere a person would find it.
+   *
+   * So it is a FLAG now, not a return. Everything below runs exactly as it does for a browser
+   * redbot opened. The only thing skipped is the spawn, because there is nothing to spawn; the two
+   * ownership consequences of not having spawned it (it is not closed on a refusal, and it is not
+   * navigated) live in startAlignedBrowser next to the order they qualify, rather than here.
+   */
+  const alreadyRunning = !!(live && live.ours);
 
   /**
    * A port somebody else is holding is MOVED OFF, not reported.
@@ -1991,21 +2148,25 @@ async function launchChrome(handle, { background = false } = {}) {
   const proxied = !!(exit && exit.proxied && exit.ok);
 
   /**
-   * THE TIMEZONE MUST AGREE WITH THE ADDRESS — checked here, before a window exists.
+   * THE TIMEZONE MUST AGREE WITH THE ADDRESS — and that check has MOVED, deliberately.
    *
-   * Deliberately not after the browser is up. Finding out then would leave two bad options: close
-   * a window in the operator's face, or let a browser announcing Manila reach Reddit from a US
-   * address. The second cannot be undone for that account, and the mismatch is one of the most
-   * reliable proxy tells in use — the IP comes from routing and the timezone from the machine, so
-   * changing only the IP manufactures a contradiction a single line of JavaScript reads.
+   * It used to stand here, before `spawn`, comparing `a.timezone` from the database against
+   * `exit.proxy.country`. Both of its inputs were wrong for the job. The zone was whatever had
+   * been typed into the column — 0018 has since set it NULL for every account, so this check now
+   * refuses the entire fleet on a value nobody measured — and the country came from the exit
+   * RECORD, which is a statement about what was paid for rather than about where this browser
+   * actually is. Comparing two stored values can only catch a typing mistake. It cannot catch the
+   * failure that matters: a proxy configured at the relay and a browser that is not going through
+   * it look identical from here, and only the browser can say which happened.
    *
-   * Only for proxied accounts. An unproxied one genuinely IS where its clock says it is, and
-   * overriding anything there would create the very mismatch this refuses.
+   * So the browser is opened on about:blank, ASKED where it is, and the answer is what the check
+   * is fed. The old note said finding out after the window exists leaves two bad options — close
+   * it in the operator's face, or let a browser announcing Manila reach Reddit. There is now a
+   * third, and it is the one taken: the window is closed, and it never went anywhere. That is
+   * only true because the login URL left the command line on BOTH paths; see the spawn below.
+   *
+   * See `startAlignedBrowser`, which runs the whole order for proxied and unproxied alike.
    */
-  if (proxied && alignApi) {
-    const no = alignApi.refusal(a.handle, a.timezone, exit.proxy.country, exit.proxy.region);
-    if (no) return { ok: false, error: no };
-  }
 
   /**
    * OFF-SCREEN, NOT HEADLESS — and the difference is the whole product.
@@ -2030,7 +2191,6 @@ async function launchChrome(handle, { background = false } = {}) {
      believes is not visible, and a minimised one qualifies. */
   const BACKGROUND = ['--disable-backgrounding-occluded-windows',
                       '--disable-renderer-backgrounding'];
-  const LOGIN = 'https://www.reddit.com/login';
   try {
     /**
      * A PROXIED browser starts on `about:blank`, and that is the load-bearing difference.
@@ -2043,67 +2203,78 @@ async function launchChrome(handle, { background = false } = {}) {
      *
      * An unproxied browser keeps the login URL on the command line exactly as it always had.
      */
-    const child = spawn(bin, [
-      `--remote-debugging-port=${a.debugPort}`,
-      `--user-data-dir=${dir}`,
-      '--no-first-run', '--no-default-browser-check',
-      ...(proxied ? [`--proxy-server=http://127.0.0.1:${exit.relayPort}`] : []),
-      ...(background ? BACKGROUND : []),
-      proxied ? 'about:blank' : LOGIN
-    ], { detached: true, stdio: 'ignore' });
-    child.unref();
+    if (!alreadyRunning) {
+      const child = spawn(bin, [
+        `--remote-debugging-port=${a.debugPort}`,
+        `--user-data-dir=${dir}`,
+        '--no-first-run', '--no-default-browser-check',
+        ...(proxied ? [`--proxy-server=http://127.0.0.1:${exit.relayPort}`] : []),
+        ...(background ? BACKGROUND : []),
+        /* ALWAYS about:blank now, proxied or not — this line used to read
+           `proxied ? 'about:blank' : LOGIN`. An unproxied browser went straight to Reddit off the
+           command line, which meant the one path that had never been covered was also the one
+           that arrived at Reddit before redbot could look at it. Nothing can be measured, checked
+           or refused about a browser that is already there. */
+        'about:blank'
+      ], { detached: true, stdio: 'ignore' });
+      child.unref();
+    }
 
     const said = { ok: true, handle, port: a.debugPort, profileDir: a.profileDir,
+                   /* Kept because electron/main.mjs branches on it — a window boot did not open is
+                      one boot must not minimise or close. It now travels WITH a measurement rather
+                      than instead of one. */
+                   ...(alreadyRunning ? { alreadyRunning: true } : {}),
                    ...(background ? { background: true } : {}),
                    ...(movedFrom ? { movedFrom } : {}) };
 
-    if (!proxied) {
-      /**
-       * ASKING FOR A PORT IS NOT GETTING ONE.
-       *
-       * This path used to return the instant `spawn` was called, reporting `port: a.debugPort`
-       * because that is the number it passed on the command line. But this file already documents
-       * the thing that makes that a lie: "Chrome given an occupied --remote-debugging-port does
-       * NOT fail: it starts, silently gives up the port to whoever holds it, and the window looks
-       * perfectly normal." So a launch could log `opened on 9223`, the record could say 9224, and
-       * nothing was listening on either — which is what a machine reported on 2026-08-13, where
-       * `statusForAccounts` then probed the recorded port, found it free, and answered "this
-       * account's browser is not running" seventeen times while the browser was up.
-       *
-       * The proxied path below already waited for the port to answer before doing anything with
-       * it. It waits here too now: same helper, same bound, so the report is of a port that
-       * actually answered rather than one that was requested.
-       */
-      const answered = await waitForDebugPort(`http://127.0.0.1:${a.debugPort}`);
-      if (!answered) {
-        return {
-          ok: false,
-          error: `${a.handle}'s browser was opened but nothing answered on port ${a.debugPort} ` +
-                 `within 30s. Chrome yields a debugging port it cannot take, so another program ` +
-                 `probably holds it. The window is open; redbot cannot drive it.`,
-          handle, port: a.debugPort, profileDir: a.profileDir, unverified: true
-        };
-      }
-      return { ...said, verified: true };
-    }
-
     /**
-     * Cover it, then navigate. A failure here CLOSES the browser rather than leaving it.
+     * ONE ORDER FOR BOTH PATHS, and the order is the design.
      *
-     * An uncovered window sitting on about:blank behind a US address is the worst of both states:
-     * it looks like the feature worked, and the first thing a person does with it is sign in. We
-     * spawned it, so we own closing it.
+     * wait for the port -> DETECT -> persist -> align from what was DETECTED -> open Reddit.
+     *
+     * Detection comes before any `Emulation.setTimezoneOverride`, and that sequencing is not a
+     * detail: override first and the lookup reads back the override, so the measurement would be
+     * of redbot's own assertion rather than of the exit. It would agree with itself every time and
+     * mean nothing.
+     *
+     * This used to be two branches. The unproxied one returned here with `verified: true` the
+     * moment its port answered — no detection, no alignment, no WebRTC fence — and the proxied one
+     * did all the covering. Every account on this machine is currently unproxied, so in practice
+     * the covering ran for nobody.
      */
     const endpoint = `http://127.0.0.1:${a.debugPort}`;
-    const covered = await coverProxiedBrowser(endpoint, a, exit);
-    if (!covered.ok) {
-      await stopBrowserImpl(a).catch(() => {});
-      return { ok: false, error: covered.error };
-    }
-    /* Said back so the caller can show WHICH address this window appears from and WHAT clock it
-       is telling, rather than the operator having to trust that a flag went on. */
-    return { ...said, relayPort: exit.relayPort, exitIp: exit.exitIp,
-             timezone: a.timezone, pagesAligned: covered.pagesAligned };
+    /**
+     * The real dependencies. Every one is a compiled module this server loaded at start-up, and
+     * each is passed as a function rather than as the api object so the module cannot reach past
+     * what it was given — which is what makes the order testable against fixtures.
+     *
+     * `close` is handed over too, on purpose. The refuse-and-close policy lives in ONE place
+     * inside that module, so no branch of it can refuse and leave a window open on about:blank.
+     */
+    const started = await startAlignedBrowser({
+      waitForDebugPort,
+      detect: detectApi && ((o) => detectApi.fromBrowser(o)),
+      record: detectionApi && ((h, d) => detectionApi.record(h, d)),
+      refusal: alignApi && ((...args) => alignApi.refusal(...args)),
+      cover: alignApi && ((o) => alignApi.cover(o)),
+      close: () => stopBrowserImpl(a),
+      loginUrl: REDDIT_LOGIN
+    }, { endpoint, account: a, exit, proxied, weSpawnedIt: !alreadyRunning });
+    if (!started.ok) return { ok: false, error: started.error };
+
+    /* Said back so the caller can show WHAT CLOCK this window is telling and WHERE that came from,
+       rather than the operator having to trust that a flag went on. `timezone` is the measured one
+       — a.timezone is NULL on every account until something measures it. */
+    return {
+      ...said,
+      verified: true,
+      timezone: started.location.timezone,
+      locale: started.locale,
+      location: started.recorded,
+      pagesAligned: started.pagesAligned,
+      ...(proxied ? { relayPort: exit.relayPort, exitIp: exit.exitIp } : {})
+    };
   } catch (e) {
     return { ok: false, error: String(e && e.message || e) };
   }
@@ -2138,46 +2309,7 @@ async function waitForDebugPort(endpoint, ms = 30_000) {
   return false;
 }
 
-async function coverProxiedBrowser(endpoint, account, exit) {
-  const up = await waitForDebugPort(endpoint);
-  if (!up) {
-    return { ok: false, error:
-      `${account.handle}'s browser did not open its debugging port on ${endpoint} within 30 `
-      + 'seconds, so redbot could not align it and did not send it to Reddit.' };
-  }
-  if (!alignApi) {
-    return { ok: false, error: 'the compiled build is missing its alignment module — run npm run build' };
-  }
-  try {
-    const a = await alignApi.cover({
-      endpoint,
-      handle: account.handle,
-      timezone: account.timezone,
-      /**
-       * English for the exit's country — for FORMATTING, which is all this actually buys.
-       *
-       * The previous note here said `--lang` is ignored "so this is the only route to it", meaning
-       * navigator.language. That was wrong, and measuring it settled the question: on Chrome
-       * 150.0.7871.187, `Emulation.setLocaleOverride` moves `Intl` and NOT the language a page
-       * reads. Overriding to de-DE, fr-FR and en-GB each left `navigator.language` at en-US while
-       * `Intl.NumberFormat().resolvedOptions().locale` followed the override every time.
-       *
-       * So one call was never enough. `align.ts` now sends BOTH: `setLocaleOverride` for what it
-       * genuinely buys — dates, numbers and collation agreeing with the exit's region rather than
-       * the operator's — and `setUserAgentOverride({ acceptLanguage })` for navigator.language,
-       * navigator.languages and the Accept-Language header, which is the property D-5 is about.
-       *
-       * One value feeds both, so the two cannot drift apart into a browser formatting dates for
-       * one country while announcing the language of another.
-       */
-      locale: exit.proxy.country ? `en-${exit.proxy.country}` : null,
-      openUrl: 'https://www.reddit.com/login'
-    });
-    return { ok: true, pagesAligned: a.pagesAligned };
-  } catch (e) {
-    return { ok: false, error: String(e && e.message || e) };
-  }
-}
+/* `startAlignedBrowser` moved to ./browser-start.mjs — see the import at the top of this file. */
 
 /* ------------------------------------------------------------------ *
  * Adding an exit, from the console.
@@ -2409,6 +2541,17 @@ function autoStart({ account, everyMinutes }) {
   child.on('close', (code) => { keep(`\n[loop stopped, exit ${code}]\n`); autoProc = null; });
   child.on('error', (e) => { keep(`\n[loop failed to start: ${e.message}]\n`); autoProc = null; });
   autoProc = { child, account: String(account), every, startedAt: new Date().toISOString() };
+  /**
+   * WRITE THE INTENT DOWN. Without this the loop existed only as this variable, and a restart —
+   * of the app or of the machine — stopped it with nothing anywhere recording that it had been
+   * running. Measured 2026-09-24: this box has no systemd unit at system or user level, no
+   * autostart entry and no cron, so the app itself only runs because somebody typed the
+   * launcher. The loop died twice over and reported nothing either time.
+   *
+   * The account and the interval, not the pid: those two rebuild the loop, and a pid from
+   * before a restart names nothing — or worse, names somebody else's process.
+   */
+  rememberAutoLoop({ account: String(account), everyMinutes: every });
   return { ok: true, ...autoStatus() };
 }
 
@@ -2416,7 +2559,48 @@ function autoStop() {
   if (!autoProc) return { ok: false, error: 'The loop is not running.' };
   try { autoProc.child.kill(); } catch { /* already gone */ }
   autoProc = null;
+  /* A STOP MUST SURVIVE A RESTART AS FIRMLY AS A START. Forgetting the record here is what
+     stops `resumeAutoLoop` resurrecting a loop somebody deliberately switched off — a resume
+     that ignores a stop is worse than having no resume at all. */
+  rememberAutoLoop(null);
   return { ok: true, ...autoStatus() };
+}
+
+/**
+ * Store, or clear, the loop that should be running. Never throws: the loop is started or
+ * stopped either way, and failing the caller's request because a JSON file could not be
+ * written would report the opposite of what actually happened.
+ */
+function rememberAutoLoop(loop) {
+  try {
+    if (!pushStateApi) return;
+    const { readPushState, writePushState } = pushStateApi;
+    const state = readPushState();
+    if (loop) writePushState({ ...state, autoLoop: loop });
+    else { const { autoLoop, ...rest } = state; void autoLoop; writePushState(rest); }
+  } catch (e) {
+    console.error(`[auto] the loop ran but its state was not recorded: ${e && e.message ? e.message : e}`);
+  }
+}
+
+/**
+ * Put back the loop a restart interrupted.
+ *
+ * Called once, after the server is listening — not at module load — because `autoStart` spawns
+ * a child that drives a browser, and on a cold boot the browsers are still being opened. The
+ * first cycle may therefore fail; `src/commands/auto.ts:132-142` catches a failed cycle and
+ * sleeps rather than dying ("A failed cycle must not kill the loop"), so the loop recovers on
+ * the next tick without special handling here.
+ */
+function resumeAutoLoop() {
+  let saved = null;
+  try { saved = pushStateApi ? pushStateApi.readPushState().autoLoop ?? null : null; }
+  catch { return; }                                   // an unreadable state file resumes nothing
+  if (!saved) return;
+  const r = autoStart({ account: saved.account, everyMinutes: saved.everyMinutes });
+  console.log(r.ok
+    ? `[auto] resumed after restart: ${saved.account}, every ${saved.everyMinutes} min`
+    : `[auto] could not resume ${saved.account}: ${r.error}`);
 }
 
 function autoStatus() {
@@ -2678,12 +2862,46 @@ const server = createServer((req, res) => {
         if (!PROVIDERS.includes(want)) {
           return send(400, JSON.stringify({ ok: false, error: 'provider must be "cli", "api" or "deepseek"' }));
         }
+        /**
+         * An install may forbid providers it must never reach — REDBOT_ONLY_PROVIDER, set per
+         * machine, never in the repository. Refused HERE as well as in src/llm.ts because the
+         * screen must not offer a choice the next generation will throw on: a Setup page that
+         * accepts "cli" and then fails every draft is worse than one that says no.
+         */
+        const pinned = llmApi && llmApi.onlyProvider ? llmApi.onlyProvider() : null;
+        if (pinned && pinned !== want) {
+          return send(400, JSON.stringify({
+            ok: false,
+            error: `this install is restricted to "${pinned}" (REDBOT_ONLY_PROVIDER); "${want}" cannot be selected here.`
+          }));
+        }
         selectedProvider = want;
         /* The dependency answer is provider-dependent (the Claude CLI row) and is cached for
            two minutes. Without this, switching to a key path left step 1 red for that long —
            the same staleness the `provider: llmProvider()` fix above was about. */
         depsCache = { at: 0, value: null };
-        return send(200, JSON.stringify({ ok: true, provider: selectedProvider }));
+        /**
+         * WRITE IT DOWN. Without this the selection lived only in this process and died with it.
+         *
+         * `saved` is reported so the screen can tell "chosen" from "chosen and kept": a console
+         * that says a provider was set while the next boot reverts it is the defect this route
+         * carried. The write is not allowed to fail the request — the choice IS in effect for
+         * this process either way, and claiming otherwise would be the opposite lie.
+         */
+        let saved = false, saveError = null;
+        try {
+          if (!pushStateApi) throw new Error('the compiled build is missing');
+          const { readPushState, writePushState } = pushStateApi;
+          writePushState({ ...readPushState(), llmProvider: want });
+          saved = true;
+        } catch (e) {
+          saveError = e && e.message ? e.message : String(e);
+          console.error(`[setup] provider set to ${want} but NOT persisted: ${saveError}`);
+        }
+        return send(200, JSON.stringify({
+          ok: true, provider: selectedProvider, saved,
+          ...(saveError ? { saveError } : {})
+        }));
       }
 
       /**
@@ -3529,11 +3747,28 @@ const server = createServer((req, res) => {
          banner listing the two things still missing. See tools/product/fleet-posture.mjs. */
       const problems = fleetProblems(browsers);
       if (!existsSync(join(ROOT, 'dist', 'cli.js'))) problems.push('redbot is not built — run npm run build');
-      send(200, JSON.stringify({
-        at: new Date().toISOString(), running, browsers, problems,
-        auto: autoStatus(),
-        healthy: problems.length === 0
-      }));
+      /**
+       * `data` rides the pulse so every screen can notice its own numbers have moved.
+       *
+       * The console paints from a cached /api/state, so a karma probe, a published reply or a
+       * recorded removal was invisible until somebody pressed Refresh — and a stale figure looks
+       * exactly like a fresh one. The client compares this fingerprint and re-fetches the real
+       * state only when something actually changed.
+       *
+       * It is `null`, never an empty object, when the database could not be asked: absent is a
+       * different fact from unchanged, and a client that could not tell them apart would stop
+       * recalibrating the moment the first read failed and never say so.
+       */
+      Promise.resolve(pagesApi ? pagesApi.fingerprint() : null)
+        .catch(() => null)
+        .then((data) => {
+          send(200, JSON.stringify({
+            at: new Date().toISOString(), running, browsers, problems,
+            auto: autoStatus(),
+            data,
+            healthy: problems.length === 0
+          }));
+        });
     }).catch((e) => send(500, JSON.stringify({ error: String(e && e.message || e) })));
     return;
   }
@@ -3951,6 +4186,10 @@ server.listen(PORT, '127.0.0.1', () => {
     `  Bound to 127.0.0.1 and refuses cross-origin requests — there is no other guard.\n` +
     `  Ctrl+C to stop.\n`
   );
+
+  /* Put back an unattended loop a restart interrupted. Here rather than at module load: this
+     spawns a child that drives a browser, and nothing should spawn before the server answers. */
+  resumeAutoLoop();
 
   /**
    * Start pushing on this install's own schedule.

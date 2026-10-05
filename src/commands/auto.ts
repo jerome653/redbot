@@ -17,11 +17,14 @@ import { loadThreads, loadDrafts } from '../store.js';
 import { selectedAccount, config, DATA } from '../config.js';
 import { checkWindow } from '../window.js';
 import { counters } from '../health.js';
+import { hitCollectionWall } from '../collect-wall.js';
 import { read } from './read.js';
 import { search } from './search.js';
 import { opportunity } from './opportunity.js';
 import { draft } from './draft.js';
 import { certifyCmd } from './certify.js';
+import { reply } from './reply.js';
+import { autoPublishEnabled } from '../autopublish.js';
 import { record, say } from '../log.js';
 /**
  * Sources come from sources through src/sources.ts, which is also where "the file is
@@ -84,16 +87,77 @@ async function cycle(): Promise<number> {
   }
 
   const before = (await loadThreads()).length;
-  for (const s of subs) {
-    say.step(`Reading r/${s}…`);
-    await read(s);
+
+  /**
+   * STOP WHEN THE HOST IS REFUSING, rather than asking the remaining sources one at a time.
+   *
+   * These two loops discarded the exit code of `read()` and `search()`, both of which return 1 on
+   * a 429 or a block page. Measured 2026-09-28: the first 429 landed at 00:56:06 and the cycle
+   * then navigated into the wall 25 more times in 27 seconds — see src/collect-wall.ts for the
+   * full trace and for why `collected: 0` reading as a quiet hour is the half that cost the posts.
+   *
+   * The sources are flattened into one list so the run of failures is counted ACROSS subreddits
+   * and searches. It was counted nowhere before: collect-run.ts holds a retry budget WITHIN a
+   * source, and nothing held one between them. Order is unchanged — subreddits, then searches.
+   */
+  const sources: Array<{ step: string; run: () => Promise<number> }> = [
+    ...subs.map((s) => ({ step: `Reading r/${s}…`, run: () => read(s) })),
+    /**
+     * PREVIEW THEN COMMIT, per query. `search(q)` is preview-only (src/commands/search.ts:281
+     * returns `preview(...)`), and nothing on this path ever committed. Measured 2026-09-28 across
+     * the whole database: 177 `search.preview` rows, **0** `search` rows, and 0 of 586 threads
+     * carry `source='search'`. Every search this system has ever run listed candidates and threw
+     * them away.
+     *
+     * That matters because the queries are the most on-domain sources configured — "WordPress
+     * plugins", "plugin conflicts", "multiple WordPress sites" — against a competence profile
+     * anchored on `wordpress` (src/competence.ts), while the subreddits measured 11.8% in scope
+     * overall.
+     *
+     * The commit has to happen HERE, between previews: `commit()` reads
+     * data/search-candidates.json, which holds exactly one preview, and the next query overwrites
+     * it. `'clean'` is the only spec an unattended caller may use — see parsePicks.
+     */
+    ...queries.map((q) => ({
+      step: `Searching “${q}”…`,
+      run: async () => {
+        /* 'day', not the 'week' default (scrape.ts:246). The effective age ceiling at selection is
+           min(maxThreadAgeHoursToPublish, warmingMaxThreadAgeHours) = 24h, so a week-wide search
+           spends page loads collecting threads the very next stage refuses on age. */
+        const previewed = await search(q, undefined, undefined, 'day');
+        if (previewed !== 0) return previewed;
+        return search(undefined, undefined, 'clean');
+      }
+    }))
+  ];
+
+  let failuresInARow = 0;
+  let abandoned = 0;
+  for (let i = 0; i < sources.length; i++) {
+    const wall = hitCollectionWall(failuresInARow, i, sources.length);
+    if (wall.abort) {
+      abandoned = sources.length - i;
+      say.warn(wall.why);
+      /* `stage: 'read'` is load-bearing — src/health.ts counts only PUBLISH-stage 429s toward a
+         cooldown, and a collection wall must not silence publishing on top of everything else. */
+      await record('ratelimit', `collection abandoned after ${failuresInARow} failures in a row`, {
+        status: 'blocked', stage: 'read', abandoned, attempted: i, configured: sources.length
+      });
+      break;
+    }
+    const src = sources[i]!;
+    say.step(src.step);
+    const code = await src.run();
+    failuresInARow = code === 0 ? 0 : failuresInARow + 1;
   }
-  for (const q of queries) {
-    say.step(`Searching “${q}”…`);
-    await search(q);
-  }
+
   const collected = (await loadThreads()).length - before;
   say.step(`Collected ${collected} new thread(s).`);
+  /* A short collection has two causes that send a person to different places, and until now they
+     wrote the same line. Say which one this was. */
+  if (abandoned) {
+    say.warn(`${abandoned} source(s) skipped — scoring what is already collected instead.`);
+  }
 
   say.step('Working out which are worth answering…');
   await opportunity();
@@ -108,6 +172,30 @@ async function cycle(): Promise<number> {
     if (newest) {
       say.step(`Fact-checking ${newest.id}…`);
       await certifyCmd(newest.id);
+
+      /**
+       * AND, WHEN THIS INSTALL HAS BEEN SWITCHED TO IT, PUBLISH.
+       *
+       * The header of this file says the line it will not cross is publishing, and that stays
+       * true of every install that has not set REDBOT_AUTO_PUBLISH=1. On one that has, the
+       * decision moves from a person at a prompt to the rule in src/autopublish.ts — which asks
+       * for MORE than the prompt did: a CERTIFIED verdict (ESCALATE is explicitly "needs a person
+       * who knows the subject"), no hard gate, and no advisory at all.
+       *
+       * The draft is re-read rather than reused: certifyCmd has just written the verdict onto it,
+       * and `newest` is the object from before that write.
+       *
+       * `reply()` is left to do its own refusing. It re-runs the gates against the live page
+       * immediately before submitting (reply.ts, the second `evaluateGates`), and that check is
+       * the one that catches a thread locked or answered in the minutes since certification —
+       * facts no rule here could have known.
+       */
+      if (autoPublishEnabled()) {
+        const fresh = (await loadDrafts()).find((d) => d.id === newest.id);
+        const verdict = fresh?.certification?.verdict ?? null;
+        say.step(`Unattended publish check for ${newest.id} (certification: ${verdict ?? 'none'})…`);
+        await reply(newest.id, { unattended: true });
+      }
     }
   } else {
     say.step('Nothing worth writing this cycle — that is a normal outcome.');
@@ -116,13 +204,25 @@ async function cycle(): Promise<number> {
   await record('auto.cycle', `unattended cycle finished`, {
     account: account?.handle ?? null, collected, drafted: written
   });
-  say.ok('Cycle finished. Nothing was published — that still needs you.');
+  /* The message has to tell the truth about which install this is. It read "Nothing was
+     published — that still needs you" unconditionally, which on an autonomous install would be
+     a line asserting the opposite of what just happened. */
+  say.ok(autoPublishEnabled()
+    ? 'Cycle finished. Publishing is UNATTENDED on this install — see the publish.* history rows for what it decided.'
+    : 'Cycle finished. Nothing was published — that still needs you.');
   return 0;
 }
 
 export async function auto(opts?: { once?: boolean; everyMinutes?: number }): Promise<number> {
   say.head('redbot auto — unattended, up to the fact-check');
-  say.warn('This never publishes. Approving a reply is still a person’s job.');
+  /* Say which install this is, loudly, on the first line of every run. An autonomous install that
+     opened with "this never publishes" would be the single most misleading line in the product. */
+  if (autoPublishEnabled()) {
+    say.warn('UNATTENDED PUBLISHING IS ON (REDBOT_AUTO_PUBLISH=1). This will post to Reddit ' +
+             'without asking, on a CERTIFIED verdict with no gate finding of any kind.');
+  } else {
+    say.warn('This never publishes. Approving a reply is still a person’s job.');
+  }
 
   if (opts?.once) return cycle();
 

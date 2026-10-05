@@ -1,10 +1,10 @@
 /**
  * drafts.
  *
- * The one table with a publish invariant welded into it: a draft whose certification
- * verdict is REJECT can never hold status 'published' (reject_is_never_published,
- * db/migrations/0006_drafts.up.sql). If a write here ever violates that, the database
- * refuses it — which is the point. Evaluation H6 was exactly that write succeeding.
+ * The one table with a publish invariant welded into it: a draft can only hold status
+ * 'published' with a non-blank published_url (published_has_proof,
+ * db/sqlite/migrations/0021_drafts_published_has_proof.up.sql). 0021 replaced 0006's
+ * reject_is_never_published; the REJECT bar now lives in publishBar() (src/autopublish.ts).
  */
 import type { Db } from '../db.js';
 import type { Draft } from '../types.js';

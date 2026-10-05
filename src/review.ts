@@ -296,3 +296,82 @@ export function summarizeReviews(reviews: ReviewRecord[]): ReviewSummary {
     timedReviews: timings.length
   };
 }
+
+/**
+ * Who supplies the reason for an APPROVED reply — and whether anyone must be asked.
+ *
+ * src/commands/reply.ts prompts for a structured reason after a decision. That prompt calls
+ * `choose`/`ask`, and src/ask.ts:124 THROWS `NoTerminalError` when stdin is not a TTY. So on any
+ * non-interactive path the prompt is not a question, it is an exception — thrown AFTER the publish
+ * has already been approved and recorded, and BEFORE `publishComment` is reached.
+ *
+ * This has now happened twice, on two different paths:
+ *
+ *   console approval  — found as evaluation H1. reply.ts records it in its own words: "the whole
+ *                       publish died after the single-use token had already been consumed, and
+ *                       nothing was ever posted". Fixed by exempting `preApproved`.
+ *   unattended        — MEASURED 2026-09-28 06:19, draft d_7d762fa0f2b4_muksfd2v. The loop printed
+ *                       "Publishing unattended: certification REJECT clears the ANY bar, no hard
+ *                       block, no other advisory", wrote the `publish.unattended` row, then threw
+ *                       NoTerminalError inside askReason('approved', ...). Across 708 history rows
+ *                       this install has 0 `publish.attempt` and 0 `publish.ok`: the browser
+ *                       publish code had never once been reached, and this line is why.
+ *
+ * The same defect twice on two paths is what makes it worth a function rather than a third
+ * condition inlined at the call site: every non-interactive caller now asks one place, and a
+ * fourth path cannot be added without answering the question.
+ */
+export type ApprovalReason = { code: ApproveReason; note: string } | 'prompt';
+
+/**
+ * THE CODE IS TYPED TO `ApproveReason`, AND THAT IS THE POINT.
+ *
+ * `reviews` carries a table-level CHECK, `reason_code_matches_decision`:
+ *
+ *     (decision = 'approved' AND reason_code IN ('as-written', 'minor-nits'))
+ *
+ * so any other string is rejected by the database at INSERT, several statements AFTER the publish
+ * has been approved and recorded — the same shape of late failure as the NoTerminalError this
+ * function was written to remove. Measured 2026-09-28 06:33: a first cut of this returned
+ * `code: 'unattended'` and died with `CHECK constraint failed: reason_code_matches_decision`,
+ * having got one statement further than the throw did and no closer to posting.
+ *
+ * Typing the return as `ApproveReason` moves that from a runtime constraint violation to a compile
+ * error. `ReviewRecord.reasonCode` is a bare `string`, which is why nothing caught it here.
+ *
+ * `'as-written'` for both non-interactive paths, and it is the accurate one rather than the
+ * convenient one: neither a loop nor a console token edits the body, so what was published is
+ * exactly what was generated — which is what `APPROVE_REASONS['as-written']` says. The interesting
+ * detail (which verdict bar allowed it, and whether the checker had rejected it) goes in the NOTE,
+ * which is free text and constrained by nothing.
+ */
+export function approvalReason(input: {
+  /** `opts.unattended` — a loop, with no terminal at all. */
+  unattended?: boolean | undefined;
+  /** The `why` from src/autopublish.ts, so the record says which bar let it through. */
+  unattendedWhy?: string | null | undefined;
+  /** A console approval token, already carrying a person's own reason. */
+  preApproved?: { reasonCode?: string | undefined; note?: string | undefined } | null | undefined;
+}): ApprovalReason {
+  /* Unattended is checked FIRST. A loop has no terminal whether or not a token also exists, so
+     letting `preApproved` win here would reintroduce the throw on exactly the path that cannot
+     survive it. */
+  if (input.unattended) {
+    return { code: 'as-written', note: input.unattendedWhy ?? '' };
+  }
+  if (input.preApproved) {
+    /* A token's own code is honoured only when the CHECK would accept it. The previous default
+       here was `'console'`, which that CHECK rejects — so a console approval whose token carried
+       no reasonCode traded the H1 throw for a constraint violation one statement later. */
+    const fromToken = input.preApproved.reasonCode;
+    const code: ApproveReason = isApproveReason(fromToken) ? fromToken : 'as-written';
+    return { code, note: input.preApproved.note ?? '' };
+  }
+  /* A real terminal, a real person: ask. */
+  return 'prompt';
+}
+
+/** Narrow an arbitrary string to a code the `approved` CHECK accepts. */
+export function isApproveReason(v: string | undefined): v is ApproveReason {
+  return v !== undefined && Object.prototype.hasOwnProperty.call(APPROVE_REASONS, v);
+}

@@ -185,8 +185,13 @@ export async function showBrowserWindow(
   });
 }
 
-export async function attach(): Promise<Session> {
-  const endpoint = config.browser.cdpEndpoint;
+export async function attach(endpoint: string = config.browser.cdpEndpoint): Promise<Session> {
+  /* The endpoint is a PARAMETER, defaulted, rather than read from config inside.
+     Every existing caller attaches to the one configured browser and passes nothing, so their
+     behaviour is unchanged. But detection has to attach to a NAMED account's browser on its own
+     port, and the alternative was a second copy of the attach-and-detach dance below. A second
+     copy is how the teardown drifts: `close()` here detaches and must never kill the
+     operator's Chrome, and that is not a property worth re-deriving in another file. */
   if (!(await isBrowserUp(endpoint))) throw new NoBrowserError(endpoint);
 
   /**

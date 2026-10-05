@@ -59,7 +59,117 @@ function stubFetch(replies: Array<{ status: number; body?: unknown; headers?: Re
 /** The shape DeepSeek actually returns for a completed non-streaming call. */
 const ok = (content: string | null, reasoning?: string) => ({
   status: 200,
-  body: { choices: [{ message: { role: 'assistant', content, reasoning_content: reasoning ?? null } }] }
+  body: { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content, reasoning_content: reasoning ?? null } }] }
+});
+
+/**
+ * The shape DeepSeek returns when the budget ran out BEFORE the answer began.
+ *
+ * MEASURED, not imagined — 2026-09-24, thread 77d6fe170b77, the one that failed in production
+ * on 2026-09-21, at src/commands/draft.ts's own settings (deepseek-v4-pro, max_tokens 1600,
+ * temperature 0.5):
+ *
+ *   max_tokens=1600  finish_reason=length  content=0ch     reasoning_tokens=1600
+ *   max_tokens=4000  finish_reason=length  content=0ch     reasoning_tokens=4000
+ *   max_tokens=8000  finish_reason=stop    content=1093ch  reasoning_tokens=3014
+ *
+ * `max_tokens` on this endpoint bounds REASONING PLUS ANSWER. On the Anthropic endpoint it
+ * bounds the answer alone. Every maxTokens in this repository was sized for the second meaning.
+ * `effort: 'low'` was tested at 1600 and 4000 and changed nothing — the budget is the lever.
+ */
+const truncated = (reasoningTokens = 1600) => ({
+  status: 200,
+  body: {
+    choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '', reasoning_content: 'x'.repeat(40) } }],
+    usage: { completion_tokens: reasoningTokens, completion_tokens_details: { reasoning_tokens: reasoningTokens } }
+  }
+});
+
+test('a caller asking for less than a reasoning model needs is raised to the floor', async () => {
+  /**
+   * THE WASTE THIS REMOVES. Every maxTokens in this repository was sized for the Anthropic
+   * endpoint, where max_tokens bounds the ANSWER. Here it bounds reasoning plus answer, so the
+   * call sites ask for a fraction of what the model needs and the first attempts are spent
+   * producing nothing:
+   *
+   *   src/gap.ts:96            1600   measured need ~9,905 completion tokens
+   *   src/commands/draft.ts    1600   measured need ~3,255
+   *   src/argus/extract.ts   3000/1400
+   *   src/commands/warmup.ts    700
+   *
+   * Measured 2026-09-24 on thread 869b0d4176e9, deepseek-flash, prompt ~1,800 tokens:
+   * max_tokens=16000 -> finish_reason=stop, reasoning_tokens=9053, completion_tokens=9905.
+   * At 1600 the same call truncates, and the retry ladder burns 1600 then 4800 before its
+   * third attempt has any chance — three calls billed, two of them guaranteed to produce
+   * nothing.
+   *
+   * RAISING THE FLOOR IS FREE. `max_tokens` is a ceiling, not a reservation: the bill is the
+   * tokens generated. A call that finishes in 800 costs 800 whether the ceiling was 1,600 or
+   * 16,000. So the floor removes the wasted attempts and costs nothing on the calls that
+   * already fit — which is why this is a floor and not a per-call-site retune.
+   */
+  const { calls, restore } = stubFetch([ok('fits fine')]);
+  try {
+    await complete({ prompt: 'p', model: 'm', maxTokens: 1600 });
+    const body = JSON.parse(String(calls[0]!.init.body));
+    assert.ok(body.max_tokens >= 16000,
+      `a 1600-token ask must be raised to the measured floor; got ${body.max_tokens}`);
+  } finally { restore(); }
+});
+
+test('a caller asking for MORE than the floor keeps what it asked for', () => {
+  /* The floor lifts, it never caps. A caller that has measured its own need — or a future one
+     on a model that reasons harder — must not be quietly reduced to this constant. */
+  return (async () => {
+    const { calls, restore } = stubFetch([ok('fits fine')]);
+    try {
+      await complete({ prompt: 'p', model: 'm', maxTokens: 50_000 });
+      assert.equal(JSON.parse(String(calls[0]!.init.body)).max_tokens, 50_000);
+    } finally { restore(); }
+  })();
+});
+
+test('a budget eaten by reasoning is RETRIED with a bigger one, not reported as an empty model', async () => {
+  const { calls, restore } = stubFetch([truncated(1600), ok('the answer that fits')]);
+  try {
+    assert.equal(await complete({ prompt: 'p', model: 'm', maxTokens: 1600 }), 'the answer that fits');
+    assert.equal(calls.length, 2, 'a truncation must be retried, not thrown on first sight');
+    const first = JSON.parse(String(calls[0]!.init.body));
+    const second = JSON.parse(String(calls[1]!.init.body));
+    assert.equal(first.max_tokens, 16_000,
+                 'the first attempt starts at the floor, not at the caller\'s Anthropic-shaped number');
+    assert.ok(second.max_tokens > first.max_tokens,
+              `the retry must raise the budget; got ${second.max_tokens} after ${first.max_tokens}`);
+  } finally { restore(); }
+});
+
+test('a truncation that survives every retry says WHY, and does not call the model empty', async () => {
+  /**
+   * THE DEFECT THIS PINS. `empty completion` was thrown for two unrelated failures: a model
+   * that genuinely returned nothing, and a budget that ran out before the answer started. The
+   * second is fixable by the operator and the first is not, and the message said neither.
+   * Three of these reached data/redbot.db on 2026-09-21 as
+   * `draft failed for 77d6fe170b77: empty completion`, and named no cause at all.
+   */
+  const { restore } = stubFetch([truncated(1600)]);
+  try {
+    await assert.rejects(complete({ prompt: 'p', model: 'm', maxTokens: 1600 }), (e: Error) => {
+      assert.match(e.message, /reasoning/i, 'the message must name what consumed the budget');
+      assert.match(e.message, /length/, "the message must carry DeepSeek's own finish_reason");
+      assert.ok(!/^empty completion$/.test(e.message),
+                'a truncation is not an empty completion — that conflation is the defect');
+      return true;
+    });
+  } finally { restore(); }
+});
+
+test('a genuinely empty answer that was NOT truncated is still an empty completion', async () => {
+  /* The other half of the split: finish_reason 'stop' with no content is the model returning
+     nothing, and raising the budget would not help. It must keep its own distinct message. */
+  const { restore } = stubFetch([ok('')]);
+  try {
+    await assert.rejects(complete({ prompt: 'p', model: 'm' }), /empty completion/);
+  } finally { restore(); }
 });
 
 test('the model ids resolve to DeepSeek ids, not Claude ids', () => {
@@ -69,15 +179,27 @@ test('the model ids resolve to DeepSeek ids, not Claude ids', () => {
    * src/argus/pipeline.ts would have recorded a Claude model name against a DeepSeek run.
    */
   assert.equal(config.llm.provider, 'deepseek');
-  assert.equal(config.llm.analyzeModel, 'deepseek-v4-flash');
+  /**
+   * `deepseek-flash`, and the missing `v4-` is the point.
+   *
+   * This asserted 'deepseek-v4-flash' — an id DeepSeek does not serve, so the assertion passed
+   * while the product asked for a model that does not exist. A constant checked against itself
+   * proves the constant has not changed, never that it is right. Measured against the vendor's
+   * `GET /models` 2026-09-24: the only ids are `deepseek-flash` and `deepseek-v4-pro`.
+   */
+  assert.equal(config.llm.analyzeModel, 'deepseek-flash');
   assert.equal(config.llm.draftModel, 'deepseek-v4-pro');
   assert.ok(!config.llm.analyzeModel.startsWith('claude-'));
+  /* The sibling carries `v4`, this one does not. Pinned so a tidying pass cannot "regularise"
+     them into a matching pair and reintroduce the id that was never real. */
+  assert.ok(!config.llm.analyzeModel.includes('v4'),
+            'deepseek-flash is DeepSeek-V4.1-Flash and carries no version in its id');
 });
 
 test('the request is the documented DeepSeek call', async () => {
   const { calls, restore } = stubFetch([ok('hello')]);
   try {
-    const out = await complete({ prompt: 'ping', model: 'deepseek-v4-flash', maxTokens: 99, temperature: 0.2 });
+    const out = await complete({ prompt: 'ping', model: 'deepseek-flash', maxTokens: 99, temperature: 0.2 });
     assert.equal(out, 'hello');
 
     assert.equal(calls.length, 1);
@@ -89,8 +211,13 @@ test('the request is the documented DeepSeek call', async () => {
     assert.equal(h['anthropic-version'], undefined, 'the Anthropic version header must not be sent to DeepSeek');
 
     const body = JSON.parse(String(calls[0]!.init.body));
-    assert.equal(body.model, 'deepseek-v4-flash');
-    assert.equal(body.max_tokens, 99);
+    assert.equal(body.model, 'deepseek-flash');
+    /* 99 was what the caller asked for; 16,000 is what goes on the wire. On this endpoint
+       max_tokens bounds reasoning AND answer, and a reasoning model handed 99 spends all 99
+       thinking and returns nothing — measured. The floor lifts every ask to something the model
+       can actually finish inside, and costs nothing when it finishes early because max_tokens is
+       a ceiling, not a reservation. */
+    assert.equal(body.max_tokens, 16_000);
     assert.equal(body.temperature, 0.2);
     assert.equal(body.stream, false, 'a streamed answer would not parse as one JSON body');
     assert.deepEqual(body.messages, [{ role: 'user', content: 'ping' }]);

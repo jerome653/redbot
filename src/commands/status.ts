@@ -11,6 +11,7 @@ import { rankCandidates } from '../select.js';
 import { loadReviews, summarizeReviews } from '../review.js';
 import { generateAll } from '../reports.js';
 import { computeInsights } from '../insights.js';
+import { computeOutcomes } from '../outcomes.js';
 import { loadThreads, loadAssessments } from '../store.js';
 import { say } from '../log.js';
 import { NOTHING_TO_DO } from '../exit-codes.js';
@@ -221,5 +222,60 @@ export async function selectCmd(showAll = false): Promise<number> {
   const top = eligible[0]!;
   say.ok(`Pilot pick: ${top.threadId} — ${top.title.slice(0, 60)}`);
   say.step(`Next: redbot draft ${top.threadId}   then   redbot reply`);
+  return 0;
+}
+
+/**
+ * `redbot outcomes` — of what was published, what is still there, by subreddit.
+ *
+ * Reads only SIGNED-OUT observations, latest per comment. See src/outcomes.ts for why both of
+ * those are load-bearing: a signed-in reading shows the author their own removed comment intact,
+ * and a comment's state CHANGES between observations.
+ *
+ * Counts first, then the rate with its sample size attached, then Reddit's notices verbatim. A
+ * rate is never printed without its denominator — the same discipline as `Signal.n` in
+ * src/insights.ts, and the reason is the same: 100% of two is not 100%.
+ */
+export async function outcomesCmd(): Promise<number> {
+  const o = await computeOutcomes();
+  say.head('redbot outcomes — what survived, by subreddit');
+
+  if (!o.comments.length) {
+    say.warn('Nothing has been published, so there is nothing to have survived.');
+    return NOTHING_TO_DO;
+  }
+
+  say.step('  sub                     pub  visible  removed   unobs   removal rate');
+  for (const s of o.subreddits) {
+    const rate = s.removalRate === null
+      ? 'never observed signed out'
+      : `${Math.round(s.removalRate * 100)}% of ${s.observed} observed`;
+    const line =
+      '  ' + ('r/' + s.subreddit).padEnd(22) +
+      String(s.published).padStart(4) +
+      String(s.visible).padStart(9) +
+      String(s.removed).padStart(9) +
+      String(s.unobserved).padStart(8) +
+      '   ' + rate;
+    if (s.removed > 0) say.warn(line);
+    else say.step(line);
+    for (const n of s.removalNotices) say.step(`      Reddit's words, verbatim: "${n}"`);
+  }
+
+  const unread = o.comments.filter((c) => c.state === 'unobserved');
+  if (unread.length) {
+    say.info('');
+    say.warn(`${unread.length} published comment(s) have never been read signed out. Run ` +
+      `"redbot observe" before trusting any rate above — an unmeasured comment is not a surviving one.`);
+  }
+
+  say.info('');
+  say.step('Per comment, most recently read first');
+  const ordered = [...o.comments].sort((a, b) => (b.observedAt ?? '').localeCompare(a.observedAt ?? ''));
+  for (const c of ordered) {
+    const mark = c.state === 'removed' ? 'REMOVED' : c.state === 'visible' ? 'visible' : 'UNREAD ';
+    say.step(`  ${mark}  r/${c.subreddit.padEnd(18)} ${(c.commentId ?? c.draftId).padEnd(14)} ${c.observedAt ?? 'never observed'}`);
+    if (c.removalNotice) say.step(`           "${c.removalNotice}"`);
+  }
   return 0;
 }
