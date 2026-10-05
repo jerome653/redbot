@@ -823,6 +823,21 @@ td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
  * dead at 1080px, so on a wide screen the card rail ended a third of the way across while the
  * panels beside it ran to 1436px. That ragged right edge is what read as "not arranged".
  */
+/* ---------- the account lens ----------
+ * A chip row, not a <select>: with eight accounts the whole fleet is visible at a glance and one
+ * click wide, and the selected one is readable without opening anything. It wraps rather than
+ * scrolls, so no account is ever off-screen.
+ */
+.lens-row{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;padding:.1rem 0 .7rem}
+.lenschip{
+  font-family:var(--mono);font-size:.7rem;letter-spacing:-.01em;
+  padding:.28rem .6rem;border-radius:999px;cursor:pointer;
+  color:var(--ink-2);background:var(--glass-2);border:1px solid var(--edge);
+}
+.lenschip:hover{color:var(--ink);border-color:var(--edge-2)}
+.lenschip.on{color:var(--ink);background:color-mix(in srgb,var(--jade) 18%,transparent);border-color:var(--jade)}
+.lens-warn{color:var(--amber);margin-left:.3rem}
+
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr));gap:1rem}
 .card{
   padding:1.35rem 1.45rem;display:flex;flex-direction:column;gap:.9rem;border-radius:var(--r);
@@ -1461,6 +1476,36 @@ button.acct.on{
   .glass,.pane,.panel,.stack,.side,.card,.wcard,.collect,.wrap,.lens,.bar{background:var(--glass)}
   .stack-h,.collect-h,.lens-h,.ph,thead th{background:var(--glass-2)}
 }
+/* ---------- COMPACT MODE ----------
+ * Two separate costs, switched together because they are both "the cards are too big and the
+ * screen feels slow", and one toggle is what was asked for.
+ *
+ * 1. SPACE. `.card` is padded 1.35rem/1.45rem with a .9rem internal gap and `.cstats` adds
+ *    .95rem top and bottom inside its own rules. Eight accounts is eight of those.
+ * 2. COMPOSITING. Every `.card`, `.panel`, `.pane`, `.wrap` and `.note` carries
+ *    `backdrop-filter: blur(22px) saturate(135%)` — 22 such declarations in this file. A
+ *    backdrop filter forces the compositor to re-blur what is behind the element, per element,
+ *    per frame, and the count scales with the number of accounts on screen. This is the half
+ *    that costs time rather than pixels.
+ *
+ * The class list below is COPIED FROM the reduced-transparency block that follows, deliberately:
+ * that block already knew which surfaces carry the filter, and maintaining a second list would
+ * mean a surface added to one and forgotten in the other. If they ever disagree, this is why.
+ */
+body.compact .glass,body.compact .pane,body.compact .panel,body.compact .stack,body.compact .side,
+body.compact .card,body.compact .wcard,body.compact .collect,body.compact .wrap,body.compact .lens,
+body.compact .bar,body.compact .toast,body.compact .note{
+  -webkit-backdrop-filter:none;backdrop-filter:none;
+}
+body.compact::before{display:none}
+body.compact .card{padding:.8rem .9rem;gap:.5rem}
+body.compact .cstats{padding:.5rem 0;gap:.45rem}
+body.compact .cstats b{font-size:1.02rem}
+body.compact .cards{gap:.6rem;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
+body.compact .note{margin-top:.8rem;padding:.75rem .9rem;line-height:1.55}
+body.compact .empty{padding:1.6rem 1rem}
+body.compact .ph{padding-top:.55rem;padding-bottom:.55rem}
+
 @media (prefers-reduced-transparency: reduce){
   body::before{display:none}
   .glass,.pane,.panel,.stack,.side,.card,.wcard,.collect,.wrap,.lens,.bar,.toast{
@@ -1783,6 +1828,12 @@ button.acct.on{
     <button class="mini ic" id="theme" title="Switch theme" aria-label="Switch between light and dark theme">
       <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.8a6.2 6.2 0 0 1 0 12.4Z" fill="currentColor"/></svg>
     </button>
+    <!-- Compact mode. Configuration, so it sits beside the theme toggle rather than taking a
+         slot in the bar. Unlike theme this one IS remembered: it exists because the cards were
+         slow, and a person who turned it on does not want the slow version back on next load. -->
+    <button class="mini ic" id="density" title="Compact mode" aria-label="Toggle compact mode" aria-pressed="false">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 3.5h12M2 8h12M2 12.5h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
     <button class="mini x" id="settingsX">close</button>
   </div>
   <div class="guide-b">
@@ -1838,6 +1889,54 @@ const evRow=(text,src,tone)=>el('div','ev',
   `<span class="ed${tone?' '+tone:''}"></span><p>${text}`+
   (src?`<span class="s">${esc(src)}</span>`:'')+`</p>`);
 /** A meter that is only drawn when there is a real measurement to draw. */
+/**
+ * THE ACCOUNT LENS CONTROL — one chip row, used by every screen that can attribute a row.
+ *
+ * Built here rather than per screen for the reason the builders above exist: a lens on Review and
+ * a lens on Results must not become two different controls. Today keeps its own presentation —
+ * the account RAIL is the lens there, and every row is already a button — and it writes the same
+ * `ACCT_FILTER`, so the two can never disagree about who is selected.
+ *
+ * `unattributable` is the count of rows this screen cannot assign to anybody. It is NAMED on the
+ * control when a filter is active, because a lens that silently drops rows is a lens that lies
+ * about the size of the queue — the same objection as `stackN` counting the database rather than
+ * the page.
+ */
+const acctLens=(rerender,unattributable)=>{
+  const accts=(S.accounts||[]).filter(a=>a&&a.handle);
+  if(accts.length<2)return null;              /* one account is not a choice */
+  /* A handle that no longer exists must not filter down to nobody. Same guard as Today's. */
+  if(ACCT_FILTER&&!accts.some(a=>a.handle===ACCT_FILTER))ACCT_FILTER=null;
+
+  const bar=el('div','lens-row');
+  bar.setAttribute('role','group');
+  bar.setAttribute('aria-label','Filter by account');
+  const lab=el('span','tiny');lab.textContent='account';
+  bar.append(lab);
+
+  const chip=(handle,text)=>{
+    const on=ACCT_FILTER===handle;
+    const b=el('button','lenschip'+(on?' on':''));
+    b.type='button';
+    b.setAttribute('aria-pressed',on?'true':'false');
+    b.textContent=text;
+    b.onclick=()=>{ACCT_FILTER=on&&handle!==null?null:handle;rerender()};
+    return b;
+  };
+  bar.append(chip(null,'All'));
+  accts.forEach(a=>bar.append(chip(a.handle,a.handle)));
+
+  if(ACCT_FILTER&&unattributable){
+    const w=el('span','tiny lens-warn');
+    w.textContent=`+${unattributable} not attributable to any account — hidden by this filter`;
+    bar.append(w);
+  }
+  return bar;
+};
+
+/** Does a row belong to the selected account? No filter selected means every row belongs. */
+const inLens=(handle)=>ACCT_FILTER==null||handle===ACCT_FILTER;
+
 const meter=(pct,tone,tag)=>{
   const m=el(tag||'div','meter'), i=el('i');
   i.style.width=Math.max(0,Math.min(100,pct))+'%';
@@ -1845,9 +1944,19 @@ const meter=(pct,tone,tag)=>{
   m.append(i); return m;
 };
 let S=null, CUR='today', SEL=null, OPS=null;
-/* Today's account filter: null plans the day for everyone, a handle narrows the checklist to
-   that account. Page state like SEL — deliberately not persisted; a fresh open plans for all. */
-let TODAY_ACCT=null;
+/**
+ * THE ACCOUNT LENS, app-wide.
+ *
+ * null means every account; a handle narrows Today's checklist, Review's queue, Threads, Results
+ * and the Accounts rail to that one. ONE variable rather than one per screen, deliberately: five
+ * filters for the same question drift apart, and a console showing Review for ryangrowth12 beside
+ * Results for everybody is a console that cannot be read.
+ *
+ * STILL NOT PERSISTED, which was Today's original decision and is kept: a fresh open shows
+ * everything. A narrow lens left behind from yesterday is how a person concludes a quiet account
+ * is the whole fleet.
+ */
+let ACCT_FILTER=null;
 async function loadOperators(){ OPS=await fetch('/api/operators').then(r=>r.json()).catch(()=>({operators:[],selected:null})); }
 
 /**
@@ -2040,7 +2149,15 @@ let SHOW_IGNORED=false;
 function review(){
   const list=$('#stackList'); list.textContent='';
   seedPage('review',S.reviewTotal,S.reviewOffset,S.reviewLimit);
-  const pending=S.review.filter(d=>d.status==='pending');
+  const allPending=S.review.filter(d=>d.status==='pending');
+  /* The lens, before the ignored toggle: an operator narrowing to one account wants that
+     account's queue counted, not the fleet's. `account` is null on drafts written before the
+     column existed (server.mjs sends null rather than omitting it), and those are unattributable
+     — named on the control rather than silently dropped. */
+  const unattr=allPending.filter(d=>d.account==null).length;
+  const lens=acctLens(review,unattr);
+  if(lens)list.append(lens);
+  const pending=allPending.filter(d=>inLens(d.account));
   const ignored=pending.filter(d=>d.workflow&&d.workflow.status==='ignored');
   const items=SHOW_IGNORED?pending:pending.filter(d=>!(d.workflow&&d.workflow.status==='ignored'));
   /**
@@ -3238,7 +3355,16 @@ function discovery(){
   const tb=el('table');
   tb.innerHTML='<thead><tr><th class="n">Score</th><th>Thread</th><th>Call</th><th>What it would add</th><th>Reply</th></tr></thead>';
   const body=el('tbody');
-  d.items.forEach(i=>{
+  /**
+   * `draftAccount`, not an account of the thread — `threads` records none (src/db/pages.ts).
+   * A thread nobody has drafted for cannot be attributed, so the lens hides it and SAYS how many
+   * it hid. Without that count a narrowed Threads screen reads as "we found almost nothing".
+   */
+  const unattrT=d.items.filter(i=>i.draftAccount==null).length;
+  const lensT=acctLens(discovery,unattrT);
+  if(lensT)w.append(lensT);
+  const shown=d.items.filter(i=>inLens(i.draftAccount));
+  shown.forEach(i=>{
     const tr=el('tr',i.verdict==='skip'?'dim':'');
     tr.innerHTML=`<td class="n">${i.score}</td>`+
       `<td><a href="${esc(i.permalink)}" target="_blank" rel="noopener">${esc(i.title)}</a>`+
@@ -3292,7 +3418,8 @@ function discovery(){
     }
     body.append(tr);
   });
-  if(!d.items.length)body.innerHTML='<tr><td colspan="5" class="cm">nothing scored yet</td></tr>';
+  if(!shown.length)body.innerHTML='<tr><td colspan="5" class="cm">'+
+    (d.items.length?'no thread matches this account filter':'nothing scored yet')+'</td></tr>';
   tb.append(body);w.append(tb);list.append(w);
   /* Re-renders from the fetched page rather than reloading the whole console: paging is a
      cheap action and rebuilding every screen's figures to answer it would make it expensive. */
@@ -4387,7 +4514,11 @@ function accounts(){
   r.append(grid);
 
   const g=el('div','cards');
-  S.accounts.forEach(a=>{
+  /* No unattributable count: every row here IS an account, so the lens can never hide one it
+     cannot place. Passing 0 keeps the control's warning off rather than printing "+0 hidden". */
+  const lensA=acctLens(accounts,0);
+  if(lensA)r.append(lensA);
+  S.accounts.filter(a=>inLens(a.handle)).forEach(a=>{
     const c=el('div','card'+(a.stage==='warming'?' attn':''));
     c.append(el('div','chead',`<b>${esc(a.handle)}</b>`+
       (a.role?`<span class="tag">${esc(a.role)}</span>`:'')+
@@ -4689,7 +4820,7 @@ function today(){
 
   /* An account that was removed or renamed since the filter was set: plan for everyone
      rather than filtering down to nobody. */
-  if(TODAY_ACCT&&!S.accounts.some(a=>a.handle===TODAY_ACCT))TODAY_ACCT=null;
+  if(ACCT_FILTER&&!S.accounts.some(a=>a.handle===ACCT_FILTER))ACCT_FILTER=null;
 
   /* ================= the three zones ================= */
   const grid=el('div','grid3');
@@ -4701,12 +4832,12 @@ function today(){
   const rail=panel('Accounts',S.accounts.length);
   S.accounts.forEach(a=>{
     const st=STAGE(a.karma);
-    const on=TODAY_ACCT===a.handle;
+    const on=ACCT_FILTER===a.handle;
     const row=el('button','acct'+(on?' on':''));
     row.type='button';
     row.setAttribute('aria-pressed',on?'true':'false');
     row.title=on?'Show every account’s day':`Show only ${a.handle}’s day`;
-    row.onclick=()=>{TODAY_ACCT=on?null:a.handle;today()};
+    row.onclick=()=>{ACCT_FILTER=on?null:a.handle;today()};
     /* An unmeasured account is its own state — never dressed up as stage 1 with a zero. */
     const tone=a.karma==null?'q':st.n===1?'hold':st.n===2?'warm':'ready';
     row.append(el('span','h',
@@ -4732,8 +4863,8 @@ function today(){
 
   /* ---- centre: what to actually do, per the selected account (or everyone) ---- */
   const mid=el('div');
-  const work=panel('What to do today',TODAY_ACCT||'per account');
-  (TODAY_ACCT?S.accounts.filter(a=>a.handle===TODAY_ACCT):S.accounts).forEach(a=>{
+  const work=panel('What to do today',ACCT_FILTER||'per account');
+  (ACCT_FILTER?S.accounts.filter(a=>a.handle===ACCT_FILTER):S.accounts).forEach(a=>{
     const st=STAGE(a.karma);
     const days=a.karmaMeasuredAt?Math.floor((Date.now()-new Date(a.karmaMeasuredAt))/86400000):null;
     const job=el('div','job'+(st?(st.n===1?' look':' ok'):' stop'));
@@ -4828,11 +4959,11 @@ function today(){
   if(!S.accounts.length)work.append(el('div','prose',
     '<b>Nothing to plan.</b> Add an account on the Accounts screen, then check its karma.'));
   /* The way back when the checklist is narrowed — the rail toggle alone is not discoverable. */
-  if(TODAY_ACCT){
+  if(ACCT_FILTER){
     const allRow=el('div');
     allRow.style.cssText='padding:.7rem .95rem;border-top:1px solid var(--edge)';
     const allBtn=el('button','mini','Show every account');
-    allBtn.onclick=()=>{TODAY_ACCT=null;today()};
+    allBtn.onclick=()=>{ACCT_FILTER=null;today()};
     allRow.append(allBtn);
     work.append(allRow);
   }
@@ -4951,12 +5082,17 @@ function outcomes(){
   const t=el('table');
   t.innerHTML='<thead><tr><th>When</th><th>Account</th><th>What</th><th class="n">Value</th><th>How</th></tr></thead>';
   const b=el('tbody');
-  o.observations.forEach(x=>{
+  const unattrO=o.observations.filter(x=>x.account==null).length;
+  const lensO=acctLens(outcomes,unattrO);
+  if(lensO)w.append(lensO);
+  const obs=o.observations.filter(x=>inLens(x.account));
+  obs.forEach(x=>{
     b.innerHTML+=`<tr><td>${esc(ago(x.ts))}</td><td>${esc(x.account||'—')}</td>`+
       `<td><span class="tag">${esc(x.kind)}</span>${x.checkpoint?` <span class="tag">${esc(x.checkpoint)}</span>`:''}</td>`+
       `<td class="n">${esc(x.value)}</td><td>${esc(x.note||'')}</td></tr>`;
   });
-  if(!o.observations.length)b.innerHTML='<tr><td colspan="5" class="cm">nothing measured yet</td></tr>';
+  if(!obs.length)b.innerHTML='<tr><td colspan="5" class="cm">'+
+    (o.observations.length?'no measurement matches this account filter':'nothing measured yet')+'</td></tr>';
   t.append(b);w.append(t);
   pub.append(el('div','ph','<h2>What has been measured</h2>'));
   pub.append(w);
@@ -6779,6 +6915,28 @@ addEventListener('keydown',e=>{
   }
 });
 
+/**
+ * COMPACT MODE, remembered.
+ *
+ * Writes one class on <body> and the CSS does the rest — no re-render, so toggling it cannot
+ * disturb a screen mid-read or lose the account lens.
+ *
+ * Every localStorage access is wrapped: the console runs inside Electron where it is available,
+ * and inside a plain browser tab where a private window can make the accessor itself throw. A
+ * remembered preference is not worth a blank page.
+ */
+function applyDensity(on){
+  document.body.classList.toggle('compact',!!on);
+  const b=$('#density');
+  if(b){b.setAttribute('aria-pressed',on?'true':'false');b.title=on?'Comfortable mode':'Compact mode'}
+}
+try{applyDensity(localStorage.getItem('redbot.compact')==='1')}catch{applyDensity(false)}
+$('#density').onclick=()=>{
+  const on=!document.body.classList.contains('compact');
+  applyDensity(on);
+  try{localStorage.setItem('redbot.compact',on?'1':'0')}catch{/* a preference is not worth a crash */}
+  toast(on?'Compact mode on':'Compact mode off');
+};
 $('#theme').onclick=()=>{
   const dark=(document.documentElement.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';
   document.documentElement.setAttribute('data-theme',dark?'light':'dark');
@@ -6917,11 +7075,67 @@ function paintBanner(){
   }
 }
 
+/**
+ * RECALIBRATION — every screen, when the data behind it moves.
+ *
+ * The console paints from a cached `S`, fetched once by `load()`. So a karma probe, a reply the
+ * loop published, or a removal `observe` recorded was invisible on every screen until somebody
+ * pressed Refresh — and a figure four hours stale looks exactly like one taken a second ago.
+ *
+ * The pulse already runs every fifteen seconds, so the fingerprint rides it (COUNTs and MAXes,
+ * see src/db/pages.ts) and a full state re-fetch happens ONLY when something actually changed.
+ * Polling /api/state itself would be the read src/db/pages.ts exists to avoid.
+ *
+ * WHAT IT SAYS. A karma change is named with its direction and both numbers, because "karma
+ * 4 → 3" is the sentence an operator acts on and a generic "data updated" is not. Other movement
+ * is reported as the count that moved rather than as a total: "+1 reply published" is a fact,
+ * "7 replies" is the figure that was already on screen.
+ *
+ * It does NOT recalibrate while a modal is open or a run is being watched — repainting underneath
+ * somebody mid-read loses their place, and the Logs screen has its own faster pump.
+ */
+let DATA_FP=null;
+function fpDeltas(was,now){
+  if(!was||!now)return [];
+  const out=[];
+  for(const h of Object.keys(now.karma||{})){
+    const a=was.karma?was.karma[h]:undefined, b=now.karma[h];
+    if(a===undefined||a===b||b==null)continue;
+    if(a==null){out.push(h+' karma measured: '+b);continue}
+    out.push(h+' karma '+(b>a?'up':'down')+' '+a+' \u2192 '+b);
+  }
+  const bump=(k,label)=>{
+    const d=(now[k]||0)-(was[k]||0);
+    if(d>0)out.push('+'+d+' '+label+(d===1?'':'s'));
+  };
+  bump('draftsPublished','reply published');
+  bump('draftsPending','reply waiting');
+  bump('observations','measurement');
+  bump('interactions','checkpoint');
+  return out;
+}
+async function recalibrate(now){
+  const was=DATA_FP;
+  DATA_FP=now;
+  if(!was||!now)return;                                  /* nothing to compare yet, or no read */
+  if(JSON.stringify(was)===JSON.stringify(now))return;   /* unchanged — the common case */
+  /* Not under a modal, and not while the Logs screen is pumping its own stream. */
+  if(!$('#scrim').hidden||!$('#dialog').hidden||CUR==='logs')return;
+  try{
+    await load();
+    R[CUR]();
+    const d=fpDeltas(was,now);
+    if(d.length)toast(d.slice(0,3).join(' \u00b7 ')+(d.length>3?' \u00b7 +'+(d.length-3)+' more':''),6000);
+  }catch{/* a failed recalibration leaves the last good paint up, and says nothing it cannot back */}
+}
+
 async function pulseCheck(){
   const chip=$('#pulseChip');
   try{
     const p=await fetch('/api/pulse').then(r=>r.json());
     const was=PULSE_LAST; PULSE_LAST=p;
+    /* Fire and forget: the chip below must paint on this tick whatever the state re-fetch does. */
+    recalibrate(p.data||null);
 
     /**
      * Catch the banner up when the browsers arrive.

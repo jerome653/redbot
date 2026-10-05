@@ -298,6 +298,9 @@ try {
     draftCounts: () => pages.draftCounts(db.getPool()),
     funnel: () => pages.threadFunnel(db.getPool()),
     checkpoints: () => pages.checkpointSummary(db.getPool()),
+    /* COUNTs and MAXes only — see src/db/pages.ts. Safe on the fifteen-second pulse, which is
+       the whole reason it is not a /api/state read. */
+    fingerprint: () => pages.dataFingerprint(db.getPool()),
     clamp: pages.clampPage,
     DEFAULT_PAGE: pages.DEFAULT_PAGE
   };
@@ -570,6 +573,14 @@ async function buildState(opts = {}) {
       permalink: d.permalink,
       body: d.body,
       createdAt: d.createdAt,
+      /**
+       * WHO WOULD POST IT. `drafts.account` has existed since 2026-07-27 and this payload never
+       * carried it, so Review could not be filtered or even grouped by account while the console
+       * ran eight of them. Nullable on purpose and sent as null rather than omitted: a draft
+       * written before the column existed has no owner, and showing one as unassigned is the
+       * truth, where inventing the currently-selected account would be a guess printed as a fact.
+       */
+      account: d.account ?? null,
       model: d.model,
       lintIssues: d.lintIssues || [],
       hasDisclosure: !!d.hasDisclosure,
@@ -954,7 +965,13 @@ async function buildState(opts = {}) {
 
     /* The last forty events. `history` is already bounded to that by the scope passed to the
        domain read, so this slice is a safety net rather than the thing doing the limiting. */
-    activity: history.slice(-40).reverse().map((h) => ({ ts: h.ts, kind: h.kind, summary: h.summary })),
+    /* `account` is on every history row in the schema and was dropped here, so the activity
+       feed could not say which of eight accounts an entry belonged to. Null stays null — an
+       unattributed event is a real category (src/health.ts counts them as unattributedEvents24h)
+       and must not be folded into whoever is selected. */
+    activity: history.slice(-40).reverse().map((h) => ({
+      ts: h.ts, kind: h.kind, summary: h.summary, account: h.account ?? null
+    })),
 
     /**
      * Where the numbers on this screen came from.
@@ -3730,11 +3747,28 @@ const server = createServer((req, res) => {
          banner listing the two things still missing. See tools/product/fleet-posture.mjs. */
       const problems = fleetProblems(browsers);
       if (!existsSync(join(ROOT, 'dist', 'cli.js'))) problems.push('redbot is not built — run npm run build');
-      send(200, JSON.stringify({
-        at: new Date().toISOString(), running, browsers, problems,
-        auto: autoStatus(),
-        healthy: problems.length === 0
-      }));
+      /**
+       * `data` rides the pulse so every screen can notice its own numbers have moved.
+       *
+       * The console paints from a cached /api/state, so a karma probe, a published reply or a
+       * recorded removal was invisible until somebody pressed Refresh — and a stale figure looks
+       * exactly like a fresh one. The client compares this fingerprint and re-fetches the real
+       * state only when something actually changed.
+       *
+       * It is `null`, never an empty object, when the database could not be asked: absent is a
+       * different fact from unchanged, and a client that could not tell them apart would stop
+       * recalibrating the moment the first read failed and never say so.
+       */
+      Promise.resolve(pagesApi ? pagesApi.fingerprint() : null)
+        .catch(() => null)
+        .then((data) => {
+          send(200, JSON.stringify({
+            at: new Date().toISOString(), running, browsers, problems,
+            auto: autoStatus(),
+            data,
+            healthy: problems.length === 0
+          }));
+        });
     }).catch((e) => send(500, JSON.stringify({ error: String(e && e.message || e) })));
     return;
   }

@@ -68,6 +68,18 @@ export interface ThreadPageRow {
   ageText: string | null;
   draftId: string | null;
   draftStatus: string | null;
+  /**
+   * The account of the newest draft for this thread, or null.
+   *
+   * `threads` records NO account — a thread is collected by the install, and which account's
+   * browser fetched it is nowhere in the schema (only `history.account` on the `read`/`search`
+   * row, which is not joined to the thread). So this is the only attribution available on this
+   * screen, and it is deliberately named for what it is: the DRAFT's account, not the thread's.
+   *
+   * A thread nobody has drafted for is therefore unattributable, and filtering by account hides
+   * it. The console says so rather than letting a filter quietly shrink the list.
+   */
+  draftAccount: string | null;
 }
 
 
@@ -160,7 +172,7 @@ export async function pageThreads(db: Db, q: PageQuery = {}): Promise<Page<Threa
     thread_id: string; title: string; permalink: string; verdict: string; score: number;
     thesis_why_thread: string | null; thesis_what_new: string | null; thesis_why_not_silent: string | null;
     reasons: string[]; subreddit: string | null; comment_count: number | null; age_text: string | null;
-    draft_id: string | null; draft_status: string | null;
+    draft_id: string | null; draft_status: string | null; draft_account: string | null;
   }>(
     /* One draft per thread in practice; picking exactly one keeps that true for the join even
        if a second is ever written, rather than duplicating the thread's row on this screen.
@@ -178,7 +190,9 @@ export async function pageThreads(db: Db, q: PageQuery = {}): Promise<Page<Threa
             (SELECT d.id     FROM drafts d WHERE d.thread_id = a.thread_id
               ORDER BY d.created_at DESC, d.id DESC LIMIT 1) AS draft_id,
             (SELECT d.status FROM drafts d WHERE d.thread_id = a.thread_id
-              ORDER BY d.created_at DESC, d.id DESC LIMIT 1) AS draft_status
+              ORDER BY d.created_at DESC, d.id DESC LIMIT 1) AS draft_status,
+            (SELECT d.account FROM drafts d WHERE d.thread_id = a.thread_id
+              ORDER BY d.created_at DESC, d.id DESC LIMIT 1) AS draft_account
        FROM opportunity_assessments a
        LEFT JOIN threads t ON t.id = a.thread_id
       ORDER BY a.score DESC, a.thread_id
@@ -204,7 +218,8 @@ export async function pageThreads(db: Db, q: PageQuery = {}): Promise<Page<Threa
       comments: x.comment_count,
       ageText: x.age_text,
       draftId: x.draft_id,
-      draftStatus: x.draft_status
+      draftStatus: x.draft_status,
+      draftAccount: x.draft_account
     }))
   };
 }
@@ -455,4 +470,89 @@ async function countRows(db: Db, table: string): Promise<number> {
   if (!COUNTABLE.has(table)) throw new Error(`refusing to count "${table}"`);
   const r = await db.query<{ n: number }>(`SELECT count(*) AS n FROM ${table}`);
   return Number(r.rows[0]?.n ?? 0);
+}
+
+/**
+ * HAS ANYTHING CHANGED? A fingerprint cheap enough to ask every fifteen seconds.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY NOT `loadConsoleDomain`
+ *
+ * The console paints from a cached `/api/state`, and `/api/state` is a full domain read across
+ * eleven tables. So a karma reading taken by `probe-karma`, a draft written by the loop, or a
+ * removal recorded by `observe` is invisible on every screen until somebody presses Refresh —
+ * and a number on screen that is four hours stale looks exactly like one taken a second ago.
+ * That indistinguishability is the defect, the same one `karmaMeasuredAt` exists to close for
+ * a single figure.
+ *
+ * Polling `/api/state` instead would be correct and unaffordable: it is the read this whole
+ * file exists to avoid doing repeatedly. So this asks only for COUNTs and MAXes — the database
+ * answers every one of them without returning a row, exactly as the header requires — and the
+ * client re-fetches the real state only when one of them MOVED.
+ *
+ * WHAT IS IN IT, and why each: `observations` and its newest `ts` catch a karma probe and a
+ * removal; the draft counts catch the loop writing or publishing; `interactions` catches a
+ * checkpoint. Karma is carried per account rather than hashed, because the client names the
+ * delta — "karma 4 → 3" is the sentence an operator needs, and a hash cannot produce it.
+ * ---------------------------------------------------------------------------
+ */
+export interface DataFingerprint {
+  /** Newest observation timestamp, or null when nothing has ever been observed. */
+  observedAt: string | null;
+  observations: number;
+  interactions: number;
+  draftsTotal: number;
+  draftsPending: number;
+  draftsPublished: number;
+  /** Latest karma per account handle. Named, not hashed, so a change can be reported as a delta. */
+  karma: Record<string, number | null>;
+}
+
+export async function dataFingerprint(db: Db): Promise<DataFingerprint> {
+  const one = async (sql: string): Promise<number> => {
+    const r = await db.query<{ n: number }>(sql);
+    return Number(r.rows[0]?.n ?? 0);
+  };
+
+  const [observations, interactions, draftsTotal, draftsPending, draftsPublished] = await Promise.all([
+    one('SELECT count(*) AS n FROM observations'),
+    one('SELECT count(*) AS n FROM interactions'),
+    one('SELECT count(*) AS n FROM drafts'),
+    one("SELECT count(*) AS n FROM drafts WHERE status = 'pending'"),
+    one("SELECT count(*) AS n FROM drafts WHERE status = 'published'")
+  ]);
+
+  const maxTs = await db.query<{ ts: string | null }>('SELECT max(ts) AS ts FROM observations');
+
+  /**
+   * One karma row per account — the NEWEST, by a window function rather than by loading them all.
+   *
+   * `row_number()` over a partition is the one shape that gets "latest per group" out of SQLite
+   * in a single pass. `ts DESC, id DESC` is a total order for the same reason every other query
+   * in this file carries a tie-break: two readings in the same millisecond must not be able to
+   * swap places between plans and make the fingerprint flap on its own.
+   */
+  const karmaRows = await db.query<{ account: string | null; value: string | null }>(
+    `SELECT account, value FROM (
+       SELECT account, value,
+              row_number() OVER (PARTITION BY account ORDER BY ts DESC, id DESC) AS rn
+         FROM observations
+        WHERE kind = 'karma' AND account IS NOT NULL
+     ) WHERE rn = 1`
+  );
+
+  const karma: Record<string, number | null> = {};
+  for (const r of karmaRows.rows) {
+    if (!r.account) continue;
+    /* `observations.value` is JSON (src/db migration 0010), so a karma count arrives as the text
+       "4" and must be parsed. A value that will not parse to a finite number is recorded as null
+       — an unreadable measurement is not a measurement, and must not be reported as a figure. */
+    const n = Number(typeof r.value === 'string' ? r.value.replace(/^"|"$/g, '') : r.value);
+    karma[r.account] = Number.isFinite(n) ? n : null;
+  }
+
+  return {
+    observedAt: maxTs.rows[0]?.ts ?? null,
+    observations, interactions, draftsTotal, draftsPending, draftsPublished, karma
+  };
 }
