@@ -195,6 +195,9 @@ export function sameLocalDay(a: Date, b: Date, zone?: string): boolean {
   }
 }
 
+/** The history kinds behind a counter `assess()` reads: replies, login failures, rate limits. */
+export const VERDICT_KINDS: ReadonlySet<string> = new Set(['publish.ok', 'login.fail', 'ratelimit']);
+
 function num(v: unknown): number | null {
   const n = typeof v === 'string' ? Number(v.replace(/[, ]/g, '')) : typeof v === 'number' ? v : NaN;
   return Number.isFinite(n) ? n : null;
@@ -246,9 +249,12 @@ export async function counters(
   const o = mine(obs);
 
   /* Only meaningful when an account was named AND unowned rows were held back: with no account
-     named nothing is being attributed, so nothing is outstanding. */
+     named nothing is being attributed, so nothing is outstanding. And only the kinds a verdict
+     reads: on cardinal 2026-10-17 all 36 unowned rows of the day were the loop's own searches,
+     reads and drafts, which change no state whoever owns them, and the caution fired every cycle. */
   const unattributedEvents24h = account && !chargeUnowned
-    ? history.filter((e) => e.account == null && now.getTime() - new Date(e.ts).getTime() <= DAY_MS).length
+    ? history.filter((e) => e.account == null && VERDICT_KINDS.has(e.kind) &&
+        now.getTime() - new Date(e.ts).getTime() <= DAY_MS).length
     : 0;
 
   const today = (ts: string) => sameLocalDay(new Date(ts), now, zone);
@@ -438,7 +444,7 @@ export function assess(c: HealthCounters, now: Date = new Date()): HealthVerdict
        but somebody should look at it rather than have it vanish between accounts. */
     caution.push(
       `${c.unattributedEvents24h} event(s) in the last 24h name no account, so they were counted ` +
-      `against none of the ${c.fleetSize} accounts here — read data/history.jsonl before publishing`
+      `against none of the ${c.fleetSize} accounts here — read \`redbot history\` before publishing`
     );
   }
 

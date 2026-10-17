@@ -91,4 +91,35 @@ describe('an event that names no account is not charged to every account', () =>
     assert.equal(c.loginFailures24h, 2, 'with no account named, nothing is being attributed to anyone');
     assert.equal(c.unattributedEvents24h, 0);
   });
+
+  /* Measured on cardinal 2026-10-17: 13 accounts, 36 unowned rows in 24h, every one of them
+     search.preview, search, read, opportunity, gate.block or draft. The caution fired every cycle. */
+  test('the loop\'s own unowned searches, reads and drafts are not an outstanding event', async () => {
+    const loopRows = history(['search.preview', 'search', 'read', 'opportunity', 'gate.block', 'draft']
+      .map((kind) => ({ kind: kind as HistoryEntry['kind'], account: null, ts: ago(15) })));
+    const c = await counters('docs-architect', NOW, { history: loopRows, observations: [] }, undefined, 13);
+    assert.equal(c.unattributedEvents24h, 0, 'no verdict reads these kinds, so nobody owning them changes nothing');
+    assert.ok(!assess(c, NOW).reasons.some((r) => /no account/i.test(r)), JSON.stringify(assess(c, NOW).reasons));
+  });
+
+  test('every verdict kind, unowned, is still reported, and each one moves a counter when charged', async () => {
+    const { VERDICT_KINDS } = await import('../health.js');
+    assert.deepEqual([...VERDICT_KINDS].sort(), ['login.fail', 'publish.ok', 'ratelimit'],
+      'health.ts derives repliesToday, loginFailures24h and the rate-limit counters from exactly these');
+    const empty = await counters('docs-architect', NOW, { history: [], observations: [] }, undefined, 1);
+    for (const kind of VERDICT_KINDS) {
+      const row = history([{ kind: kind as HistoryEntry['kind'], account: null, ts: ago(15) }]);
+      const fleet = await counters('docs-architect', NOW, { history: row, observations: [] }, undefined, 2);
+      assert.equal(fleet.unattributedEvents24h, 1, `an unowned ${kind} must be reported`);
+      const charged = await counters('docs-architect', NOW, { history: row, observations: [] }, undefined, 1);
+      assert.notDeepEqual(charged, empty, `${kind} changes no counter, so it does not belong in VERDICT_KINDS`);
+    }
+  });
+
+  test('the caution points at a command that exists, not at a file that no longer does', async () => {
+    const c = await counters('docs-architect', NOW, { history: nobodysFailures, observations: [] }, undefined, 2);
+    const r = assess(c, NOW).reasons.find((x) => /no account/i.test(x)) ?? '';
+    assert.match(r, /redbot history/);
+    assert.doesNotMatch(r, /history\.jsonl/);
+  });
 });
