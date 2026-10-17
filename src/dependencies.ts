@@ -39,7 +39,7 @@
 import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { existsSync as fsExists, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { win32 } from 'node:path';
 /* Type only — erased at compile. This module keeps taking every input by injection; it borrows
    the union so a new provider cannot be added in config.ts without this file being told. */
 import type { LlmProvider } from './config.js';
@@ -120,10 +120,13 @@ export function nodeVersionOk(raw: string, min = MIN_NODE): boolean {
 export function chromeCandidates(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): string[] {
   let out: string[];
   if (platform === 'win32') {
-    const rel = join('Google', 'Chrome', 'Application', 'chrome.exe');
+    /* win32.join, not the host's join: `platform` is a parameter, and on a Linux host the host's
+       join wrote `C:\Program Files/Google/...`, a path no Windows machine has. On Windows the two
+       are the same function. */
+    const rel = win32.join('Google', 'Chrome', 'Application', 'chrome.exe');
     out = [env['ProgramFiles'], env['ProgramFiles(x86)'], env['LOCALAPPDATA']]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
-      .map((r) => join(r, rel));
+      .map((r) => win32.join(r, rel));
   } else if (platform === 'darwin') {
     out = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'];
   } else {
