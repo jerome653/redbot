@@ -316,9 +316,13 @@ test('the decision runs AGAIN on the final gates, so a last-second advisory stop
   assert.equal(reddit({ gates: withAdvisory('duplicate') }).publish, false, 'refused on the final gates');
   const src = readFileSync(new URL('../../src/commands/reply.ts', import.meta.url), 'utf8');
   const tail = src.slice(src.indexOf('const final = evaluateGates('));
-  const again = tail.search(/unattendedPublishDecision\(\{\s*\.\.\.autoInput,\s*gates: final/);
-  const refused = tail.indexOf("record('publish.refused'");
-  assert.ok(again > 0, 'reply.ts must call unattendedPublishDecision with the final gates');
-  assert.ok(again < refused && refused < tail.indexOf('publishComment('),
-    'and record publish.refused before publishComment is reached');
+  /* The whole block, exactly: called on the final gates and re-read karma with nothing spread after
+     them, and a refusal that records and RETURNS. A looser match let three mutants through (the
+     block skipped, the refusal ignored, `pre` spread back in over `final`). */
+  const block = tail.search(new RegExp(
+    String.raw`if \(autoInput\) \{\s*const again = unattendedPublishDecision\(\{ \.\.\.autoInput, gates: final, karma: verdict2\.counters\.karma \}\);` +
+    String.raw`\s*if \(!again\.publish\) \{\s*say\.fail\([^\n]*\n\s*await record\('publish\.refused'[^\n]*\n[^\n]*\n\s*\}\);\s*return 1;\s*\}\s*\}`
+  ));
+  assert.ok(block > 0, 'reply.ts must decide again on the final gates and return on a refusal');
+  assert.ok(block < tail.indexOf('publishComment('), 'before publishComment is reached');
 });
