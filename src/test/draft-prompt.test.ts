@@ -183,3 +183,29 @@ test('no brief is issued that the parser cannot read back', () => {
   assert.match(p, /ONLY this JSON object/i);
   assert.match(p, /no fence/i);
 });
+
+test('the voice is loosened (Jerome 2026-10-18, issue #14): a reason, a view, a varied opener, a question only sometimes', () => {
+  /**
+   * Issue #14: six published replies read as one template (2-3 sentences, a deferral opener on
+   * all six, never a reason, never a position, ending on a question), and r/Wordpress moderators
+   * removed four. Each tell traced to a line of this prompt. Jerome chose to loosen it; the
+   * fact-check still blocks a claim it proves false, so the one reason must stay marked as likely.
+   */
+  const p = build();
+  assert.match(p, /ONE short sentence of why or how/, 'one reason sentence is allowed');
+  assert.match(p, /A second reason is a lecture/, 'and only one');
+  assert.match(p, /AT MOST ONE MECHANISM SENTENCE/);
+  assert.doesNotMatch(p, /NO MECHANISM SENTENCES/);
+  assert.doesNotMatch(p, /GIVE THE STEP, NOT THE THEORY/);
+
+  assert.match(p, /A CLEAR VIEW IS FINE/, 'a stated preference is allowed');
+  assert.doesNotMatch(p, /do not volunteer an opinion nobody asked for/i);
+  assert.doesNotMatch(p, /STAY NEUTRAL/);
+
+  assert.match(p, /OPENER: start with the substance/);
+  assert.match(p, /Before deciding…/, 'the measured deferral frames are named so the model avoids them');
+
+  assert.match(p, /Ask a question only when/, 'a question is the exception');
+  assert.doesNotMatch(p, /ask for exactly that one thing and stop/i);
+  assert.match(p, /Fit the thread/, 'length follows the thread');
+});
