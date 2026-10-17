@@ -150,6 +150,9 @@ before(async () => {
     env: { ...CHILD_ENV,
            REDBOT_DATA: DATA,
            REDBOT_CHROME: recorder,
+           /* A runner's first CIM session can take longer than the 20s production ceiling, which
+              stops the lookup and leaves the stand-in unproven (run 39047501017). */
+           REDBOT_PORT_LOOKUP_TIMEOUT_MS: '90000',
            /* The update check must not spend the real repository's unauthenticated rate limit. */
            REDBOT_UPDATE_REPO: 'redbot-tests/does-not-exist-9f3a' },
     stdio: ['ignore', 'pipe', 'pipe']
