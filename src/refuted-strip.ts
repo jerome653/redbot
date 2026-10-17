@@ -67,8 +67,11 @@ export interface Span { start: number; end: number }
 const FENCE = /```[\s\S]*?(?:```|$)/g;
 const LIST_MARK = /^[ \t]*(?:[-*+>]|\d+[.)])[ \t]+/;
 const MARK_ONLY = /^[ \t]*(?:[-*+>]|\d+[.)])[ \t]*$/;
-/** Inline code and URLs: no sentence boundary may fall inside them. A URL's trailing period is prose. */
-const NO_SPLIT = /`[^`\n]*`|https?:\/\/[^\s<>()]*[^\s<>().,!?;:'"]/g;
+/**
+ * A boundary needs whitespace after it, so a URL ("…/6.4.2/") and a version number ("6.4.2") can
+ * never be cut: neither contains a space. Inline code can, so it is masked before boundaries are found.
+ */
+const NO_SPLIT = /`[^`\n]*`/g;
 const BOUNDARY = /[.!?]+["'”’)\]]*(?=\s)/g;
 const ABBREV = /(?:^|[\s(])(?:e\.g|i\.e|etc|vs|cf|approx|incl)\.$/i;
 

@@ -143,6 +143,11 @@ describe('splitting into sentences', () => {
     ]);
   });
 
+  test('inline code holding a full stop and a space stays whole', () => {
+    const body = 'Then run `echo done. exit` in the shell. It returns at once.';
+    assert.deepEqual(texts(body), ['Then run `echo done. exit` in the shell.', 'It returns at once.']);
+  });
+
   test('a fenced code block is one unit, never cut at its periods', () => {
     const body = 'Run this. It is safe.\n```\nwp db export. && wp db import x.sql. Done.\n```\nThen check.';
     assert.deepEqual(texts(body), ['Run this.', 'It is safe.', '```\nwp db export. && wp db import x.sql. Done.\n```', 'Then check.']);

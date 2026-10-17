@@ -147,6 +147,20 @@ describe('the cycle, after a REJECT that a deletion can fix', () => {
     assert.match(String(refusal?.data?.refused), /already the product of a strip/);
   });
 
+  test('the original, once rejected by a strip, is never stripped a second time', async () => {
+    const before = (await loadDrafts()).length;
+    const { calls, certify } = stubCertify(() => REFUTED);
+    const { got, reply } = stubReply();
+
+    await factCheckThenPublish('d_a00000000001_orig', { certify, reply, publish: () => true });
+
+    assert.deepEqual(calls, ['d_a00000000001_orig']);
+    assert.deepEqual(got, ['d_a00000000001_orig'], 'reply is left to refuse a draft that is no longer pending');
+    assert.equal((await loadDrafts()).length, before, 'no second shorter draft');
+    const refusals = (await loadHistory()).filter((h) => h.kind === 'draft.rewrite' && h.data?.from === 'd_a00000000001_orig' && h.data?.refused);
+    assert.match(String(refusals.at(-1)?.data?.refused), /already rejected/);
+  });
+
   test('a REJECT carrying a rule a deletion cannot answer keeps the original and records why', async () => {
     await saveThreads([thread('a00000000003')]);
     await saveDraft(original('a00000000003'));
@@ -162,6 +176,24 @@ describe('the cycle, after a REJECT that a deletion can fix', () => {
     assert.equal((await loadDrafts()).find((d) => d.id === 'd_a00000000003_orig')!.status, 'pending');
     const refusal = (await loadHistory()).find((h) => h.kind === 'draft.rewrite' && h.data?.from === 'd_a00000000003_orig');
     assert.match(String(refusal?.data?.refused), /contested-contradiction/);
+  });
+
+  test('a shorter body that a fresh draft would be blocked for is refused, and the original kept', async () => {
+    await saveThreads([thread('a00000000005')]);
+    const short = 'Raise max_allowed_packet in my.cnf now. MySQL truncates an oversized row silently. ' +
+      'Restart mysqld after the edit. Then rerun the mysqldump import.';
+    await saveDraft({ ...original('a00000000005'), body: short });
+    const { calls, certify } = stubCertify(() => ({
+      reasons: [{ rule: 'fatal-contradiction', claimId: 'c2', detail: '' }], claims: [claim('c2', 'truncates an oversized row silently')]
+    }));
+    const { got, reply } = stubReply();
+
+    await factCheckThenPublish('d_a00000000005_orig', { certify, reply, publish: () => true });
+
+    assert.deepEqual(calls, ['d_a00000000005_orig']);
+    assert.deepEqual(got, ['d_a00000000005_orig']);
+    const refusal = (await loadHistory()).find((h) => h.kind === 'draft.rewrite' && h.data?.from === 'd_a00000000005_orig');
+    assert.match(String(refusal?.data?.refused), /blocked by .*quality:too-short/);
   });
 
   test('REDBOT_STRIP_REFUTED=0: nothing changes — one certification, the original id to reply', async () => {
