@@ -269,7 +269,7 @@ test('REDDIT: the latest certification row must exist and agree with the draft r
     assert.match(d.why, /certified at/);
   }
   for (const verdict of ['PASS', 'REVIEW', '', 'pending']) {
-    assert.equal(reddit({ latestCert: { ...R.latestCert, verdict } }).publish, false, `cert verdict ${JSON.stringify(verdict)}`);
+    assert.match(reddit({ latestCert: { ...R.latestCert, verdict } }).why, /which is not a verdict/, `cert verdict ${JSON.stringify(verdict)}`);
   }
   assert.equal(reddit({ certVerdict: 'PASS', latestCert: { ...R.latestCert, verdict: 'PASS' } }).publish, false);
 });
