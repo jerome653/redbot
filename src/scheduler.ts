@@ -190,7 +190,8 @@ async function runOne(job: Job, now: Date): Promise<RunOutcome> {
    * deliberately and on the record.
    *
    * WHAT DOES NOT MOVE WITH IT: `unattendedPublishDecision` (src/autopublish.ts) still demands a
-   * certification verdict of PASS, no hard gate, and NO ADVISORY AT ALL — strictly higher than
+   * certification that clears REDBOT_PUBLISH_MIN_VERDICT (CERTIFIED | ESCALATE | REDDIT | ANY,
+   * default CERTIFIED), no hard gate, and NO OTHER ADVISORY — strictly higher than
    * the bar a person at the prompt had to clear, because an advisory is only overrulable by
    * someone who has read it and there is no longer anyone reading.
    * ---------------------------------------------------------------------------
