@@ -162,6 +162,23 @@ export async function collectListings(
 const titles = new Map<string, string | null>();
 
 /**
+ * A promoted post: an advert in the feed, not a thread anyone asked a question in.
+ *
+ * Measured on cardinal 2026-10-18: 26 of 909 stored threads were these. Every one has a
+ * `/user/<name>/comments/` path (Reddit runs ads as posts on the advertiser's profile) and is stored
+ * with subreddit `unknown`; 25 of them also carry `impressionid=`, the ad-impression tracker. Because
+ * that parameter changes on every view, the same advert hashes to a new thread id each time, which is
+ * why the only threads ever stored twice were adverts. A profile post is skipped even without the
+ * tracker: it belongs to no subreddit, so there is no community to answer in.
+ */
+export function isPromotedLink(href: string): boolean {
+  let u: URL;
+  try { u = new URL(href, config.redditBase); } catch { return false; }
+  if (u.searchParams.has('impressionid')) return true;
+  return /^\/(user|u)\/[^/]+\/comments\//i.test(u.pathname);
+}
+
+/**
  * How long one feed scroll may take before collection stops scrolling. The same liveness bound,
  * for the same reason, as WHEEL_TIMEOUT_MS in src/behavior.ts.
  */
@@ -177,6 +194,7 @@ export async function collectPermalinks(
   const wheelTimeoutMs = opts?.wheelTimeoutMs ?? WHEEL_TIMEOUT_MS;
   const found = new Set<string>();
   let idleRounds = 0;
+  const promoted = new Set<string>();
 
   // Resolve the container once; fall back to the page if the layout changed.
   let root: Page | Locator = page;
@@ -201,7 +219,8 @@ export async function collectPermalinks(
       const links = await root.locator(s).all().catch(() => []);
       for (const link of links) {
         const href = await link.getAttribute('href').catch(() => null);
-        if (href && href.includes('/comments/')) {
+        if (href && href.includes('/comments/') && isPromotedLink(href)) promoted.add(href);
+        else if (href && href.includes('/comments/')) {
           const abs = href.startsWith('http') ? href : config.redditBase + href;
           if (onLink && !found.has(abs)) {
             const text = await link.innerText().catch(() => null);
@@ -239,6 +258,7 @@ export async function collectPermalinks(
       await sleep(900);
     }
   }
+  if (promoted.size) console.log(`  skipped ${promoted.size} promoted post link(s)`);
   return [...found].slice(0, max);
 }
 
