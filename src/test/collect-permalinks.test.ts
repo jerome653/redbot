@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { collectPermalinks } from '../reddit/scrape.js';
+import { collectPermalinks, isPromotedLink } from '../reddit/scrape.js';
 
 /**
  * Observed on cardinal 2026-10-17: an unattended cycle stopped at "Collecting up to 15 posts…"
@@ -62,4 +62,25 @@ test('a full first screen never scrolls', async () => {
   const got = await collectPermalinks(feed.page as never, 15);
   assert.equal(got.length, 15);
   assert.equal(wheels, 0);
+});
+
+/** Real shapes from the production threads table, 2026-10-18. */
+const AD = '/user/CodeRabbitAI/comments/1qoevpq/cut_code_review_time_and_bugs_in_half_sign_up_for/?p=1&impressionid=5498099549689873874&action_bar_refresh_eligible=1';
+const PROFILE_POST = 'https://www.reddit.com/user/foxcorecms/comments/1wuesos/foxcorecms_cms/';
+
+test('isPromotedLink: an advert or a profile post is promoted; a subreddit thread is not', () => {
+  assert.equal(isPromotedLink(AD), true, 'the impression tracker marks an advert');
+  assert.equal(isPromotedLink(PROFILE_POST), true, 'a profile post has no subreddit to answer in');
+  assert.equal(isPromotedLink('/u/someone/comments/abc/x/'), true, '/u/ is the short form of /user/');
+  assert.equal(isPromotedLink('/r/cms/comments/p1/post_1/?impressionid=1'), true);
+  assert.equal(isPromotedLink('/r/cms/comments/p1/post_1/'), false);
+  assert.equal(isPromotedLink('https://www.reddit.com/r/Wordpress/comments/p2/x/?p=1'), false);
+  assert.equal(isPromotedLink('/r/user/comments/p3/a_sub_called_user/'), false, 'a subreddit NAMED user is a subreddit');
+});
+
+test('promoted links in the feed are skipped and do not count towards the max', async () => {
+  const feed = fakeFeed([[...hrefs(3), AD, PROFILE_POST, ...hrefs(2, 3)]], async () => { /* lands */ });
+  const got = await collectPermalinks(feed.page as never, 5);
+  assert.equal(got.length, 5, 'the five subreddit threads fill the max');
+  assert.ok(got.every((u) => u.includes('/r/cms/')), `no advert or profile post collected: ${got.join(' ')}`);
 });
