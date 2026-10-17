@@ -212,6 +212,21 @@ describe('the cycle, after a REJECT that a deletion can fix', () => {
     assert.deepEqual(drafts.map((d) => [d.id, d.status]), [['d_a00000000002_orig', 'pending']]);
   });
 
+  test('a CERTIFIED draft goes to reply as is: no new draft, and no strip record at all', async () => {
+    await saveThreads([thread('a00000000006')]);
+    await saveDraft(original('a00000000006'));
+    const { calls, certify } = stubCertify(() => CERTIFIED);
+    const { got, reply } = stubReply();
+
+    await factCheckThenPublish('d_a00000000006_orig', { certify, reply, publish: () => true });
+
+    assert.deepEqual(calls, ['d_a00000000006_orig']);
+    assert.deepEqual(got, ['d_a00000000006_orig']);
+    assert.equal((await loadDrafts()).filter((d) => d.threadId === 'a00000000006').length, 1);
+    const rows = (await loadHistory()).filter((h) => h.kind === 'draft.rewrite' && h.data?.from === 'd_a00000000006_orig');
+    assert.deepEqual(rows, [], 'nothing was refused, because there was nothing to strip');
+  });
+
   test('an install that does not publish unattended never strips', async () => {
     await saveThreads([thread('a00000000004')]);
     await saveDraft(original('a00000000004'));

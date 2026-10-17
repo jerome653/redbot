@@ -15,11 +15,11 @@ import { config, selectedAccount } from './config.js';
 import { lintDraft } from './disclosure.js';
 import { checkNovelty } from './novelty.js';
 import { loadDraftChecks, draftBlocks, newDraftId } from './commands/draft.js';
-import { planStrip } from './refuted-strip.js';
+import { planStrip, hasRefutedClaim } from './refuted-strip.js';
 import { record, say } from './log.js';
 import type { Draft } from './types.js';
 
-type Prepared = { why: string } | { old: Draft; next: Draft; removed: number; quotes: string[] };
+type Prepared = { skip: string } | { why: string } | { old: Draft; next: Draft; removed: number; quotes: string[] };
 
 async function prepare(draftId: string): Promise<Prepared> {
   const drafts = await loadDrafts();
@@ -28,9 +28,12 @@ async function prepare(draftId: string): Promise<Prepared> {
   if (old.status !== 'pending') return { why: `the draft is already ${old.status}` };
 
   const db = getPool();
+  const certs = await selectCertifications(db, { draftIds: [draftId] });
+  const latest = certs[certs.length - 1];
+  if (!hasRefutedClaim(latest)) return { skip: `no claim in ${draftId} was proven false (verdict: ${latest?.verdict ?? 'none'})` };
   const plan = planStrip({
     body: old.body,
-    certs: await selectCertifications(db, { draftIds: [draftId] }),
+    certs,
     protect: [config.brand.disclosureLine, config.aiDisclosureLine],
     fromStrip: (await strippedFrom(db, draftId)) !== null
   });
@@ -71,6 +74,10 @@ export async function recheckWithoutRefuted(
 ): Promise<string> {
   let p: Prepared;
   try { p = await prepare(draftId); } catch (e) { p = { why: e instanceof Error ? e.message : String(e) }; }
+  if ('skip' in p) {
+    say.step(`Nothing to strip: ${p.skip}.`);
+    return draftId;
+  }
   if ('why' in p) {
     say.step(`Refuted-claim strip refused for ${draftId}: ${p.why}. The original verdict stands.`);
     await record('draft.rewrite', `refuted-claim strip refused for ${draftId}`, { stage: 'refuted', from: draftId, refused: p.why });

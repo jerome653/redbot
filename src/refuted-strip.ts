@@ -33,6 +33,11 @@ export function stripRefutedEnabled(env: Record<string, string | undefined> = pr
   return env.REDBOT_STRIP_REFUTED !== '0';
 }
 
+/** A REJECT that names a claim proven false. Anything else has nothing to strip, so nothing is refused. */
+export function hasRefutedClaim(cert: Certification | undefined): boolean {
+  return cert?.verdict === 'REJECT' && cert.reasons.some((r) => r.rule === 'fatal-contradiction');
+}
+
 export type Eligibility = { ok: true; refuted: string[]; dependents: string[] } | { ok: false; why: string };
 
 export function stripEligibility(cert: Certification | undefined): Eligibility {
