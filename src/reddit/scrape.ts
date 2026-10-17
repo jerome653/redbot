@@ -161,12 +161,20 @@ export async function collectListings(
 /** Populated as a side effect of the crawl above; keyed by absolute permalink. */
 const titles = new Map<string, string | null>();
 
+/**
+ * How long one feed scroll may take before collection stops scrolling. The same liveness bound,
+ * for the same reason, as WHEEL_TIMEOUT_MS in src/behavior.ts.
+ */
+const WHEEL_TIMEOUT_MS = 10_000;
+
 export async function collectPermalinks(
   page: Page,
   max: number,
   scope?: readonly string[],
-  onLink?: (href: string, text: string | null) => void
+  onLink?: (href: string, text: string | null) => void,
+  opts?: { wheelTimeoutMs?: number }
 ): Promise<string[]> {
+  const wheelTimeoutMs = opts?.wheelTimeoutMs ?? WHEEL_TIMEOUT_MS;
   const found = new Set<string>();
   let idleRounds = 0;
 
@@ -211,7 +219,23 @@ export async function collectPermalinks(
     else idleRounds = 0;
 
     if (found.size < max) {
-      await page.mouse.wheel(0, 1200 + Math.floor(Math.random() * 900));
+      /* RACED, as src/behavior.ts races its wheel. On cardinal 2026-10-17 a cycle sat on this
+         await from 18:57 UTC with no error and no history row: the loop's Chrome window was
+         minimised (CDP windowState "minimized", document.hidden true), r/cms/new held 12 post
+         links against a max of 15, and the wheel never settled. A promise that never settles is
+         not a rejection, and Playwright puts no timeout on mouse input, so nothing ended it.
+         One wheel that does not land ends the scrolling: every later wheel goes to the same
+         page. A REJECTED wheel still throws, as it did before. */
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const landed = await Promise.race([
+        page.mouse.wheel(0, 1200 + Math.floor(Math.random() * 900)).then(() => true),
+        new Promise<boolean>((r) => { timer = setTimeout(() => r(false), wheelTimeoutMs); })
+      ]).finally(() => clearTimeout(timer));
+      if (!landed) {
+        console.warn(`  !   the feed took no scroll in ${Math.round(wheelTimeoutMs / 1000)}s; ` +
+                     `collecting the ${found.size} post link(s) already loaded`);
+        break;
+      }
       await sleep(900);
     }
   }
