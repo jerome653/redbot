@@ -69,6 +69,21 @@ export async function loadHistoryFromDb(
   });
 }
 
+/**
+ * The draft this one was cut from by the refuted-claim strip (src/refuted-recheck.ts), or null.
+ * The link is the history row itself, so "never strip a strip" holds across processes and restarts.
+ */
+export async function strippedFrom(db: Db, draftId: string): Promise<string | null> {
+  const r = await db.query<{ src: string }>(
+    `SELECT json_extract(data, '$.from') AS src FROM history
+      WHERE kind = 'draft.rewrite' AND json_extract(data, '$.stage') = 'refuted'
+        AND json_extract(data, '$.to') = $1
+      LIMIT 1`,
+    [draftId]
+  );
+  return r.rows[0]?.src ?? null;
+}
+
 export async function countHistory(db: Db): Promise<number> {
   const r = await db.query<{ n: number }>('SELECT count(*) AS n FROM history');
   return Number(r.rows[0]?.n ?? 0);
