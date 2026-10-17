@@ -177,7 +177,15 @@ export async function insightsCmd(): Promise<number> {
   }
 
   say.info('');
-  say.step(`${i.traceEvents} trace event(s) across ${i.runs} run(s) — data/trace.jsonl`);
+  /* NOT "data/trace.jsonl". That file does not exist and nothing writes it: `insertTrace`
+     (src/db/logs.ts) writes the `trace` TABLE, and the only remaining mention of the path was a
+     dead export in src/trace.ts. A line telling an operator to open a file that was never created
+     costs exactly the debugging time it was meant to save. `runs` is a window figure once the
+     table outgrows TRACE_READ_MAX, so it is labelled as one. */
+  say.step(`${i.traceEvents.toLocaleString()} trace event(s) in the trace table`
+    + (i.traceEventsRead < i.traceEvents
+      ? ` · newest ${i.traceEventsRead.toLocaleString()} read, ${i.runs} run(s) in that window`
+      : ` across ${i.runs} run(s)`));
   return 0;
 }
 

@@ -2,6 +2,22 @@ import { config } from './config.js';
 import { domain } from './domain.js';
 import type { Thread } from './types.js';
 import type { ReferenceHit } from './corpus.js';
+import type { AccountPersona } from './db/personas.js';
+import { personaBlock, sentenceCeiling } from './persona.js';
+
+/**
+ * The base ceiling on reply length, in sentences, when no persona names one.
+ *
+ * It used to be the words "two to four sentences" inside the prompt body and nothing else, which
+ * meant every one of thirteen accounts produced replies in the same band. A uniform length across
+ * identities is a property of the fleet that no single reply can fix. Named here so
+ * `sentenceCeiling` and the prompt text cannot drift apart — see src/persona.ts.
+ */
+const BASE_SENTENCE_CEILING = 4;
+
+/** `3` -> `three`, for the prompt lines that read better as words. Falls back to the digits. */
+const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six'];
+const spell = (n: number): string => WORDS[n] ?? String(n);
 
 function trim(s: string | null, n: number): string {
   if (!s) return '(none)';
@@ -122,22 +138,30 @@ ${comments || '(none)'}`;
  * `checkWarmingComment`, which refuses the draft rather than trusting the model to have
  * complied. Prompts drift; a check does not.
  */
-export function warmupPrompt(thread: Thread): string {
+export function warmupPrompt(thread: Thread, persona?: AccountPersona | null): string {
   const topComments = thread.comments
     .slice(0, 6)
     .map((c, i) => `${i + 1}. ${trim(c.body, 300)}`)
     .join('\n');
 
+  /* The warming ceiling is FIVE by default rather than four — the rule below said "two to five
+     sentences" long before personas existed, and warming optimises for ordinariness rather than
+     novelty. A persona's own `maxSentences` still wins where one is set, which is the point: an
+     account that answers in one line while warming should answer in one line here too. */
+  const maxSentences = sentenceCeiling(persona, 5);
+  const voice = personaBlock(persona);
+
   return `Write a short, ordinary, genuinely helpful Reddit comment — the kind a working
 developer leaves in passing when they happen to know the answer.
 
 This is a NEW account with almost no history. The goal is not to be impressive. It is to be
-useful and unremarkable, so the account reads like a person who reads this subreddit.
+useful and unremarkable, so the account reads like a person who reads this subreddit.${voice}
 
 WHAT GOOD LOOKS LIKE
-Two to five sentences. Answer the specific thing asked, or ask the one clarifying question
-that would unblock them. Speak from practical experience. If you are not sure, say what you
-would check and why — that is a genuinely useful comment and it cannot be wrong.
+At most ${spell(maxSentences)} sentence${maxSentences === 1 ? '' : 's'}, and fewer is better.
+Answer the specific thing asked, or ask the one clarifying question that would unblock them.
+Speak from practical experience. If you are not sure, say what you would check and why — that
+is a genuinely useful comment and it cannot be wrong.
 
 HARD RULES — a draft breaking any of these is thrown away by a check after you
 1. **No links of any kind.** Not documentation, not a guide, nothing. From a new account even
@@ -190,8 +214,22 @@ export function draftPrompt(
    * check downstream of that (Argus) catches the symptom; this is the first thing upstream of
    * it that changes the input.
    */
-  reference?: ReferenceHit[]
+  reference?: ReferenceHit[],
+  /**
+   * WHO is writing, from `account_personas` (migration 0022). Optional, and absent leaves this
+   * prompt byte-identical to what it was before the column existed — `personaBlock` returns the
+   * empty string and `sentenceCeiling` falls back to BASE_SENTENCE_CEILING.
+   *
+   * THE PARAMETER IS THE FIX. This function took no account at all, so `accounts.role`,
+   * `.speaks` and `.knows` — stored, editable on the console, pushed to the dashboard — reached
+   * no prompt, and thirteen identities drafted in one voice. Four of the six comments published
+   * from them were removed by r/Wordpress moderators, one with the reply "Please don't post
+   * AI-generated comments."
+   */
+  persona?: AccountPersona | null
 ): string {
+  const maxSentences = sentenceCeiling(persona, BASE_SENTENCE_CEILING);
+  const voice = personaBlock(persona);
   const topComments = thread.comments
     .slice(0, 8)
     .map((c, i) => `${i + 1}. ${trim(c.body, 400)}`)
@@ -230,17 +268,19 @@ ${reference.map((r, i) => `  [${i + 1}] ${r.cardId} — ${r.question}\n      ${t
 their own name from their own account.${gapBlock}
 
 You are drafting FOR a human, not AS a human. They are accountable for every word, so give
-them something they would be comfortable putting their name on.
+them something they would be comfortable putting their name on.${voice}
 
 SUGGESTED ANGLE: ${angle}
 
 WHAT MAKES IT GOOD
 Short and useful beats thorough. One helpful observation, offered plainly, is the whole job.
 
-LENGTH: two to four sentences. That is a ceiling, not a target — one sentence is fine when
-one sentence answers it. Do not write an essay, a numbered plan, a list of options, or a
-"hope this helps" wrapper. No headings. Usually no code block; include one only when a single
-short command or setting IS the answer.
+LENGTH: AT MOST ${spell(maxSentences)} sentence${maxSentences === 1 ? '' : 's'}. That is a ceiling,
+not a target — one sentence is fine when one sentence answers it, and a reply that uses the whole
+allowance because it was available is worse than a shorter one. Do not add a second observation to
+fill it. Do not write an essay, a numbered plan, a list of options, or a "hope this helps" wrapper.
+No headings. Usually no code block; include one only when a single short command or setting IS the
+answer.
 
 Name the one thing you would check first and what the result would tell them. If the fix
 depends on something they did not say, ask for exactly that one thing and stop.

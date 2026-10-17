@@ -17,7 +17,7 @@
  *   restatement        the draft repeated the thread; saved with the issue, publishing blocked
  */
 import {
-  loadThreads, loadDrafts, saveDraft, loadGaps, loadAssessments
+  loadThreads, loadDrafts, saveDraft, loadGaps, loadAssessments, loadAccountPersona
 } from '../store.js';
 import { complete, extractJson } from '../llm.js';
 import { draftPrompt } from '../prompts.js';
@@ -30,6 +30,7 @@ import { warmingStage } from '../warming.js';
 import { counters } from '../health.js';
 import { draftCorrection } from '../prompts.js';
 import { findReference } from '../corpus.js';
+import { bannedPhraseHits } from '../persona.js';
 import { config, selectedAccount } from '../config.js';
 import { trace } from '../trace.js';
 import { record, say } from '../log.js';
@@ -125,16 +126,36 @@ export async function draft(threadIdArg?: string): Promise<number> {
       : 'Sources    : none — nothing in the reference corpora covers this thread, so every ' +
         'factual claim below comes from model memory'
   );
+  /**
+   * WHO is writing this, from `account_personas` (migration 0022).
+   *
+   * Loaded BEFORE the prompt is built, which is the whole change: `draftPrompt` took no account,
+   * so `accounts.role`, `.speaks` and `.knows` reached no prompt and thirteen identities drafted
+   * in one voice. Null is normal and leaves the prompt byte-identical — see src/persona.ts.
+   *
+   * NOT swallowed on failure. An account that HAS a persona must not quietly draft in the default
+   * voice because one query failed; that is a silent identity change, which is the class of
+   * defect this whole path exists to end.
+   */
+  const persona = await loadAccountPersona(selectedAccount()?.handle);
+  say.step(
+    persona
+      ? `Voice      : ${persona.handle}${persona.register ? ` · ${persona.register}` : ''}`
+        + `${persona.maxSentences !== null ? ` · max ${persona.maxSentences} sentence(s)` : ''}`
+        + `${persona.enabled ? '' : ' · DISABLED, not applied'}`
+      : 'Voice      : none — no persona for this account, drafting from the base prompt'
+  );
   say.step(`Drafting with ${config.llm.draftModel}…`);
 
   /* Hoisted so the rewrite below can re-send it with the failure appended, rather than rebuilding
-     it from the same five arguments and risking the two drifting apart. */
+     it from the same six arguments and risking the two drifting apart. */
   const basePrompt = draftPrompt(
     thread,
     pick.thesis?.whyThread ?? 'a gap was identified in the discussion',
     pick.thesis?.whatNew ?? 'answer the question directly',
     { question: gap.question, covered: gap.covered, gaps: gap.gaps },
-    reference
+    reference,
+    persona
   );
 
   let raw: string;
@@ -235,9 +256,31 @@ export async function draft(threadIdArg?: string): Promise<number> {
     .sort((a, b) => (b.decidedAt ?? b.createdAt).localeCompare(a.decidedAt ?? a.createdAt))
     .map((d) => d.body);
 
-  let blocked = draftTimeBlocks({
-    body, thread, warming: warmingNow.warming, noveltyIssues: novelty.issues, previousBodies
-  });
+  /**
+   * The draft-time blocks, PLUS this account's own banned phrases.
+   *
+   * One function used by both the first assessment and the post-rewrite one. That is not tidiness:
+   * the rewrite is accepted on `stillBlocked.length < blocked.length`, so a family counted on one
+   * side and not the other makes every rewrite look like an improvement. The persona check has to
+   * be inside both counts or inside neither.
+   *
+   * A banned phrase is a `persona:banned-phrase` gate rather than a silent discard, so it travels
+   * through the existing one-rewrite path and is named in the `draft.rewrite` record like any
+   * other failure. The phrase is quoted, not the draft — `draftCorrection` sends the reason back
+   * to the model, and the model needs to know which words to drop.
+   */
+  const blocksFor = (b: string, noveltyIssues: string[]): Array<{ gate: string; reason: string }> => [
+    ...draftTimeBlocks({
+      body: b, thread, warming: warmingNow.warming, noveltyIssues, previousBodies
+    }),
+    ...bannedPhraseHits(b, persona).map((phrase) => ({
+      gate: 'persona:banned-phrase',
+      reason: `${acct?.handle ?? 'this account'} never writes "${phrase}" — remove it entirely `
+        + 'rather than rephrasing around it'
+    }))
+  ];
+
+  let blocked = blocksFor(body, novelty.issues);
   if (blocked.length) {
     say.warn(`The publish gate would refuse this draft: ${blocked.map((b) => b.gate).join(', ')} — rewriting once.`);
     try {
@@ -252,10 +295,7 @@ export async function draft(threadIdArg?: string): Promise<number> {
       if (reparsed.contribute === true && newBody) {
         const newQuality = assessQuality(newBody, { thread });
         const newNovelty = checkNovelty(newBody, str(reparsed.whatNew), gap.covered);
-        const stillBlocked = draftTimeBlocks({
-          body: newBody, thread, warming: warmingNow.warming, noveltyIssues: newNovelty.issues,
-          previousBodies
-        });
+        const stillBlocked = blocksFor(newBody, newNovelty.issues);
         if (stillBlocked.length < blocked.length) {
           body = newBody;
           contribution = {

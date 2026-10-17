@@ -11,20 +11,21 @@
  * So: two logs, two jobs.
  *
  *   data/history.jsonl   what the account did          (account record — never noisy)
- *   data/trace.jsonl     why the pipeline decided so   (engineering telemetry — verbose)
+ *   the `trace` table     why the pipeline decided so   (engineering telemetry — verbose)
  *
  * Every event carries a `runId`, so one invocation's events group together, and a stage, so
  * the funnel can be reconstructed without parsing prose. `redbot insights` reads this file.
  */
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DATA, ensureData } from './config.js';
+import { ensureData } from './config.js';
 
 import { getPool } from './db.js';
-import { insertTrace, selectTrace } from './db/logs.js';
+import { insertTrace, selectTrace, countLog } from './db/logs.js';
 
-export const tracePath = join(DATA, 'trace.jsonl');
+/* `tracePath` WAS HERE and is gone. It named `data/trace.jsonl`, nothing read it outside its own
+   definition, and no code has written that file since trace moved into the database — yet
+   src/commands/status.ts was still telling operators to go and look at it. A dead constant is
+   harmless; a dead constant quoted in the UI is a false instruction. */
 
 export type Stage =
   | 'collect' | 'gap' | 'opportunity' | 'draft' | 'gate' | 'review' | 'publish' | 'observe' | 'system';
@@ -117,6 +118,34 @@ export async function timed<T>(
   }
 }
 
-export async function loadTrace(): Promise<TraceEvent[]> {
-  return selectTrace(getPool());
+/**
+ * How many trace rows may be materialised by one read.
+ *
+ * MEASURED, not chosen by feel. `tools/ops/simulate.mjs` SIM 3: this table holds 46,084 rows today
+ * and the loop adds 698 per cycle, so at the 120-minute interval it reaches ~3.1 MILLION inside a
+ * year. `loadTrace()` had no limit — `src/db/logs.ts` `tail()` returns `ORDER BY id` with no LIMIT
+ * when none is given — and its two callers are `redbot doctor` and `redbot insights`, which are
+ * precisely the commands somebody runs when the install is already misbehaving.
+ *
+ * 20,000 is above any window either caller reasons over and ~4 MB of rows rather than ~650 MB.
+ */
+export const TRACE_READ_MAX = Number(process.env.REDBOT_TRACE_READ_MAX ?? 20_000);
+
+/** How many trace rows exist ALTOGETHER. A COUNT, so it stays cheap as the table grows. */
+export async function traceTotal(): Promise<number> {
+  return countLog(getPool(), 'trace');
+}
+
+/**
+ * The newest `limit` trace events, oldest-first.
+ *
+ * BOUNDED, AND THE BOUND IS VISIBLE. Returning a window silently would be worse than returning
+ * everything: both callers print `events.length` as a total — "46,084 trace event(s) across 31
+ * run(s)" — and a capped read would turn that sentence into a smaller number with the same
+ * wording, which is a figure that changed meaning without saying so. So `traceTotal()` exists
+ * beside this, and both callers were changed to report "newest N of M".
+ */
+export async function loadTrace(limit: number = TRACE_READ_MAX): Promise<TraceEvent[]> {
+  const n = Math.floor(Number(limit));
+  return selectTrace(getPool(), Number.isFinite(n) && n > 0 ? { limit: n } : { limit: TRACE_READ_MAX });
 }

@@ -13,7 +13,7 @@
  * Every cycle asks `checkWindow` first, so an account's quiet hours and daily ceiling are
  * respected by the one caller most likely to violate them — the one with nobody watching.
  */
-import { loadThreads, loadDrafts } from '../store.js';
+import { loadDrafts, countThreads } from '../store.js';
 import { selectedAccount, config, DATA } from '../config.js';
 import { checkWindow } from '../window.js';
 import { counters } from '../health.js';
@@ -36,6 +36,18 @@ import { record, say } from '../log.js';
  * and collected nothing. That reader is gone; a corrupt list now stops the cycle and says why.
  */
 import { enabledSources, SourcesError } from '../sources.js';
+import { pruneTrace } from '../db/logs.js';
+import { getPool } from '../db.js';
+
+/**
+ * How many trace rows this install keeps.
+ *
+ * 200,000 is ~42 MB at the 212 bytes/row `dbstat` reports, and ~16 days of history at the
+ * measured 698 rows/cycle and 12 cycles/day — long enough that `redbot doctor` and
+ * `redbot insights` still have something to reason over, and bounded so the database does not
+ * grow forever. Raise it deliberately; `tools/ops/simulate.mjs` SIM 2 prints what any value costs.
+ */
+const TRACE_KEEP = Number(process.env.REDBOT_TRACE_KEEP ?? 200_000);
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -86,7 +98,11 @@ async function cycle(): Promise<number> {
     return 0;
   }
 
-  const before = (await loadThreads()).length;
+  /* A COUNT, not a load. This was `(await loadThreads()).length`, and so was the matching line
+     after collection: two full corpus loads per cycle, both thrown away, to produce one integer.
+     At one year of collection that measured 2,044 ms and 366 MB of heap each against 1 ms for the
+     count — see src/db/threads.ts `countThreadsInDb`. */
+  const before = await countThreads();
 
   /**
    * STOP WHEN THE HOST IS REFUSING, rather than asking the remaining sources one at a time.
@@ -151,7 +167,7 @@ async function cycle(): Promise<number> {
     failuresInARow = code === 0 ? 0 : failuresInARow + 1;
   }
 
-  const collected = (await loadThreads()).length - before;
+  const collected = (await countThreads()) - before;
   say.step(`Collected ${collected} new thread(s).`);
   /* A short collection has two causes that send a person to different places, and until now they
      wrote the same line. Say which one this was. */
@@ -199,6 +215,28 @@ async function cycle(): Promise<number> {
     }
   } else {
     say.step('Nothing worth writing this cycle — that is a normal outcome.');
+  }
+
+  /**
+   * RETENTION, ONCE PER CYCLE. This is the only loop in the product and therefore the only place
+   * that knows a cycle just ended.
+   *
+   * MEASURED by tools/ops/simulate.mjs SIM 2: a cycle writes ~698 trace rows and nothing deleted
+   * any of them, so the database grew without bound for as long as this loop ran — ~672 MB and
+   * 3.1M rows after a year at this interval. There was no cliff, which is why it went unnoticed.
+   *
+   * NOT FATAL, and not allowed to fail the cycle. A cycle that collected, drafted and published
+   * has done its job; losing a prune costs disk and nothing else, and the next cycle tries again.
+   * The failure is RECORDED rather than swallowed, because a prune that has been failing silently
+   * for weeks is indistinguishable from no prune at all.
+   */
+  try {
+    const { deleted, kept } = await pruneTrace(getPool(), TRACE_KEEP);
+    if (deleted > 0) say.step(`Trimmed ${deleted.toLocaleString()} old trace row(s); ${kept.toLocaleString()} kept.`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    say.warn(`Trace retention failed: ${msg}`);
+    await record('error', `trace retention failed: ${msg}`, { level: 'warn' });
   }
 
   await record('auto.cycle', `unattended cycle finished`, {

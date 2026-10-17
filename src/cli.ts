@@ -10,6 +10,7 @@ import { operators } from './commands/operators.js';
 import { vault } from './commands/vault.js';
 import { proxy } from './commands/proxy.js';
 import { accounts } from './commands/accounts.js';
+import { personas } from './commands/personas.js';
 import { reset } from './commands/reset.js';
 import { sources } from './commands/sources.js';
 import { probeKarma } from './probe-karma.js';
@@ -50,6 +51,12 @@ redbot — Reddit engagement assistant
                                  who can run redbot, and whose Claude login pays
     redbot accounts [list|use <handle>|import|export]
                                  who redbot may post as (the database is the record)
+    redbot personas [seed|show <handle>|enable <handle>|disable <handle>]
+                                 how each account writes, and which two write alike. With no
+                                 subcommand it prints the roster and exits non-zero when any
+                                 account has no voice or two accounts share one. "seed" gives a
+                                 distinct voice to every account that has none, and never
+                                 overwrites one somebody wrote.
     redbot sources [add|rm|on|off|import|export]
                                  where redbot looks for threads (the database is the record)
     redbot vault [list|check]    what secrets are stored, encrypted, in the database
@@ -311,6 +318,9 @@ async function main(): Promise<number> {
      */
     case 'probe-karma': return probeKarma();
     case 'accounts': return accounts(positional[0], positional[1]);
+    /* Who each account writes as. `personas` with no subcommand prints the roster and the
+       fleet-level collision check; `seed` is the only one that writes. */
+    case 'personas': return personas(positional[0], positional[1]);
     /**
      * Destructive, so it prints the plan and stops unless `--yes` is given. `--sign-ins` is a
      * separate word from the scope because the Chrome folders are the only copy of each Reddit

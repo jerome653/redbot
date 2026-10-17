@@ -49,6 +49,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { exitPosture } from './exit-posture.mjs';
 import { fleetProblems } from './fleet-posture.mjs';
+import { engineProblems } from './engine-posture.mjs';
 import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 /* The order a browser start follows. Out here for the reason the module's header gives: the
    decisions were unreachable without spawning Chrome, which is why nothing tested them and
@@ -134,7 +135,14 @@ let domain = null, consoleAccounts = null, createAccountImpl = null, updateAccou
     /* The three this change adds: ask the browser where it is, write that down, read it back. */
     detectApi = null, detectionApi = null, locationsApi = null,
     /* src/llm.ts, for `onlyProvider()` — an install's per-machine provider prohibition. */
-    llmApi = null;
+    llmApi = null,
+    /**
+     * Personas (migration 0022) — who each account writes as.
+     *
+     * Bound to the pool here like `pagesApi` is, so no call site can go back to reading the table
+     * itself. Read by `/api/pulse` for the fleet-level collision check and by the persona routes.
+     */
+    personasApi = null, personaAllocApi = null, personaRenderApi = null;
 
 /**
  * The push scheduler lives HERE rather than in the Electron shell.
@@ -346,6 +354,24 @@ try {
   pushSchedulerApi = (await import('../../dist/push/scheduler.js'));
   pushClientApi = (await import('../../dist/push/client.js'));
   pushAccountsApi = (await import('../../dist/push/accounts.js'));
+  /**
+   * Personas, from the SAME modules the drafting path reads.
+   *
+   * The console must not have its own idea of what a voice is or when two accounts share one:
+   * `src/persona-allocate.ts` owns the allocation rule and the collision definition, and
+   * `src/persona.ts` owns what the model is actually told. A second opinion here is how
+   * `assessOpportunity` and `isWarmingTarget` came to disagree about thread age.
+   */
+  const personaDb = (await import('../../dist/db/personas.js'));
+  personasApi = {
+    all: () => personaDb.loadPersonas(db.getPool()),
+    one: (handle) => personaDb.loadPersona(db.getPool(), handle),
+    save: (handle, patch) => personaDb.savePersona(db.getPool(), handle, patch),
+    remove: (handle) => personaDb.deletePersona(db.getPool(), handle),
+    REGISTERS: personaDb.REGISTERS
+  };
+  personaAllocApi = (await import('../../dist/persona-allocate.js'));
+  personaRenderApi = (await import('../../dist/persona.js'));
 } catch (e) {
   console.error(
     '\n  This console reads the database through the compiled build, which is missing or stale.\n' +
@@ -1181,6 +1207,20 @@ function rememberSoleAccount(accounts) {
  * about how to start one.
  * ------------------------------------------------------------------ */
 const RUN_LOG_MAX = 2000;   // bounded: `auto` can print for days
+/**
+ * And the same bound for a run read back FROM DISK, which is the half that was missing.
+ *
+ * MEASURED by tools/ops/simulate.mjs SIM 4/4b on this install's own logs: the longest real
+ * `redbot auto --every 120` run wrote 2,585,199 bytes and 23,759 lines into ONE file over 161.5
+ * hours — 16 KB/hour, so 11.5 MB and ~106,000 lines in a month, 140 MB and ~1.3M lines in a year.
+ * `runLogRead` did `readFileSync` on that file, `JSON.parse`d every line, and returned all of them
+ * in one response.
+ *
+ * The contradiction is the finding: the LIVE buffer above is capped at 2000 lines, and its comment
+ * says why — "`auto` can print for days". The on-disk reader of the same file, written for the same
+ * feature, had no cap at all. One hazard, two halves, one of them guarded.
+ */
+const RUN_LOG_READ_MAX = 5000;
 /* Built with the constructor so the pattern text is unambiguous in every editor and escape layer. */
 const NEWLINE = String.fromCharCode(10);
 const ANSI = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
@@ -1266,17 +1306,29 @@ function runLogRead(file) {
   try { header = JSON.parse(rows[0]); } catch { return null; }
   const out = [];
   let foot = null;
+  let parsed = 0;
   for (const r of rows.slice(1)) {
     try {
       const o = JSON.parse(r);
-      if (o && o.t === 'l') out.push({ at: o.at, text: o.text });
+      if (o && o.t === 'l') { out.push({ at: o.at, text: o.text }); parsed++; }
       else if (o && o.t === 'f') foot = o;
     } catch { /* skip a torn line rather than fail the whole read */ }
   }
+  /**
+   * THE NEWEST `RUN_LOG_READ_MAX`, and the response SAYS how many there were.
+   *
+   * Newest rather than oldest: a person opening a week-old `auto` log is looking for how it ended.
+   * `total` keeps meaning "lines this run printed" — it is read by the viewer as the run's size —
+   * so it stays the real figure and `truncated` carries the difference. Reporting `out.length` as
+   * `total` after a cut would be a number that silently changed meaning, which is the same defect
+   * as `loadTrace()` reporting a window as an all-time count (see src/trace.ts).
+   */
+  const truncated = Math.max(0, parsed - RUN_LOG_READ_MAX);
+  const lines = truncated ? out.slice(-RUN_LOG_READ_MAX) : out;
   return {
     runId: header.id, key: header.key, command: header.command, startedAt: header.startedAt,
     running: false, done: !!foot, code: foot ? foot.code : null, dropped: foot ? foot.dropped : 0,
-    total: out.length, lines: out, file
+    total: parsed, truncated, lines, file
   };
 }
 
@@ -3317,6 +3369,146 @@ const server = createServer((req, res) => {
         return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
       /**
+       * Who one account writes as — the persona rows migration 0022 added.
+       *
+       * VALIDATED HERE SO THE PERSON GETS A SENTENCE. The bounds that matter are the schema's and
+       * they are enforced there whatever this does; the reason for repeating the cheap ones is
+       * that a CHECK failure surfaces as "CHECK constraint failed: max_sentences IS NULL OR
+       * max_sentences BETWEEN 1 AND 6", which is not a thing to put in front of somebody filling
+       * in a form. Anything this does not catch still reaches the database and is reported as it
+       * comes back — `savePersona` does not swallow it.
+       *
+       * ABSENT KEYS ARE LEFT ALONE. `savePersona` reads the current row and lays the patch over
+       * it, so a form posting three fields cannot blank the other eight — the shape
+       * `updateConsoleAccount` already uses for the same reason.
+       */
+      if (url.pathname === '/api/account/persona') {
+        if (!personasApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing — run npm run build' }));
+        const handle = String(body.handle ?? '').trim();
+        if (!handle) return send(400, JSON.stringify({ ok: false, error: 'which account? `handle` is required' }));
+
+        const { accounts: accts } = await consoleAccounts();
+        const known = accts.find((a) => String(a.handle).toLowerCase() === handle.toLowerCase());
+        if (!known) {
+          return send(400, JSON.stringify({ ok: false, error: `"${handle}" is not a configured account` }));
+        }
+
+        /* A list field: an array of strings, trimmed, blanks dropped. A posted non-array is a
+           refusal rather than an empty list — silently storing [] for a malformed field is how a
+           form teaches somebody that it saved what they typed. */
+        const listField = (key) => {
+          const v = body[key];
+          if (v === undefined) return undefined;
+          if (!Array.isArray(v)) return { error: `${key} must be a list of short lines` };
+          return v.map((x) => String(x).trim()).filter(Boolean);
+        };
+
+        const patch = {};
+        const errors = [];
+
+        if (body.enabled !== undefined) patch.enabled = body.enabled === true || body.enabled === 'true' || body.enabled === 1;
+
+        for (const key of ['displayName', 'bio', 'hedgeStyle']) {
+          if (body[key] === undefined) continue;
+          const raw = body[key] === null ? null : String(body[key]).trim();
+          patch[key] = raw ? raw : null;        // blank clears it, which is a real state
+        }
+        if (patch.displayName && patch.displayName.length > 40) errors.push('the display name is longer than 40 characters');
+        if (patch.bio && patch.bio.length > 900) errors.push('the bio is longer than 900 characters');
+        if (patch.hedgeStyle && patch.hedgeStyle.length > 200) errors.push('the hedge line is longer than 200 characters');
+
+        if (body.localeFlavour !== undefined) {
+          const raw = body.localeFlavour === null ? null : String(body.localeFlavour).trim().toLowerCase();
+          patch.localeFlavour = raw ? raw : null;
+          if (patch.localeFlavour && !/^[a-z]{2}$/.test(patch.localeFlavour)) {
+            errors.push('the locale must be two letters, like us or gb');
+          }
+        }
+
+        if (body.register !== undefined) {
+          const raw = body.register === null || body.register === '' ? null : String(body.register).trim();
+          patch.register = raw;
+          if (raw && !personasApi.REGISTERS.includes(raw)) {
+            errors.push(`the register must be one of ${personasApi.REGISTERS.join(', ')}`);
+          }
+        }
+
+        for (const [key, lo, hi] of [['maxSentences', 1, 6], ['experienceYears', 0, 50]]) {
+          if (body[key] === undefined) continue;
+          if (body[key] === null || body[key] === '') { patch[key] = null; continue; }
+          const n = Number(body[key]);
+          if (!Number.isInteger(n) || n < lo || n > hi) errors.push(`${key} must be a whole number from ${lo} to ${hi}`);
+          else patch[key] = n;
+        }
+
+        for (const key of ['stack', 'quirks', 'bannedPhrases', 'avoidTopics']) {
+          const v = listField(key);
+          if (v === undefined) continue;
+          if (v && v.error) { errors.push(v.error); continue; }
+          patch[key] = v;
+        }
+
+        if (errors.length) return send(400, JSON.stringify({ ok: false, error: errors.join('; ') }));
+
+        try {
+          const saved = await personasApi.save(known.handle, patch);
+          /* The REFUSED habits travel back with the saved row. They are stored and NOT in force —
+             src/persona.ts screens them — and an operator who typed one is otherwise entitled to
+             believe it is being applied. */
+          const screened = personaRenderApi ? personaRenderApi.screenQuirks(saved.quirks) : { kept: saved.quirks, rejected: [] };
+          return send(200, JSON.stringify({
+            ok: true, persona: saved,
+            voice: personaAllocApi ? personaAllocApi.voiceKey(saved) : null,
+            rejectedQuirks: screened.rejected,
+            prompt: personaRenderApi ? personaRenderApi.personaBlock(saved) : null
+          }));
+        } catch (e) {
+          return send(400, JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+        }
+      }
+      /**
+       * Give every account without a voice a voice no other account has.
+       *
+       * NEVER OVERWRITES. `planFleetVoices` reserves the voices already held and skips the
+       * accounts holding them, so this is safe to press twice and a hand-written persona always
+       * wins. It allocates the mechanical half only — register, length, hedging, habits — and
+       * reports which accounts have no biography rather than inventing one; see
+       * src/persona-allocate.ts for why that line is where it is.
+       */
+      if (url.pathname === '/api/personas/seed') {
+        if (!personasApi || !personaAllocApi) return send(503, JSON.stringify({ ok: false, error: 'the compiled build is missing — run npm run build' }));
+        const { accounts: accts } = await consoleAccounts();
+        if (!accts.length) return send(400, JSON.stringify({ ok: false, error: 'no accounts are configured, so there is nobody to give a persona' }));
+
+        const have = await personasApi.all();
+        const { plans, unallocated } = personaAllocApi.planFleetVoices(
+          accts.map((a) => ({
+            handle: a.handle, role: a.role ?? null, speaks: a.speaks ?? null,
+            knows: a.knows ?? null, subreddits: a.subreddits ?? null
+          })),
+          new Map(have.map((p) => [p.handle.toLowerCase(), p]))
+        );
+
+        const written = [];
+        const failed = [];
+        const noBio = [];
+        for (const plan of plans) {
+          try {
+            const saved = await personasApi.save(plan.handle, plan.patch);
+            written.push({ handle: saved.handle, voice: personaAllocApi.voiceKey(saved) });
+            if (plan.bioMissing) noBio.push(saved.handle);
+          } catch (e) {
+            /* Per account, and the loop continues: one refused row must not leave the rest of the
+               fleet in the shared voice. */
+            failed.push({ handle: plan.handle, error: e && e.message ? e.message : String(e) });
+          }
+        }
+        return send(200, JSON.stringify({
+          ok: true, written, failed, unallocated, needBio: noBio,
+          skipped: have.length, voicesAvailable: personaAllocApi.VOICE_COUNT
+        }));
+      }
+      /**
        * Removing an account — the record, never the signed-in browser folder.
        *
        * Answers 409 rather than 400 when it needs confirming: the request was well-formed and
@@ -3759,13 +3951,72 @@ const server = createServer((req, res) => {
        * different fact from unchanged, and a client that could not tell them apart would stop
        * recalibrating the moment the first read failed and never say so.
        */
-      Promise.resolve(pagesApi ? pagesApi.fingerprint() : null)
-        .catch(() => null)
-        .then((data) => {
+      Promise.all([
+        Promise.resolve(pagesApi ? pagesApi.fingerprint() : null).catch(() => null),
+        /**
+         * THE FLEET-VOICE CHECK — does this fleet read as one writer?
+         *
+         * Asked on the pulse rather than only on the Accounts screen because it is a property of
+         * the whole install, and because the thing it guards is invisible from any single reply.
+         * Before migration 0022 `draftPrompt` took no account, so thirteen identities drafted
+         * from one identical prompt; four of the six comments published from them were removed by
+         * r/Wordpress moderators, one with the reply "Please don't post AI-generated comments."
+         *
+         * A persona per account does not settle it: a console edit or a hand-typed UPDATE can set
+         * two accounts to the same register and length, which the allocator would never produce.
+         * `voiceCollisions` is the measurement — one definition, shared with `redbot personas`.
+         *
+         * `null` on failure, and the caller treats null as "could not ask" rather than "fine".
+         */
+        Promise.resolve(personasApi ? personasApi.all() : null).catch(() => null)
+      ])
+        .then(([data, personaRows]) => {
+          const auto = autoStatus();
+          /**
+           * THE ENGINE IS A SECOND SUBJECT, and it was not one of the things this verdict looked at.
+           *
+           * `problems` above covers the browsers and the build. Both were green on 2026-10-16 while
+           * the loop was stopped and the newest `history` row was eleven days old, so the console
+           * reported `healthy: true` on an install producing nothing. Asked here rather than inside
+           * `fleetProblems` because they answer different questions about different subjects — see
+           * tools/product/engine-posture.mjs.
+           *
+           * `data` may be null when the database could not be asked. That is passed straight
+           * through as a null `recordedAt`, which `engineProblems` treats as "never recorded"
+           * rather than "stale" — an unanswered question must not become a finding.
+           */
+          for (const p of engineProblems({
+            autoRunning: auto.running,
+            autoAccount: auto.account,
+            recordedAt: data ? (data.recordedAt ?? null) : null
+          })) problems.push(p);
+
+          /* An account with no persona drafts in the shared default voice, and two accounts on one
+             voice read as one writer. Both are stated; neither is inferred from silence. */
+          let voices = null;
+          if (personaRows && personaAllocApi) {
+            const { shared, without } = personaAllocApi.voiceCollisions(
+              personaRows, browsers.map((b) => b.handle)
+            );
+            voices = { shared, without, total: personaRows.length };
+            if (without.length) {
+              problems.push(
+                `${without.length} account(s) have no writing persona and draft in the shared `
+                + `default voice: ${without.join(', ')}`
+              );
+            }
+            for (const s2 of shared) {
+              problems.push(
+                `${s2.handles.join(' and ')} share one voice (${s2.key}) — they read as one writer`
+              );
+            }
+          }
+
           send(200, JSON.stringify({
             at: new Date().toISOString(), running, browsers, problems,
-            auto: autoStatus(),
+            auto,
             data,
+            voices,
             healthy: problems.length === 0
           }));
         });
@@ -4092,6 +4343,53 @@ const server = createServer((req, res) => {
         updateCache = { at: Date.now(), value: r };
         send(200, JSON.stringify({ ...r, cached: false }));
       });
+    return;
+  }
+
+  /**
+   * The persona roster, the register vocabulary, and the fleet-voice collision check.
+   *
+   * One payload because the Accounts screen needs all three to render a row: what this account
+   * writes as, what it MAY be set to, and whether another account writes the same way. The
+   * collision answer comes from `voiceCollisions` — the same function `redbot personas` and
+   * `/api/pulse` call — so no surface can disagree about whether this fleet reads as one writer.
+   */
+  if (url.pathname === '/api/personas') {
+    if (!personasApi) return send(503, JSON.stringify({ error: 'the compiled build is missing — run npm run build' }));
+    consoleAccounts()
+      .then(async ({ accounts: accts }) => {
+        const rows = await personasApi.all();
+        const { shared, without } = personaAllocApi
+          ? personaAllocApi.voiceCollisions(rows, accts.map((a) => a.handle))
+          : { shared: [], without: [] };
+        send(200, JSON.stringify({
+          registers: personasApi.REGISTERS,
+          voicesAvailable: personaAllocApi ? personaAllocApi.VOICE_COUNT : null,
+          personas: rows.map((p) => ({
+            ...p,
+            voice: personaAllocApi ? personaAllocApi.voiceKey(p) : null,
+            /* Stored and NOT applied. Returned separately so a screen can show the difference
+               rather than echoing the field back as though it were in force. */
+            rejectedQuirks: personaRenderApi ? personaRenderApi.screenQuirks(p.quirks).rejected : [],
+            /**
+             * WHAT THE MODEL IS ACTUALLY TOLD, rendered by the same function the drafting path
+             * calls. The one claim a settings panel must be able to make honestly.
+             *
+             * It rode only on the POST reply at first, so the panel's "What the model is told"
+             * heading opened with nothing under it until somebody pressed Save — measured by
+             * driving the live console: every field label present, the `<pre>` empty. A heading
+             * over an empty box reads as "this account is told nothing", which is the opposite of
+             * true for all thirteen.
+             */
+            prompt: personaRenderApi ? personaRenderApi.personaBlock(p) : null
+          })),
+          /* Every configured account, so a screen can render a row for one with NO persona —
+             which is the state that matters and the one a list of personas cannot show. */
+          accounts: accts.map((a) => ({ handle: a.handle, role: a.role ?? null, speaks: a.speaks ?? null })),
+          shared, without
+        }));
+      })
+      .catch((e) => send(500, JSON.stringify({ error: String(e && e.message || e) })));
     return;
   }
 

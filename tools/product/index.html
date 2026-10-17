@@ -1948,6 +1948,16 @@ const meter=(pct,tone,tag)=>{
 };
 let S=null, CUR='today', SEL=null, OPS=null;
 /**
+ * Personas (migration 0022) — who each account writes as, and which two write alike.
+ *
+ * Its own fetch rather than a field on /api/state, for the reason `OPS` has one: /api/state is
+ * the big cached domain read and this has to be re-read after a single persona is saved without
+ * reloading everything. Null means "not asked yet", which renders as nothing rather than as
+ * "no personas" — those are different facts and a screen that confused them would tell an
+ * operator their fleet shares no voices when it had simply not looked.
+ */
+let PERSONAS=null;
+/**
  * THE ACCOUNT LENS, app-wide.
  *
  * null means every account; a handle narrows Today's checklist, Review's queue, Threads, Results
@@ -1961,6 +1971,12 @@ let S=null, CUR='today', SEL=null, OPS=null;
  */
 let ACCT_FILTER=null;
 async function loadOperators(){ OPS=await fetch('/api/operators').then(r=>r.json()).catch(()=>({operators:[],selected:null})); }
+async function loadPersonas(){
+  PERSONAS=await fetch('/api/personas').then(r=>r.json())
+    .catch(()=>null);     // null, not an empty roster: see the declaration above
+}
+/** One account's persona out of the roster, or undefined. Case-insensitive on the handle. */
+const personaOf=(h)=>(PERSONAS&&PERSONAS.personas||[]).find(p=>String(p.handle).toLowerCase()===String(h).toLowerCase());
 
 /**
  * Plain English wherever a person can see it.
@@ -4325,6 +4341,163 @@ function accountEditor(a){
     'is — which is exactly what a box defaulting to Asia/Manila had every account here '+
     'announcing.'));
 
+  /* ---------------- how this account writes ----------------
+   *
+   * WHY THIS PANEL EXISTS. `Role` and `What they talk about` above have been editable here since
+   * the screen was built, and they reached no prompt: `draftPrompt` took no account parameter at
+   * all, so every account drafted from one identical text. Thirteen identities, one register, one
+   * hedging vocabulary, one length. Four of the six comments published from them were removed by
+   * r/Wordpress moderators, one with the public reply "Please don't post AI-generated comments."
+   *
+   * The fields below DO reach the prompt — src/persona.ts renders every one, and
+   * src/test/persona.test.ts fails if any of them stops changing the rendered text. "What the
+   * model is told" at the bottom shows exactly what this account's drafts will carry, so the
+   * panel cannot claim an effect it does not have.
+   */
+  const pBox=el('div');
+  pBox.style.cssText='margin-top:.9rem;border-top:1px solid var(--edge-2);padding-top:.7rem';
+  const pHead=el('div','tiny');
+  pHead.innerHTML='<strong>How this account writes</strong>';
+  pBox.append(pHead);
+
+  const pNow=personaOf(a.handle);
+  const pNote=el('div','tiny');
+  pNote.style.margin='.3rem 0 .55rem';
+  pNote.innerHTML=pNow
+    ? `Voice <code>${esc(pNow.voice||'—')}</code>${pNow.enabled?'':' — <b>disabled</b>, so this account drafts in the shared default voice'}`
+    : 'No persona yet — this account drafts in the <b>shared default voice</b>, which is what '
+      +'every account did before, and what got four comments removed from r/Wordpress. '
+      +'Fill this in, or press <b>Give everyone a voice</b> at the top of this screen.';
+  pBox.append(pNote);
+
+  /* The same field helper as above, writing into pBox instead. One shape for every box on the
+     panel, so a test addresses them all the same way. */
+  const pf=(label,value,ph)=>{
+    const w=el('div');w.style.marginBottom='.55rem';
+    w.append(el('div','tiny',esc(label)));
+    const i=el('input');
+    i.value=value==null?'':String(value);
+    if(ph)i.placeholder=ph;
+    i.setAttribute('aria-label',`${label} for ${a.handle}`);
+    i.style.cssText='width:100%;font:inherit;font-size:.84rem;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+    w.append(i);pBox.append(w);return i;
+  };
+
+  const pName  =pf('Name they write as',pNow&&pNow.displayName,'Ryan');
+  const pYears =pf('Years doing this work',pNow&&pNow.experienceYears,'9');
+  const pStack =pf('Tools they actually use',(pNow&&pNow.stack||[]).join(', '),'wp-cli, Query Monitor');
+  const pLocale=pf('Spelling (two letters)',pNow&&pNow.localeFlavour,'us');
+
+  /* A SELECT, not a text box. The four registers are a closed set in the schema (0022 CHECKs
+     them) and in src/persona.ts, which maps each to concrete instructions — a fifth value would
+     be refused by the database, and a free-text box would invite one. */
+  const regWrap=el('div');regWrap.style.marginBottom='.55rem';
+  regWrap.append(el('div','tiny','Register'));
+  const pReg=el('select');
+  pReg.setAttribute('aria-label',`Register for ${a.handle}`);
+  pReg.style.cssText='width:100%;font:inherit;font-size:.84rem;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+  const regs=['',...((PERSONAS&&PERSONAS.registers)||['terse','plain','warm','technical'])];
+  for(const rr of regs){
+    const o=el('option',null,rr===''?'(none)':rr);o.value=rr;
+    if((pNow&&pNow.register||'')===rr)o.selected=true;
+    pReg.append(o);
+  }
+  regWrap.append(pReg);pBox.append(regWrap);
+
+  const pMax   =pf('Longest reply, in sentences (1-6)',pNow&&pNow.maxSentences,'2');
+  const pHedge =pf('How they say they are unsure',pNow&&pNow.hedgeStyle,"writes 'not sure, but' and moves on");
+  const pQuirks=pf('Habits, one per comma',(pNow&&pNow.quirks||[]).join(', '),'never uses em dashes, no greeting');
+  const pBanned=pf('Words they never write',(pNow&&pNow.bannedPhrases||[]).join(', '),'hope this helps, happy to help');
+  const pAvoid =pf('Topics they will not answer',(pNow&&pNow.avoidTopics||[]).join(', '),'which host is best');
+
+  const bioWrap=el('div');bioWrap.style.marginBottom='.55rem';
+  bioWrap.append(el('div','tiny','Background, in their own words (not a story — what they work with)'));
+  const pBio=el('textarea');
+  pBio.value=(pNow&&pNow.bio)||'';
+  pBio.rows=3;
+  pBio.placeholder='I keep a dozen client sites patched and spend most of my time on plugin conflicts.';
+  pBio.setAttribute('aria-label',`Background for ${a.handle}`);
+  pBio.style.cssText='width:100%;font:inherit;font-size:.84rem;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
+  bioWrap.append(pBio);pBox.append(bioWrap);
+
+  pBox.append(el('div','tiny',
+    'A background says what this account WORKS WITH. It is not a past to tell stories about — '
+    +'a reply that claims a specific thing happened to it is refused before anyone reads it, '
+    +'and so is a habit that asks for deliberate typos or for writing meant to read as human. '
+    +'Those are not loosened by anything on this panel.'));
+
+  const pMsg=el('div','tiny');pMsg.style.marginTop='.4rem';
+  const pShown=el('pre','tiny');
+  pShown.style.cssText='white-space:pre-wrap;margin:.5rem 0 0;max-height:12rem;overflow:auto;opacity:.78';
+  if(pNow)pShown.textContent=(pNow.prompt||'').trim();
+
+  const pSave=el('button','mini act');
+  pSave.textContent=pNow?'Save how they write':'Give this account a voice';
+  pSave.onclick=async()=>{
+    const csv=(v)=>String(v).split(',').map(x=>x.trim()).filter(Boolean);
+    /* Every key is sent, including the empty ones: on this panel a cleared box MEANS cleared, and
+       the server reads '' / null as "set it to nothing". That is the opposite of the account form
+       above, where blank means "leave it alone" — the difference is deliberate and is why these
+       two forms post to two routes rather than sharing one. */
+    const body={
+      handle:a.handle,
+      enabled:true,
+      displayName:pName.value.trim()||null,
+      bio:pBio.value.trim()||null,
+      experienceYears:pYears.value.trim()===''?null:Number(pYears.value),
+      stack:csv(pStack.value),
+      localeFlavour:pLocale.value.trim()||null,
+      register:pReg.value||null,
+      maxSentences:pMax.value.trim()===''?null:Number(pMax.value),
+      hedgeStyle:pHedge.value.trim()||null,
+      quirks:csv(pQuirks.value),
+      bannedPhrases:csv(pBanned.value),
+      avoidTopics:csv(pAvoid.value)
+    };
+    const held=busy(`Saving how ${a.handle} writes…`);
+    try{
+      const r=await fetch('/api/account/persona',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify(body)}).then(x=>x.json());
+      if(!r.ok){pMsg.innerHTML=`<span style="color:var(--ember)">${esc(r.error||'could not save')}</span>`;held.fail(r.error);return}
+      await loadPersonas();
+      pShown.textContent=(r.prompt||'').trim();
+      /* REFUSED habits are named, never dropped quietly. They are stored and NOT applied, and an
+         operator who typed one would otherwise believe it was in force. */
+      pMsg.innerHTML=(r.rejectedQuirks&&r.rejectedQuirks.length)
+        ? `<span style="color:var(--ember)">Saved — but ${r.rejectedQuirks.length} habit(s) are NOT in force: `
+          +`${esc(r.rejectedQuirks.join('; '))}. They ask for deliberate error or for writing meant `
+          +'to read as human.</span>'
+        : `Saved. Voice <code>${esc(r.voice||'—')}</code>.`;
+      held.done('Saved');
+    }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+  };
+
+  const pBar=el('div');pBar.style.cssText='margin-top:.55rem;display:flex;gap:.5rem;flex-wrap:wrap';
+  pBar.append(pSave);
+  if(pNow){
+    const pToggle=el('button','mini');
+    pToggle.textContent=pNow.enabled?'Stop applying it':'Apply it again';
+    pToggle.title=pNow.enabled
+      ? 'Keeps the persona but drafts in the shared default voice until you turn it back on'
+      : 'Start applying this persona to drafts again';
+    pToggle.onclick=async()=>{
+      const held=busy(`${pNow.enabled?'Disabling':'Enabling'} ${a.handle}…`);
+      try{
+        const r=await fetch('/api/account/persona',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({handle:a.handle,enabled:!pNow.enabled})}).then(x=>x.json());
+        if(!r.ok){held.fail(r.error);return}
+        await loadPersonas();EDITING=a.handle;accounts();held.done('Done');
+      }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+    };
+    pBar.append(pToggle);
+  }
+  pBox.append(pBar);pBox.append(pMsg);
+  if(pNow){
+    pBox.append(el('div','tiny','What the model is told:'));
+    pBox.append(pShown);
+  }
+  box.append(pBox);
+
   const msg=el('div','tiny');msg.style.marginTop='.4rem';
   const bar=el('div');bar.style.cssText='margin-top:.55rem;display:flex;gap:.5rem;flex-wrap:wrap';
 
@@ -4456,6 +4629,97 @@ function accountEditor(a){
  * visible "0 orphans" is noise on every healthy install. A lookup that FAILED does render, because
  * "none found" and "could not look" are different facts and only one of them is reassuring.
  */
+/**
+ * Does this fleet read as one writer?
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS CARD IS ON THIS SCREEN.
+ *
+ * Before migration 0022 `draftPrompt` took no account parameter, so every account drafted from
+ * one identical prompt — one register, one hedging vocabulary, one length ceiling, one ban list.
+ * Measured on the live rows 2026-10-16: 13 accounts, `knows` empty on all of them, no `role` or
+ * `speaks` at all on six. Four of the six comments published from them were removed by
+ * r/Wordpress moderators, one with the public reply "Please don't post AI-generated comments."
+ *
+ * Two states are worth a person's attention and neither is visible from any single account card:
+ * an account with NO persona (it drafts in the shared default voice), and two accounts holding
+ * the SAME voice (they read as one writer however their other settings differ). Both come from
+ * `voiceCollisions` — the same function `/api/pulse` and `redbot personas` call — so no surface
+ * here can disagree with the engine about it.
+ *
+ * SILENT WHEN THERE IS NOTHING TO SAY. A card that is always on screen is a card nobody reads,
+ * and "every account has its own voice" is the normal state once seeding has run.
+ */
+function personaFleetCard(r){
+  /* Not asked yet is not the same fact as nothing wrong, and it must not render as either. */
+  if(!PERSONAS)return;
+  const without=PERSONAS.without||[];
+  const shared=PERSONAS.shared||[];
+  if(!without.length&&!shared.length)return;
+
+  const c=el('div','card');
+  c.style.borderColor='var(--ember)';
+  const h=el('div','tiny');
+  h.innerHTML='<strong>Some accounts write the same way</strong>';
+  c.append(h);
+
+  if(without.length){
+    c.append(el('div','tiny',
+      `${without.length} account(s) have no writing persona, so they draft in the shared default `
+      +`voice: ${without.join(', ')}`));
+  }
+  for(const sh of shared){
+    c.append(el('div','tiny',
+      `${sh.handles.join(' and ')} both write as ${sh.key} — same register, same length. They `
+      +'read as one writer.'));
+  }
+
+  c.append(el('div','tiny',
+    'Each account needs its own register, length and hedging, or every reply across the fleet '
+    +'carries the same fingerprint. Giving everyone a voice assigns the mechanical half — '
+    +'register, length, how they hedge, habits — different for each account. It never overwrites '
+    +'one you wrote, and it does not invent a background: accounts with nothing to build one '
+    +'from are listed afterwards so you can write a line for them.'));
+
+  const seed=el('button','mini act');
+  seed.textContent='Give everyone a voice';
+  const out=el('div','tiny');out.style.marginTop='.4rem';
+  seed.onclick=async()=>{
+    const held=busy('Assigning voices…');
+    try{
+      const res=await fetch('/api/personas/seed',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})
+        .then(x=>x.json());
+      if(!res.ok){out.innerHTML=`<span style="color:var(--ember)">${esc(res.error||'could not seed')}</span>`;held.fail(res.error);return}
+      await loadPersonas();
+      const bits=[`${(res.written||[]).length} account(s) given a voice`];
+      if(res.skipped)bits.push(`${res.skipped} already had one and were left alone`);
+      if((res.failed||[]).length)bits.push(`${res.failed.length} could not be written`);
+      let html=esc(bits.join(' · '))+'.';
+      if((res.needBio||[]).length){
+        html+=`<br><span style="color:var(--ember)">${res.needBio.length} account(s) have a voice but `
+          +`no background, because they have no role or subject of their own to build one from: `
+          +`${esc(res.needBio.join(', '))}. Write a line for each in its own panel — none was `
+          +'invented.</span>';
+      }
+      if((res.unallocated||[]).length){
+        html+=`<br><span style="color:var(--ember)">No distinct voice left for `
+          +`${esc(res.unallocated.join(', '))}. There are ${res.voicesAvailable} and more accounts `
+          +'than that; a duplicate is not handed out automatically.</span>';
+      }
+      if((res.failed||[]).length){
+        html+='<br>'+res.failed.map(f=>`${esc(f.handle)}: ${esc(f.error)}`).join('<br>');
+      }
+      out.innerHTML=html;
+      accounts();
+      held.done('Done');
+    }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
+  };
+  const bar=el('div');bar.style.cssText='margin-top:.55rem;display:flex;gap:.5rem;flex-wrap:wrap';
+  bar.append(seed);
+  c.append(bar);c.append(out);
+  r.append(c);
+}
+
 async function orphanCard(root){
   let r;
   try{ r=await fetch('/api/browsers/orphans').then(x=>x.json()); }catch{ return }
@@ -4506,6 +4770,7 @@ function accounts(){
   ahead.append(addBtnTop);
   r.append(ahead);
   orphanCard(r);
+  personaFleetCard(r);
 
   /* ---------------- which account this machine acts as ----------------
    *
@@ -7336,6 +7601,7 @@ async function load(){
     }
   }
   await loadOperators();
+  await loadPersonas();
   /**
    * The install-time read happens HERE, before anything is painted, and not later.
    *

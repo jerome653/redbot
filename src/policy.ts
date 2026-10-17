@@ -88,6 +88,25 @@ export const policy = {
    * measured what these accounts can actually sustain, because they have posted nothing.
    *
    * ---------------------------------------------------------------------------
+   * 10 -> 3, 2026-10-16, on Jerome's instruction: "dont add too many". This restores the
+   * ACCOUNT-WARMING.md Stage 1 figure, and it is the reversal the ⚠ note at the end of this
+   * comment said would be needed — recorded here rather than silently flipping the literal,
+   * because the arithmetic below was written to justify 10 and no longer justifies the value it
+   * sits above.
+   *
+   * WHAT 3 BINDS THAT 10 DID NOT. The three enforcers named below all read this one number, so the
+   * change lands everywhere at once: window.ts takes min(account.dailyCeiling, this),
+   * health.ts raises a Cooldown at or above it, and warming.ts raises a `warming:daily-ceiling`
+   * issue that becomes an advisory and REFUSES an unattended publish. At 10 the binding constraint
+   * was the 45-minute spacing and the 120-minute loop; at 3 the quota binds first, which is the
+   * stated intent rather than a side effect.
+   *
+   * The per-account rows are a separate dial and are NOT raised to match: `daily_ceiling` is 10 on
+   * seven of the thirteen live accounts and 1 on the other six, and `Math.min` means the sevens now
+   * mean 3 and the ones still mean 1. Nothing had to be rewritten per account for this to take
+   * effect, which is the property that made 10 the wrong thing to change by hand last time.
+   *
+   * SUPERSEDED, kept because the argument is the record of how the number moved:
    * 3 -> 10, 2026-09-28, on Jerome's instruction: "we don't need to limit 1 post or comment per
    * day — do it like a normal users browsing."
    *
@@ -119,8 +138,8 @@ export const policy = {
    * ---------------------------------------------------------------------------
    */
   maxRepliesPerDay: L(
-    10, 'replies/day', 'declared',
-    'operator instruction 2026-09-28 — browse like a normal user; 16h active window at 45min spacing allows 21, the 120min loop produces at most 8'
+    3, 'replies/day', 'declared',
+    'operator instruction 2026-10-16 — "dont add too many"; back to the ACCOUNT-WARMING Stage 1 figure the 09-28 raise overrode'
   ),
   minMinutesBetweenReplies: L(
     45, 'minutes', 'provisional',
