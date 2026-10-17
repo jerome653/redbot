@@ -155,6 +155,18 @@ const INTERNAL_REASONING: RegExp[] = [
   /\bmy (?:reasoning|thought process) (?:is|was)\b/i
 ];
 
+/**
+ * A dash between clauses. Measured on cardinal 2026-10-17: 13 of 38 stored drafts carried an em
+ * dash, three of the six published replies among them, and none was flagged. A spaced en dash used
+ * the same way counts. An en dash in a range (8.1-8.3 written with U+2013) and a hyphen do not.
+ */
+const CLAUSE_DASH = /\u2014|\s\u2013\s/;
+
+/** Code is quoted text, not the reply's own punctuation: fenced blocks and inline code are skipped. */
+function withoutCode(body: string): string {
+  return body.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ');
+}
+
 export interface LintResult {
   ok: boolean;
   issues: string[];
@@ -202,6 +214,9 @@ export function lintDraft(body: string): LintResult {
   }
   if (firstMatch(INTERNAL_REASONING, scan)) {
     issues.push('internal reasoning left in the reply');
+  }
+  if (CLAUSE_DASH.test(withoutCode(scan))) {
+    issues.push('em dash in the reply: rewrite it as a comma, a full stop or brackets');
   }
   /**
    * DEFECT-10 (2026-07-22): a real draft leaked past this check. It opened with tool-state

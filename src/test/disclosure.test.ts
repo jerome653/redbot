@@ -166,3 +166,45 @@ test('DEFECT-10: a section rule further down the reply still passes', () => {
   );
   assert.equal(r.ok, true, r.issues.join('; '));
 });
+
+/* ---- em dashes ----
+   Measured on cardinal 2026-10-17: 13 of 38 stored drafts carry an em dash, three of the six that
+   were published among them, and the 16:54 UTC draft went through this linter with no issue. */
+
+const EM = String.fromCharCode(0x2014);
+const EN = String.fromCharCode(0x2013);
+const EM_DASH_DRAFT = "I'd check whether the `@ayme`-annotated actions and the in-page inspector are stripped " +
+  `from production builds${EM}and what they add to bundle size and runtime when they aren't${EM}before ` +
+  'putting this in front of a client.';
+
+test('an em dash in a reply is a lint issue', () => {
+  const r = lintDraft(EM_DASH_DRAFT);
+  assert.equal(r.ok, false);
+  assert.ok(r.issues.some((i) => /em dash/i.test(i)), r.issues.join('; '));
+});
+
+test('a spaced en dash used as a dash is the same tell', () => {
+  const r = lintDraft(`${GOOD} It usually is ${EN} the drop-in is the first suspect.`);
+  assert.ok(r.issues.some((i) => /em dash/i.test(i)), r.issues.join('; '));
+});
+
+test('hyphens and an en dash in a range are not dashes between clauses', () => {
+  const r = lintDraft(`${GOOD} It happens on PHP 8.1${EN}8.3 with a well-known drop-in, pages 2-4 of the log.`);
+  assert.equal(r.ok, true, r.issues.join('; '));
+});
+
+test('an em dash inside code is quoted text, not the reply\'s own punctuation', () => {
+  const fenced = lintDraft(`${GOOD}\n\n\`\`\`\nError ${EM} cache unavailable\n\`\`\`\n`);
+  assert.equal(fenced.ok, true, fenced.issues.join('; '));
+  const inline = lintDraft(`${GOOD} The log line reads \`Error ${EM} cache unavailable\`.`);
+  assert.equal(inline.ok, true, inline.issues.join('; '));
+});
+
+test('both drafting prompts tell the model not to use em dashes', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const { join } = await import('node:path');
+  const src = readFileSync(join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', 'src', 'prompts.ts'), 'utf8');
+  const rule = /No em dashes/g;
+  assert.equal(src.match(rule)?.length ?? 0, 2, 'draftPrompt and warmupPrompt each carry the rule');
+});
