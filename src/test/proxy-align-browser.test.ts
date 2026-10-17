@@ -224,8 +224,9 @@ after(async () => {
        actions/runs/39045859184 — windows-latest, 2026-10-17
 
      `force: true` suppresses ENOENT, never EPERM. `maxRetries`/`retryDelay` is the documented
-     remedy: node retries EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM with linear backoff, so this waits
-     up to 2.5s for the handles to close — inside this hook's own 30s budget.
+     remedy: node retries EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM with linear backoff (250ms, 500ms,
+     ... 2500ms), so this waits up to 13.75s in all for the handles to close — inside this hook's
+     own 30s budget.
 
      And if the OS still will not release a TEMP directory, that is not a verdict on proxy
      alignment: it is reported, not thrown, because a cleanup failure must not overturn what the
