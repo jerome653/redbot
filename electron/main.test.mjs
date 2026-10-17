@@ -32,6 +32,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { register } from 'node:module';
 
 /**
@@ -143,6 +146,22 @@ async function capturingLog(fn) {
 /** `bootOpened` is module state shared by every test in here, so each one starts from empty. */
 function freshBoot() { bootOpened.length = 0; }
 
+/**
+ * A throwaway data directory for one test, and `REDBOT_DATA` pointed at it.
+ *
+ * `openBoundBrowsers` reads `push-state.json` from there to find the loop's account, so a test
+ * about that selection needs its own copy — reading the real one would make the result depend on
+ * whatever this machine's loop happens to be set to.
+ */
+const dataDirs = [];
+function tempData() {
+  const d = mkdtempSync(join(tmpdir(), 'redbot-boot-'));
+  process.env.REDBOT_DATA = d;
+  dataDirs.push(d);
+  return d;
+}
+process.on('exit', () => { for (const d of dataDirs) { try { rmSync(d, { recursive: true, force: true }); } catch { /* gone */ } } });
+
 /* ------------------------------------------------------------------ *
  * 1. The number.
  * ------------------------------------------------------------------ */
@@ -178,6 +197,136 @@ test('the budget is a sum of the parts, so it cannot drift from what it waits fo
 });
 
 /* ------------------------------------------------------------------ *
+ * 1b. WHICH browsers boot opens.
+ *
+ * MEASURED 2026-10-17 on an install with 13 bound accounts: `redbot.service` held 5.42 GB of an
+ * 11.9 GB machine across 195 Chrome processes, with 1.03 GB free and 1.18 GB already paged out —
+ * at load average 0.26. The console tab felt slow while measuring 166 ms to load and 100-220 ms
+ * per screen from localhost, because the page was never the problem; the machine was in swap.
+ *
+ * The unattended loop runs as ONE account (`autoStart` passes a single REDBOT_ACCOUNT), so twelve
+ * of those browsers were driven by nothing.
+ * ------------------------------------------------------------------ */
+
+test('by default boot opens only the account the loop runs as', async () => {
+  freshBoot(); tempData();
+  const opened = [];
+  const console_ = await fakeConsole({
+    pulse: () => [
+      { handle: 'alice', port: 9222, state: 'free' },
+      { handle: 'bob', port: 9223, state: 'free' },
+      { handle: 'carol', port: 9224, state: 'free' }
+    ],
+    /* The fixture hands the raw `res` to this handler — it must answer, or boot waits out its
+       whole budget and the test measures a timeout instead of a selection. */
+    open: (body, res) => {
+      opened.push(body.handle);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, port: 9222 }));
+    }
+  });
+  try {
+    /* The loop's record, in the data directory this boot reads. */
+    writeFileSync(join(process.env.REDBOT_DATA, 'push-state.json'),
+      JSON.stringify({ cursors: {}, autoLoop: { account: 'bob', everyMinutes: 120 } }), 'utf8');
+
+    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 2_000 }));
+    assert.deepEqual(opened, ['bob'], 'only the loop account may be opened at boot');
+    assert.match(said, /opening 1 of 3 — bob is the account the loop runs as/);
+    assert.match(said, /alice not opened at boot/);
+    assert.match(said, /carol not opened at boot/);
+    /* The way back is printed, because a changed default that does not say so is a trap. */
+    assert.match(said, /REDBOT_BOOT_BROWSERS=all restores the old behaviour/);
+  } finally { await console_.stop(); }
+});
+
+test('with no loop registered, boot opens everything — it has no basis to choose', async () => {
+  freshBoot(); tempData();
+  const opened = [];
+  const console_ = await fakeConsole({
+    pulse: () => [
+      { handle: 'alice', port: 9222, state: 'free' },
+      { handle: 'bob', port: 9223, state: 'free' }
+    ],
+    /* The fixture hands the raw `res` to this handler — it must answer, or boot waits out its
+       whole budget and the test measures a timeout instead of a selection. */
+    open: (body, res) => {
+      opened.push(body.handle);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, port: 9222 }));
+    }
+  });
+  try {
+    /* No push-state at all. Choosing anyway would silently stop opening an account somebody
+       relies on, which is a worse failure than opening one too many. */
+    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 2_000 }));
+    assert.deepEqual(opened.sort(), ['alice', 'bob']);
+    assert.match(said, /opening all 2 — no loop registered/);
+  } finally { await console_.stop(); }
+});
+
+test('an unreadable push-state opens everything rather than nothing', async () => {
+  freshBoot(); tempData();
+  const opened = [];
+  const console_ = await fakeConsole({
+    pulse: () => [{ handle: 'alice', port: 9222, state: 'free' }],
+    /* The fixture hands the raw `res` to this handler — it must answer, or boot waits out its
+       whole budget and the test measures a timeout instead of a selection. */
+    open: (body, res) => {
+      opened.push(body.handle);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, port: 9222 }));
+    }
+  });
+  try {
+    writeFileSync(join(process.env.REDBOT_DATA, 'push-state.json'), 'not json', 'utf8');
+    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 2_000 }));
+    assert.deepEqual(opened, ['alice'], 'failing closed here would leave the fleet with no browser');
+    assert.match(said, /opening all 1 — no loop registered/);
+  } finally { await console_.stop(); }
+});
+
+test('an explicit handle list is honoured, and an unknown name opens nothing', async () => {
+  for (const [list, want] of [['alice,carol', ['alice', 'carol']], ['nobody', []]]) {
+    freshBoot(); tempData();
+    const opened = [];
+    const console_ = await fakeConsole({
+      pulse: () => [
+        { handle: 'alice', port: 9222, state: 'free' },
+        { handle: 'bob', port: 9223, state: 'free' },
+        { handle: 'carol', port: 9224, state: 'free' }
+      ],
+      /* The fixture hands the raw `res` to this handler — it must answer, or boot waits out its
+       whole budget and the test measures a timeout instead of a selection. */
+    open: (body, res) => {
+      opened.push(body.handle);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, port: 9222 }));
+    }
+    });
+    try {
+      await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 2_000, bootBrowsers: list }));
+      assert.deepEqual(opened.sort(), want, `REDBOT_BOOT_BROWSERS=${list}`);
+    } finally { await console_.stop(); }
+  }
+});
+
+test('a browser somebody already opened is reported, never skipped as unselected', async () => {
+  freshBoot(); tempData();
+  const console_ = await fakeConsole({
+    /* `ours` means that Chrome is already running. Boot must not claim it was "not opened at
+       boot" — it is open, and saying otherwise would send an operator to start a second one. */
+    pulse: () => [{ handle: 'alice', port: 9222, state: 'ours' }],
+    open: () => { throw new Error('boot must not open an account that is already ours'); }
+  });
+  try {
+    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 2_000, bootBrowsers: 'nobody' }));
+    assert.match(said, /alice already open on 9222/);
+    assert.doesNotMatch(said, /alice not opened at boot/);
+  } finally { await console_.stop(); }
+});
+
+/* ------------------------------------------------------------------ *
  * 2. The abort path.
  * ------------------------------------------------------------------ */
 
@@ -191,7 +340,11 @@ test('THE POINT: a launch that outruns the budget is adopted, not written off', 
     open: () => { asked = true; /* never answers: this is the launch still working */ }
   });
   try {
-    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 250 }));
+    /* `bootBrowsers: 'all'` because these tests are about the TIMEOUT and adoption paths, not
+       about which accounts boot selects. The default reads `push-state.json` to open only the
+       account the loop runs as, which would filter these fixture handles out and fail three
+       tests on a selection they are not testing. */
+    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 250, bootBrowsers: 'all' }));
     assert.equal(console_.seen.open, 1, 'boot has to have actually asked for the open');
     assert.deepEqual([...bootOpened], ['alice'],
       'the browser is up and THIS boot caused it, so quit must know to close it — otherwise it is '
@@ -210,7 +363,7 @@ test('a timeout says so out loud, even when there is nothing to adopt', async ()
     open: () => { /* never answers, and the browser never comes up either */ }
   });
   try {
-    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 250 }));
+    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 250, bootBrowsers: 'all' }));
     assert.deepEqual([...bootOpened], [],
       'nothing came up, so there is nothing to close and nothing to claim');
     assert.ok(console_.seen.pulse > 1,
@@ -233,7 +386,7 @@ test('an error that is NOT a timeout is still reported the way it always was', a
     open: (_body, res) => { res.socket.destroy(); }
   });
   try {
-    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 5_000 }));
+    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 5_000, bootBrowsers: 'all' }));
     assert.deepEqual([...bootOpened], [], 'a request that never landed did not cause a browser');
     assert.equal(console_.seen.pulse, 1,
       'nothing was abandoned by this side, so there is no launch to go looking for — a reconcile '
@@ -257,7 +410,7 @@ test('`alreadyRunning` is still NOT recorded — this process did not start it',
     }
   });
   try {
-    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 5_000 }));
+    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 5_000, bootBrowsers: 'all' }));
     assert.deepEqual([...bootOpened], [],
       'the browser was already there when boot looked, so closing it at quit would be tidying '
       + "away somebody else's window — the timeout fix must not blur these two states together");
@@ -272,7 +425,7 @@ test('a browser already `ours` is skipped without an open request', async () => 
     open: () => { throw new Error('boot must not ask to open a browser that is already ours'); }
   });
   try {
-    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 5_000 }));
+    const said = await capturingLog(() => openBoundBrowsers(console_.port, { openTimeoutMs: 5_000, bootBrowsers: 'all' }));
     assert.equal(console_.seen.open, 0, 'the `ours` skip is another builder ground — leave it working');
     assert.deepEqual([...bootOpened], [], 'boot did not open it, so boot does not close it');
     assert.match(said, /erin.*already open/);

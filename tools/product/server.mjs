@@ -49,6 +49,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { exitPosture } from './exit-posture.mjs';
 import { fleetProblems } from './fleet-posture.mjs';
+import { bootBrowserSelection } from './boot-browsers.mjs';
 import { engineProblems } from './engine-posture.mjs';
 import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 /* The order a browser start follows. Out here for the reason the module's header gives: the
@@ -3937,7 +3938,27 @@ const server = createServer((req, res) => {
          lived inline here, zero accounts meant zero iterations meant zero problems meant
          `healthy: true` — and the console painted "all connected" in green directly above its own
          banner listing the two things still missing. See tools/product/fleet-posture.mjs. */
-      const problems = fleetProblems(browsers);
+      /**
+       * THE SAME SELECTION BOOT USES, from the same module.
+       *
+       * An account boot was never going to open is not a fault for being closed. Computing that
+       * here from `bootBrowserSelection` rather than re-deriving it is the point: when the boot
+       * default changed and only boot knew, this route reported twelve accounts as
+       * `browser is not open` on an install doing exactly what it was told.
+       */
+      let expectedOpen = null;
+      try {
+        const st = pushStateApi ? pushStateApi.readPushState() : null;
+        expectedOpen = bootBrowserSelection({
+          handles: browsers.map((b) => b.handle),
+          want: process.env.REDBOT_BOOT_BROWSERS,
+          loopAccount: st && st.autoLoop ? st.autoLoop.account : null
+        }).expected;
+      } catch {
+        /* Unreadable state means no basis to narrow, so nothing is excused — the strict reading. */
+        expectedOpen = null;
+      }
+      const problems = fleetProblems(browsers, expectedOpen);
       if (!existsSync(join(ROOT, 'dist', 'cli.js'))) problems.push('redbot is not built — run npm run build');
       /**
        * `data` rides the pulse so every screen can notice its own numbers have moved.
