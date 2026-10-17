@@ -33,8 +33,9 @@
  * - **No credentials, no cloud, no external service, no new dependency.** Node built-ins only.
  */
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync
+  readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync, renameSync
 } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, basename } from 'node:path';
@@ -223,6 +224,92 @@ export async function backupDatabase(
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** Where the daily database copies go, under the backup root. */
+export const DAILY_DB_DIR = 'database';
+/** A copy younger than this is fresh enough; the loop runs every 2h, so this is once a day. */
+export const DAILY_DB_MIN_HOURS = 20;
+
+export interface DailyDatabaseBackup {
+  ok: boolean;
+  /** True when a recent enough copy already existed and nothing was written. */
+  skipped?: boolean;
+  file?: string;
+  bytes?: number;
+  detail: string;
+}
+
+/** The newest verified daily copy (`redbot-*.db`, never a `.partial`), by mtime. */
+export function newestDailyDatabaseCopy(dir: string): { file: string; ms: number } | null {
+  if (!existsSync(dir)) return null;
+  let best: { file: string; ms: number } | null = null;
+  for (const n of readdirSync(dir)) {
+    if (!/^redbot-.+\.db$/.test(n)) continue;
+    const file = join(dir, n);
+    const ms = statSync(file).mtimeMs;
+    if (!best || ms > best.ms) best = { file, ms };
+  }
+  return best;
+}
+
+/** `PRAGMA integrity_check` on a copy, read-only. 'ok' or what sqlite said instead. */
+function integrityOf(file: string): string {
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(file, { readOnly: true });
+    const rows = db.prepare('PRAGMA integrity_check').all() as Array<Record<string, unknown>>;
+    const said = rows.map((r) => String(Object.values(r)[0])).join('; ');
+    return said || 'no answer';
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  } finally {
+    try { db?.close(); } catch { /* already closed */ }
+  }
+}
+
+/**
+ * The database, copied once a day by the unattended loop.
+ *
+ * WHY. `autoBackup()` runs `backupEvidence()`, and BACKED_UP names the JSON files the store used
+ * before sqlite. Measured on cardinal 2026-10-17: none of them exists in data/ any more, the
+ * newest snapshot (2026-10-05T07-56-08-965Z) holds only its manifest.json, and `backupDatabase`
+ * was called by reset.ts alone. So redbot.db, which holds history, certifications and
+ * observations, had no routine copy at all.
+ *
+ * The copy is written as `.partial`, checked with `PRAGMA integrity_check`, and only then renamed
+ * to `.db`. A copy that fails the check stays as `.partial` for whoever looks, and does not count
+ * as the newest, so the next loop tries again instead of waiting a day behind a bad copy. Nothing
+ * here deletes an older copy.
+ */
+export async function dailyDatabaseBackup(
+  db: { query(sql: string, params?: unknown[]): Promise<unknown> } | null,
+  now: Date = new Date(),
+  root: string = backupRoot()
+): Promise<DailyDatabaseBackup> {
+  const dir = join(root, DAILY_DB_DIR);
+  const newest = newestDailyDatabaseCopy(dir);
+  if (newest) {
+    const hours = (now.getTime() - newest.ms) / 3_600_000;
+    if (hours < DAILY_DB_MIN_HOURS) {
+      return { ok: true, skipped: true, file: newest.file,
+               detail: `a copy from ${hours.toFixed(1)}h ago exists (${newest.file})` };
+    }
+  }
+
+  const name = `redbot-${stamp(now)}.db`;
+  const made = await backupDatabase(dir, db, `${name}.partial`);
+  if (!made.ok || !made.file) return { ok: false, detail: made.reason ?? 'no copy was made' };
+
+  const integrity = integrityOf(made.file);
+  if (integrity !== 'ok') {
+    return { ok: false, file: made.file,
+             detail: `the copy failed integrity_check (${integrity}); left at ${made.file}` };
+  }
+  const file = join(dir, name);
+  renameSync(made.file, file);
+  return { ok: true, file, bytes: made.bytes,
+           detail: `${((made.bytes ?? 0) / 1_048_576).toFixed(1)} MB, integrity ok -> ${file}` };
 }
 
 export interface SnapshotInfo {

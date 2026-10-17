@@ -26,6 +26,7 @@ import { certifyCmd } from './certify.js';
 import { reply } from './reply.js';
 import { autoPublishEnabled } from '../autopublish.js';
 import { record, say } from '../log.js';
+import { dailyDatabaseBackup, type DailyDatabaseBackup } from '../backup.js';
 /**
  * Sources come from sources through src/sources.ts, which is also where "the file is
  * absent" stopped meaning the same thing as "the file is corrupt".
@@ -251,6 +252,40 @@ async function cycle(): Promise<number> {
   return 0;
 }
 
+/**
+ * Once a day, ahead of the cycle, the database is copied (src/backup.ts, dailyDatabaseBackup).
+ *
+ * Ahead of checkWindow on purpose: a backup touches no browser and no Reddit, so quiet hours are
+ * the right time for it rather than a reason to skip it. A copy that was made is said in the run
+ * log, and the verified file is its record. A failure is recorded as `error` and the cycle still
+ * runs — a missing copy must not also cost the day's work. `error` is outside stall-watch's
+ * WORK_KINDS and END_KINDS, so the row neither opens nor closes a cycle.
+ */
+export async function backupBeforeCycle(
+  run: () => Promise<DailyDatabaseBackup> = () => dailyDatabaseBackup(getPool()),
+  rec: typeof record = record
+): Promise<DailyDatabaseBackup | null> {
+  let r: DailyDatabaseBackup;
+  try {
+    r = await run();
+  } catch (e) {
+    r = { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+  try {
+    if (r.skipped) return r;
+    if (r.ok) {
+      say.step(`Database backed up: ${r.detail}`);
+    } else {
+      say.warn(`Database backup failed: ${r.detail}`);
+      await rec('error', `database backup failed: ${r.detail}`, { backup: 'database', level: 'warn' });
+    }
+  } catch {
+    /* The history row is the record of the backup, not the backup; failing to write it must not
+       stop the loop. */
+  }
+  return r;
+}
+
 export async function auto(opts?: { once?: boolean; everyMinutes?: number }): Promise<number> {
   say.head('redbot auto — unattended, up to the fact-check');
   /* Say which install this is, loudly, on the first line of every run. An autonomous install that
@@ -268,6 +303,7 @@ export async function auto(opts?: { once?: boolean; everyMinutes?: number }): Pr
   say.step(`Running every ${minutes} minutes. Ctrl+C to stop.`);
   // Deliberately sequential and unbounded: one cycle at a time, forever, until stopped.
   for (;;) {
+    await backupBeforeCycle();
     try {
       await cycle();
     } catch (e) {
