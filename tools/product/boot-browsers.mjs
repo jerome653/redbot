@@ -76,3 +76,21 @@ export function expectedOpen(expected, handle) {
   if (!expected) return true;
   return expected.has(String(handle).toLowerCase());
 }
+
+/**
+ * Whether boot minimises an account's browser once it has opened it.
+ *
+ * Every boot-opened browser was minimised, including the one the auto loop drives. Measured on
+ * cardinal 2026-10-17: that window reported `windowState: "minimized"` and `document.hidden: true`,
+ * and `page.mouse.wheel` in a feed never settled, so a cycle hung for 1 h 42 min. Since PR #24 the
+ * wheel is raced and the hang ends, but a minimised window still takes no scroll, so a feed read
+ * gets only the posts on the first screen. Jerome, 2026-10-18: keep the loop's window open. Every
+ * other account is still minimised.
+ *
+ * @param {string} handle
+ * @param {string|null} [loopAccount]  the account in push-state.json's `autoLoop`, or null
+ */
+export function minimiseAtBoot(handle, loopAccount = null) {
+  if (!loopAccount) return true;
+  return String(handle).toLowerCase() !== String(loopAccount).toLowerCase();
+}

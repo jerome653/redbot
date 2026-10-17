@@ -13,7 +13,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bootBrowserSelection, expectedOpen, DEFAULT_WANT } from './boot-browsers.mjs';
+import { bootBrowserSelection, expectedOpen, DEFAULT_WANT, minimiseAtBoot } from './boot-browsers.mjs';
 import { fleetProblems } from './fleet-posture.mjs';
 
 const HANDLES = ['Alice', 'bob', 'CAROL'];
@@ -127,4 +127,11 @@ test('ONLY the closed finding is conditional — every other fault still reports
 test('an empty fleet is still the finding it always was', () => {
   const { expected } = bootBrowserSelection({ handles: [], loopAccount: 'bob' });
   assert.match(fleetProblems([], expected)[0], /no account is configured/);
+});
+
+test('boot leaves the loop account\'s browser un-minimised and minimises every other one', () => {
+  assert.equal(minimiseAtBoot('jordangrowth', 'jordangrowth'), false, 'a minimised window takes no scroll');
+  assert.equal(minimiseAtBoot('JordanGrowth', 'jordangrowth'), false, 'matched case-insensitively');
+  assert.equal(minimiseAtBoot('ryangrowth12', 'jordangrowth'), true);
+  assert.equal(minimiseAtBoot('ryangrowth12', null), true, 'no loop registered: every boot window is minimised, as before');
 });
