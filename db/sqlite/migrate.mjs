@@ -449,7 +449,8 @@ const EXPECTED_TABLES = [
   'certification_resolution_signals', 'jobs', 'history', 'observations',
   'reviews', 'regret', 'interactions', 'trace', 'confirmations',
   'credentials', 'sources', 'account_machines', 'thread_prefilter',
-  'account_proxies', 'account_exit_ips', 'account_locations'
+  'account_proxies', 'account_exit_ips', 'account_locations',
+  'account_personas'
 ];
 
 /** Assert the live schema actually contains what the migrations claim to build. */

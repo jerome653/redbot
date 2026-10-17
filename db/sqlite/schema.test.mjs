@@ -373,9 +373,15 @@ describe('updated_at triggers', () => {
     /* Was "all ten tables that had the plpgsql trigger": migration 0016 added `account_proxies`,
        which carries updated_at and therefore needs the same trigger. `account_exit_ips` is
        deliberately NOT here — it is an append-only ledger with no updated_at to maintain, and
-       giving it one would imply observations get rewritten. */
+       giving it one would imply observations get rewritten.
+
+       0022 added `account_personas`, and this test is what caught that it needed the trigger
+       rather than the omission being found from a stale timestamp months later. `account_locations`
+       is in the same deliberate exclusion as `account_exit_ips`: it records WHEN a detection was
+       taken, and a row that moved would be a measurement claiming a time it was not made. */
     const want = ['accounts', 'threads', 'gap_analyses', 'opportunity_assessments', 'drafts',
-      'jobs', 'credentials', 'sources', 'account_machines', 'thread_prefilter', 'account_proxies'];
+      'jobs', 'credentials', 'sources', 'account_machines', 'thread_prefilter', 'account_proxies',
+      'account_personas'];
     const have = db.prepare("SELECT tbl_name FROM sqlite_master WHERE type='trigger'").all()
       .map((r) => r.tbl_name);
     assert.deepEqual([...have].sort(), [...want].sort());

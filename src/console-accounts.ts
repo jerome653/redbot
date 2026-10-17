@@ -32,6 +32,8 @@ import {
 } from './ports.js';
 import { machineId } from './machine.js';
 import { allocateProfileDir, profileState, resolveProfileDir } from './profiles.js';
+import { loadPersonas, savePersona, type AccountPersona } from './db/personas.js';
+import { planFleetVoices, voiceKey } from './persona-allocate.js';
 import { isAbsolute, dirname, basename, join } from 'node:path';
 
 /* Re-exported: the allocator here and the status screen must ask "is this port free" in exactly
@@ -375,10 +377,65 @@ export async function createConsoleAccount(body: {
   if (kept) forgetKeptFolder(handle);
 
   forgetAccounts();
+
+  /**
+   * A VOICE, ALLOCATED AT CREATION, so a new account never joins the fleet in the shared one.
+   *
+   * WHY HERE. Before migration 0022 `draftPrompt` took no account, so every account drafted from
+   * one identical prompt — and the thirteen that existed on 2026-10-16 had `knows` empty on all of
+   * them and no `role` or `speaks` at all on six. A persona that has to be filled in by hand after
+   * the fact is a persona most accounts will not have, and an account with no persona drafts in
+   * exactly the voice that got four comments removed from r/Wordpress.
+   *
+   * WHAT IS ALLOCATED AND WHAT IS NOT. Register, length ceiling, hedging and habits — mechanical,
+   * and different from every other account by construction (src/persona-allocate.ts walks the
+   * voice table past the ones already held, the same rule `allocateProfileDir` uses for folders).
+   * A BIOGRAPHY IS NOT INVENTED: `deriveBio` composes one only from the `role` and `speaks` this
+   * caller just supplied, and returns null when there is nothing to compose from, exactly as the
+   * `['WordPress']` subreddit default and the 'Asia/Manila' timezone default were removed rather
+   * than replaced with a better guess.
+   *
+   * NOT FATAL. The account exists in both stores by this point and the person can sign in. A
+   * failed persona write is REPORTED on the result — `personaError` — rather than failing the
+   * creation it happened after, because an account with no voice is a degraded account and an
+   * account that was refused is no account at all.
+   */
+  let personaVoice: string | undefined;
+  let personaError: string | undefined;
+  let personaBioMissing: boolean | undefined;
+  if (!reason) {
+    try {
+      const have = await loadPersonas(getPool());
+      const { plans, unallocated } = planFleetVoices(
+        [{ handle: account.handle, role: account.role ?? null, speaks: account.speaks ?? null,
+           knows: account.knows ?? null, subreddits: account.subreddits ?? null }],
+        new Map(have.map((p: AccountPersona) => [p.handle.toLowerCase(), p] as const))
+      );
+      const plan = plans[0];
+      if (plan) {
+        const saved = await savePersona(getPool(), account.handle, plan.patch);
+        personaVoice = voiceKey(saved);
+        personaBioMissing = plan.bioMissing;
+      } else if (unallocated.length) {
+        /* Every distinct voice is held. A duplicate is NOT handed out — two accounts writing alike
+           is the defect this exists to prevent — so the account is created without one and the
+           caller is told, which is a decision for the operator rather than for this function. */
+        personaError = 'every distinct voice is already held by another account, so none was '
+          + 'assigned. Run `redbot personas` to see them, and add one to VOICES in '
+          + 'src/persona-allocate.ts before this account drafts.';
+      }
+    } catch (e) {
+      personaError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   return {
     ok: true, account, storedIn,
     ...(kept ? { adoptedProfileDir: true } : {}),
-    ...(ignored.length ? { ignored } : {})
+    ...(ignored.length ? { ignored } : {}),
+    ...(personaVoice ? { personaVoice } : {}),
+    ...(personaBioMissing ? { personaBioMissing } : {}),
+    ...(personaError ? { personaError } : {})
   };
 }
 

@@ -39,12 +39,13 @@
  */
 import { app, BrowserWindow, shell, dialog, safeStorage, Menu, ipcMain } from 'electron';
 import { spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { ensureVaultKey } from './vault-key.mjs';
 import { createUpdater } from './updater.mjs';
+import { bootBrowserSelection } from '../tools/product/boot-browsers.mjs';
 import { consolePort as chooseConsolePort } from './console-port.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -493,7 +494,22 @@ async function browserIsOursNow(base, handle, { attempts = 3, gapMs = 2_000 } = 
  * the same reason, as `waitForDebugPort(endpoint, ms = 30_000)` in tools/product/server.mjs.
  * Production never passes it.
  */
-export async function openBoundBrowsers(port, { openTimeoutMs = BOOT_OPEN_TIMEOUT_MS } = {}) {
+export async function openBoundBrowsers(
+  port,
+  {
+    openTimeoutMs = BOOT_OPEN_TIMEOUT_MS,
+    /**
+     * WHICH accounts boot opens. A parameter rather than a constant read straight from scope, for
+     * the reason `openTimeoutMs` above is one: the tests below drive the timeout and adoption
+     * paths on fixture accounts, and a selection that read the live `push-state.json` would filter
+     * those fixtures out and make three unrelated tests fail on a name they never heard of. That
+     * is exactly what happened when this was first written inline.
+     *
+     * Production never passes it, so the env default below is what runs.
+     */
+    bootBrowsers = process.env.REDBOT_BOOT_BROWSERS ?? 'loop'
+  } = {}
+) {
   consolePort = port;
   if (process.env.REDBOT_NO_AUTO_BROWSER === '1') {
     boot_log('browsers    skipped — REDBOT_NO_AUTO_BROWSER=1');
@@ -516,7 +532,71 @@ export async function openBoundBrowsers(port, { openTimeoutMs = BOOT_OPEN_TIMEOU
     return;
   }
 
+  /**
+   * WHICH browsers boot opens — and by default that is the ONE the loop drives, not all of them.
+   *
+   * ---------------------------------------------------------------------------
+   * MEASURED 2026-10-17 on this machine, which has 13 accounts bound to it:
+   *
+   *     redbot.service MemoryCurrent   5.42 GB   of 11.9 GB total
+   *     chrome processes                   195   across 13 profiles, ~12 each
+   *     free                            1.03 GB
+   *     swap in use                     1.18 GB
+   *     load average                       0.26
+   *
+   * Low load, no CPU contention, and the box is a gigabyte from the end of its memory with
+   * another gigabyte already paged out. Everything on it is slow, including a console tab served
+   * from localhost — the page itself measures 166 ms to load and 100-220 ms per screen, so the
+   * slowness was never in the page. Dropping twelve idle profiles returns roughly 5 GB and takes
+   * the machine out of swap.
+   *
+   * THE TWELVE ARE DRIVEN BY NOTHING. The unattended loop runs as exactly one account:
+   * `autoStart` in tools/product/server.mjs takes a single `account` and passes it as
+   * REDBOT_ACCOUNT, and src/commands/auto.ts resolves one through `selectedAccount()`. Boot
+   * opened a Chrome per bound account with no notion of that, so twelve browsers sat minimised
+   * holding ~400 MB each for as long as the install ran.
+   *
+   * NOTHING IS LOST, only deferred. `/api/account/open` opens any account on demand and the
+   * Accounts screen has a button for it, which is how an operator signs in to a new one. Boot
+   * was pre-warming, and pre-warming twelve browsers nobody asked for is what cost the memory.
+   *
+   * REDBOT_BOOT_BROWSERS, and the old behaviour is one word away:
+   *   loop   (default)  the account in push-state.json's `autoLoop`, or all when none is set
+   *   all               every bound account, exactly as before this change
+   *   a,b,c             those handles only
+   */
+  /* The loop's own record, from the same file `resumeAutoLoop` reads. `REDBOT_DATA` is set by this
+     module before anything reads the data directory (see the header) and is what src/config.ts
+     resolves DATA from, so the two cannot point at different installs. */
+  let loopAccount = null;
+  try {
+    const dataDir = process.env.REDBOT_DATA || join(ROOT, 'data');
+    const raw = JSON.parse(readFileSync(join(dataDir, 'push-state.json'), 'utf8'));
+    if (raw && raw.autoLoop && typeof raw.autoLoop.account === 'string') loopAccount = raw.autoLoop.account;
+  } catch { /* absent or unreadable: the selection below falls back to opening everything */ }
+
+  /* ONE answer, imported — tools/product/server.mjs asks the same module which accounts are
+     EXPECTED open, so `/api/pulse` cannot call a deliberately-closed browser a problem. Deciding
+     it here as well is how those two came to disagree the first time. */
+  const { expected: allow, why } = bootBrowserSelection({
+    handles: browsers.map((b) => b.handle),
+    want: bootBrowsers,
+    loopAccount
+  });
+  if (allow) {
+    boot_log(`browsers    opening ${allow.size} of ${browsers.length} — ${why}`);
+    boot_log('browsers    the rest open on demand (Accounts -> Open Chrome). REDBOT_BOOT_BROWSERS=all restores the old behaviour');
+  } else {
+    boot_log(`browsers    opening all ${browsers.length} — ${why}`);
+  }
+
   for (const b of browsers) {
+    /* Skipped, not closed. A browser somebody already opened stays open — this only governs what
+       BOOT starts, and `state === 'ours'` below is what reports one that was already there. */
+    if (allow && !allow.has(String(b.handle).toLowerCase()) && b.state !== 'ours') {
+      boot_log(`browsers    ${b.handle} not opened at boot — opens on demand`);
+      continue;
+    }
     /* 'ours' is the only state worth skipping — that Chrome is already open. Everything else is
        handed to /api/account/open, which re-checks authoritatively and, since 2026-08-01, MOVES an
        account off a port another program is holding rather than refusing. Deciding here which

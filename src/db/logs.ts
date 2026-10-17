@@ -374,6 +374,65 @@ export async function insertTrace(db: Db, e: TraceEvent): Promise<void> {
   );
 }
 
+/**
+ * Delete all but the newest `keep` trace rows, and report how many went.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THERE HAS TO BE A RETENTION RULE AT ALL.
+ *
+ * MEASURED 2026-10-17 on this install, by `tools/ops/simulate.mjs` SIM 2: 66 unattended cycles
+ * wrote 46,084 trace rows — **698 rows per cycle** — at 212 bytes/row (from `dbstat`). Nothing in
+ * the codebase deleted any of them; grepping for a prune, a retention window or a VACUUM found
+ * `src/run-log.ts` (files, not rows) and `src/backup.ts` (which states outright that snapshots are
+ * "never pruned"), and nothing for this table.
+ *
+ * At the 120-minute loop interval that is 12 cycles a day, so the projection is:
+ *
+ *     30d    251,000 rows    ~77 MB database
+ *     90d    754,000 rows   ~184 MB
+ *     1y    3,058,000 rows   ~672 MB
+ *
+ * There is no cliff in that curve, which is why it survived this long. It is simply a database
+ * that doubles every two months for as long as the thing runs.
+ *
+ * ---------------------------------------------------------------------------
+ * ID, NOT TIMESTAMP, and that is deliberate.
+ *
+ * A cutoff by `ts` would be the obvious shape and it is the wrong one here: `ts` is written by the
+ * application, is only CHECKed for shape, and an install whose clock jumped backwards would have
+ * rows whose timestamps are newer than rows written after them. `id` is `INTEGER PRIMARY KEY
+ * AUTOINCREMENT`, so it is monotonic by the engine's guarantee and not by anybody's clock. "The
+ * newest N" is then a statement nothing can falsify.
+ *
+ * NEVER DELETES WHEN IT WOULD DELETE EVERYTHING. `keep <= 0` is refused rather than treated as
+ * "keep nothing": an env var that failed to parse must not empty the table, which is the shape of
+ * mistake `tail()` makes in the other direction two functions above (a limit of 0 means unbounded).
+ */
+export async function pruneTrace(db: Db, keep: number): Promise<{ deleted: number; kept: number }> {
+  const target = Math.floor(Number(keep));
+  if (!Number.isFinite(target) || target <= 0) {
+    throw new Error(`pruneTrace: keep must be a positive integer, got ${JSON.stringify(keep)}`);
+  }
+
+  const before = await db.query<{ n: number }>('SELECT count(*) AS n FROM trace');
+  const total = Number(before.rows[0]?.n ?? 0);
+  if (total <= target) return { deleted: 0, kept: total };
+
+  /* One statement, one scan of the index: everything at or below the id of the (total-target)th
+     oldest row. A `DELETE ... ORDER BY ... LIMIT` is not portable SQL and SQLite only has it when
+     compiled with an optional flag, so the boundary id is selected first. */
+  const cut = await db.query<{ id: number }>(
+    'SELECT id FROM trace ORDER BY id ASC LIMIT 1 OFFSET $1', [total - target]
+  );
+  const boundary = cut.rows[0]?.id;
+  if (boundary === undefined) return { deleted: 0, kept: total };
+
+  await db.query('DELETE FROM trace WHERE id < $1', [boundary]);
+  const after = await db.query<{ n: number }>('SELECT count(*) AS n FROM trace');
+  const kept = Number(after.rows[0]?.n ?? 0);
+  return { deleted: total - kept, kept };
+}
+
 export async function selectTrace(db: Db, t?: Tail): Promise<TraceEvent[]> {
   const q = tail(t, []);
   const r = await db.query<TraceRow>(

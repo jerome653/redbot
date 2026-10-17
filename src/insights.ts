@@ -17,7 +17,7 @@
  * Every signal below states the evidence and the count it came from. A signal over a sample
  * of two is reported with the two attached, so it reads as a hint rather than a finding.
  */
-import { loadTrace, type TraceEvent } from './trace.js';
+import { loadTrace, traceTotal, type TraceEvent } from './trace.js';
 import { loadThreads, loadGaps, loadAssessments, loadDrafts } from './store.js';
 import { loadReviews, summarizeReviews } from './review.js';
 import { loadHistory } from './store.js';
@@ -46,7 +46,15 @@ export interface Insights {
   funnel: Array<{ stage: string; count: number; note: string }>;
   signals: Signal[];
   timings: StageTiming[];
+  /** How many trace rows EXIST — a COUNT, not the size of the window that was read. */
   traceEvents: number;
+  /**
+   * How many were actually materialised. Below `traceEvents` once the table outgrows
+   * `TRACE_READ_MAX`, and the difference is what makes `runs` a window figure rather than a
+   * total — see src/trace.ts for why the read is bounded at all.
+   */
+  traceEventsRead: number;
+  /** Distinct runs IN THE WINDOW READ. Equal to the all-time figure only while nothing was cut. */
   runs: number;
 }
 
@@ -89,6 +97,9 @@ export async function computeInsights(): Promise<Insights> {
   const drafts = await loadDrafts();
   const reviews = await loadReviews();
   const history = await loadHistory();
+  /* The total is a COUNT; `events` is the newest window. `loadTrace()` used to be unbounded and
+     this table grows by 698 rows a cycle with nothing pruning it — see src/trace.ts. */
+  const traceEventsTotal = await traceTotal();
   const events = await loadTrace();
 
   const { keep, dropped } = prefilter(threads);
@@ -279,7 +290,9 @@ export async function computeInsights(): Promise<Insights> {
     signals: signals.sort((a, b) =>
       ({ act: 0, watch: 1, info: 2 })[a.severity] - ({ act: 0, watch: 1, info: 2 })[b.severity]),
     timings,
-    traceEvents: events.length,
+    /* The true total, not the size of the window that was read. */
+    traceEvents: traceEventsTotal,
+    traceEventsRead: events.length,
     runs: new Set(events.map((e: TraceEvent) => e.runId)).size
   };
 }

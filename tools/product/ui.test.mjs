@@ -711,6 +711,62 @@ test('Fact-check it runs the check for THIS draft, with the override', async () 
   } finally { await context.close(); }
 });
 
+/* ---------------------------------------------------------------------------
+ * The one-click Send, added 2026-10-05 on explicit instruction.
+ *
+ * It exists so the OPERATOR'S manual send is never blocked while the unattended loop stays
+ * gated, and it gets there by performing both halves of the overrule handshake itself
+ * (src/commands/reply.ts:311 refuses an approval that has not acknowledged the advisories found
+ * after it, and prints their names for a console to send back in `overrule`).
+ *
+ * That is a safety property being spent deliberately, so it is pinned: the gates must be NAMED
+ * in the second call and in the reason, or the audit trail cannot say what was published over.
+ * ------------------------------------------------------------------------- */
+
+test('one-click Send carries the override, and names every gate it crossed', async () => {
+  const { context, page, calls } = await open();
+  try {
+    /* First call refuses with advisories — what the server really does when gates object after
+       the approval. Second call, carrying `overrule`, succeeds. Added BEFORE open()'s own route
+       so it wins, per the note on that handler. */
+    let seen = 0;
+    await page.route('**/api/publish', async (route) => {
+      const body = JSON.parse(route.request().postData() || '{}');
+      calls.push({ path: '/api/publish', body });
+      seen++;
+      const refuse = seen === 1;
+      return route.fulfill({
+        status: 200, contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify(refuse
+          ? { ok: false, error: 'gates objected', advisories: ['health', 'warming:pace'], output: 'refused' }
+          : { ok: true, code: 0, recorded: true, output: 'published' })
+      });
+    });
+
+    await tab(page, 'review');
+    /* Exact text: 'Send' as a substring also matches the guarded 'Send it…' beside it. */
+    /* Exact text: 'Send' as a substring also matches the guarded 'Send it…' beside it. */
+    await page.click('button:text-is("Send")');
+    await untilHit(calls, '/api/publish');
+    await page.waitForFunction(() => true);
+    /* Two calls, not one: the retry is the whole point. */
+    await page.waitForTimeout(1200);
+
+    const pub = hit(calls, '/api/publish');
+    assert.equal(pub.length, 2, 'one click must make the first call AND the overruling retry');
+
+    assert.equal(pub[0].body.confirm, 'SEND');
+    assert.equal(pub[0].body.overrule, undefined,
+      'the first call must NOT pre-override — the gates are not known until it is refused');
+
+    assert.deepEqual(pub[1].body.overrule, ['health', 'warming:pace'],
+      'the retry must carry exactly the gates the server named, and no others');
+    assert.equal(pub[1].body.confirm, 'SEND');
+    assert.match(pub[1].body.reason, /operator overruled: health, warming:pace/,
+      'the reason is the audit trail — it must name every gate crossed');
+  } finally { await context.close(); }
+});
+
 test('sending needs the typed word, and refuses without it', async () => {
   const { context, page, calls } = await open();
   try {
@@ -1658,57 +1714,19 @@ test('a refused Stop puts the button back rather than lying about it', async () 
 });
 
 
-test('the Dropped panel names which rule caught the threads, and what is merely unread', async () => {
-  /* 101 collected, 30 assessed -> 71 never assessed. 62 of those were filtered (with reasons
-     now on record) and 9 were KEPT and simply not analysed yet. Attributing all 71 to a rule
-     would be the made-up figure this panel used to refuse to print. */
-  const state = makeState(NOW);
-  state.discovery = {
-    ...state.discovery,
-    threadsCollected: 101, assessed: 30, contribute: 22, skip: 8,
-    gapsAnalysed: 30, drafted: 4, total: 30, offset: 0, limit: 25,
-    prefilter: {
-      total: 62,
-      byKind: [
-        { kind: 'outside-pilot', n: 41 },
-        { kind: 'too-old', n: 15 },
-        { kind: 'not-a-question', n: 6 }
-      ]
-    }
-  };
-  const { context, page, errors } = await open({ state });
-  try {
-    await tab(page, 'discovery');
-    const txt = await page.textContent('#v-discovery');
-
-    assert.match(txt, /outside the pilot subreddits/, 'the rule an operator can act on must be named');
-    assert.match(txt, /41/, 'with its real count');
-    assert.match(txt, /older than the 72h ceiling/);
-    assert.match(txt, /not a question/);
-
-    /* The honest remainder: 71 - 62 = 9 nothing rejected. */
-    assert.match(txt, /kept, not looked at yet/, 'and threads awaiting analysis are not called filtered');
-    assert.doesNotMatch(txt, /no breakdown is shown/, 'the apology is gone now the reasons exist');
-
-    assert.deepEqual(errors, [], 'the panel must render clean');
-    await shot(page, 'threads-dropped-breakdown');
-  } finally { await context.close(); }
-});
-
-test('with no reasons on record it says so rather than showing an empty split', async () => {
-  /* Not the same as "nothing was dropped": the reasons are written when `redbot opportunity`
-     runs, and before that the total is all this screen can honestly show. */
-  const state = makeState(NOW);
-  state.discovery = { ...state.discovery, threadsCollected: 40, assessed: 5, skip: 1, prefilter: null };
-  const { context, page } = await open({ state });
-  try {
-    await tab(page, 'discovery');
-    const txt = await page.textContent('#v-discovery');
-    assert.match(txt, /No reasons are on record yet/);
-    assert.match(txt, /redbot opportunity/, 'and says what would produce them');
-    assert.doesNotMatch(txt, /kept, not looked at yet/, 'no split may be shown without the data for it');
-  } finally { await context.close(); }
-});
+/*
+ * REMOVED 2026-10-05 — two tests for the Threads "Dropped" panel, deleted on request to give
+ * the thread list and its per-row Reply cell the width the right rail was holding.
+ *
+ *   - the Dropped panel names which rule caught the threads, and what is merely unread
+ *   - with no reasons on record it says so rather than showing an empty split
+ *
+ * They did not fail; they asserted a panel that no longer exists. Noted rather than silently
+ * dropped, because the aggregate per-rule COUNTS went with the panel — the per-row reason is
+ * still on every row of the "Collected, not assessed" table below it (covered by its own test),
+ * and `redbot insights` still prints the funnel. If the panel ever comes back, these are the
+ * tests it needs.
+ */
 
 
 test('Results renders one page of measurements and says how many exist', async () => {

@@ -20,7 +20,7 @@ import { policy, limitsByProvenance } from '../policy.js';
 import { loadDrafts, loadThreads, loadGaps, loadAssessments } from '../store.js';
 import { loadObservations } from '../health.js';
 import { loadReviews, loadRegrets } from '../review.js';
-import { loadTrace } from '../trace.js';
+import { loadTrace, traceTotal } from '../trace.js';
 import { corpora } from '../corpus.js';
 import { say } from '../log.js';
 import { hoursSinceLastBackup, listSnapshots } from '../backup.js';
@@ -483,10 +483,25 @@ export async function doctor(): Promise<number> {
       : 'empty — draft quality is unmeasured until drafts are decided at the approval prompt'
   );
 
-  /* ---- telemetry ---- */
+  /* ---- telemetry ----
+   *
+   * THE TOTAL COMES FROM A COUNT, THE RUNS FROM A WINDOW, AND THE LINE SAYS SO.
+   *
+   * `loadTrace()` was unbounded and this line printed `events.length` as the total. The table
+   * gains 698 rows per unattended cycle and nothing pruned it, so `redbot doctor` — the command
+   * for an install that is already misbehaving — was on its way to parsing three million rows
+   * (SIM 2 / SIM 3 in tools/ops/simulate.mjs). It is bounded now, which means `events.length` is
+   * no longer the total and must stop being reported as one. */
+  const total = await traceTotal();
   const events = await loadTrace();
-  add('telemetry', events.length ? 'PASS' : 'WARN',
-    events.length ? `${events.length} trace event(s) across ${new Set(events.map((e) => e.runId)).size} run(s)` : 'no trace events yet');
+  const windowed = events.length < total;
+  add('telemetry', total ? 'PASS' : 'WARN',
+    total
+      ? `${total.toLocaleString()} trace event(s)`
+        + (windowed ? `, newest ${events.length.toLocaleString()} read` : '')
+        + ` across ${new Set(events.map((e) => e.runId)).size} run(s)`
+        + (windowed ? ' in that window' : '')
+      : 'no trace events yet');
 
   /* ---- report ---- */
   const pad = Math.max(...checks.map((c) => c.name.length));

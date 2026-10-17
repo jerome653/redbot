@@ -29,9 +29,20 @@
  * @param browsers array of per-account status entries, each `{handle, port, state, browserUp,
  *                 profileOnDisk, exit}`. An EMPTY array means no accounts are configured, which is
  *                 itself the finding.
+ * @param {Set<string>|null} [expected] lower-cased handles whose browser is EXPECTED to be open.
+ *                 `null` (the default) means all of them, which is what every install got before
+ *                 boot learned to open only the loop's account. For an account outside the set,
+ *                 a closed browser is a deliberate state and not a problem — see
+ *                 tools/product/boot-browsers.mjs for why only THIS finding is conditional.
  * @returns {string[]} problems, most fundamental first
  */
-export function fleetProblems(browsers) {
+/** `null` expected means every account is expected open. An empty Set means none is. */
+function isExpected(expected, handle) {
+  if (!expected) return true;
+  return expected.has(String(handle).toLowerCase());
+}
+
+export function fleetProblems(browsers, expected = null) {
   /* Not an array at all means the question could not be answered. Saying "no accounts" there would
      be as wrong as the bug above, in the other direction. */
   if (!Array.isArray(browsers)) return ['the account list could not be read'];
@@ -49,7 +60,13 @@ export function fleetProblems(browsers) {
     if (b.state === 'foreign') problems.push(`${b.handle}: port ${b.port} is held by something else`);
     else if (b.state === 'unknown') problems.push(`${b.handle}: what is on port ${b.port} could not be identified`);
     else if (!b.profileOnDisk) problems.push(`${b.handle}: its browser folder is missing`);
-    else if (!b.browserUp) problems.push(`${b.handle}: browser is not open`);
+    /* The ONE conditional finding. A closed browser on an account nobody asked to open is the
+       intended state: boot opens the loop's account and the rest open on demand. Reporting it as
+       a fault made `/api/pulse` list twelve problems on a healthy install the minute that default
+       changed — and a health signal that cries wolf is the defect this file exists to prevent. */
+    else if (!b.browserUp && isExpected(expected, b.handle)) {
+      problems.push(`${b.handle}: browser is not open`);
+    }
 
     /* An exit that moved, or died under a running browser, is a PROBLEM — not a detail on another
        screen. Left out, the console reports healthy while an account exits from an address nobody

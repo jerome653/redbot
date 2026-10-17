@@ -44,10 +44,11 @@
  * this subreddit. Running the contribution pipeline for that would be both slower and wrong:
  * it optimises for novelty, and novelty is not what earns a new account its first karma.
  */
-import { loadThreads, loadDrafts, saveDraft, loadHistory } from '../store.js';
+import { loadThreads, loadDrafts, saveDraft, loadHistory, loadAccountPersona } from '../store.js';
 import { currentAgeHours } from '../select.js';
 import { complete, extractJson } from '../llm.js';
 import { warmupPrompt } from '../prompts.js';
+import { bannedPhraseHits } from '../persona.js';
 import { lintDraft } from '../disclosure.js';
 import { config, selectedAccount } from '../config.js';
 import { policy } from '../policy.js';
@@ -148,11 +149,24 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
   say.step(`          ${pick.verdict.why}`);
 
   /* ---------- 3. write something ordinary and useful ---------- */
+  /**
+   * The same persona the contribution path uses, for the same reason: warming is where an account
+   * builds the voice it will later be recognised by, so drafting its first comments from the one
+   * shared prompt is where a fleet-wide fingerprint is actually laid down. `account` is already
+   * resolved above. Null leaves `warmupPrompt` byte-identical — see src/persona.ts.
+   */
+  const persona = await loadAccountPersona(account?.handle);
+  say.step(
+    persona
+      ? `Voice   : ${persona.handle}${persona.register ? ` · ${persona.register}` : ''}`
+        + `${persona.maxSentences !== null ? ` · max ${persona.maxSentences} sentence(s)` : ''}`
+      : 'Voice   : none — no persona for this account'
+  );
   say.step(`Writing with ${config.llm.draftModel}…`);
   let raw: string;
   try {
     raw = await complete({
-      prompt: warmupPrompt(thread),
+      prompt: warmupPrompt(thread, persona),
       model: config.llm.draftModel,
       maxTokens: 700,
       temperature: 0.6
@@ -200,6 +214,25 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
     say.step('Refused by the warming rules. Nothing was saved.');
     record('gate.block', `warmup refused for ${thread.id}`, {
       threadId: thread.id, account: account.handle, rules: warm.issues.map((i) => i.rule)
+    });
+    return 1;
+  }
+  /**
+   * This account's own banned phrases, checked rather than requested.
+   *
+   * `personaBlock` states the list in the prompt; a prompt is a request and this is the fact —
+   * the same split `checkWarmingComment` exists for. Its own refusal rather than a warming issue,
+   * because a `WarmingIssue` is a statement about warming policy and this is a statement about
+   * one account's voice; folding them together would make `warming.ts` depend on the persona
+   * tables to answer a question that has nothing to do with karma.
+   */
+  const banned = bannedPhraseHits(body, persona);
+  if (banned.length) {
+    for (const phrase of banned) say.fail(`  [persona] ${account.handle} never writes "${phrase}"`);
+    say.step('Refused by this account\'s own phrase list. Nothing was saved.');
+    record('gate.block', `warmup refused for ${thread.id}`, {
+      threadId: thread.id, account: account.handle,
+      rules: ['persona:banned-phrase'], phrases: banned
     });
     return 1;
   }

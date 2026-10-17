@@ -433,8 +433,23 @@ describe('the schema-derived column map', () => {
     // exit as proxied and hosted. src/db/locations.ts was first written against a hand-rolled
     // `x.proxy === 1` and returned false for a stored 1; the `false` case asserted correctly while
     // being wrong for the same reason, so only the `true` case could tell the two apart.
+    // Migration 0022 (account_personas) moved three of the four, and this test is the reason the
+    // move was caught rather than discovered from the output:
+    //   date     44 -> 46   account_personas.{created_at,updated_at}
+    //   json     20 -> 24   account_personas.{stack,quirks,banned_phrases,avoid_topics}
+    //   boolean  13 -> 14   account_personas.enabled
+    //
+    // THE FOUR JSON COLUMNS ARE THE ONES THAT BIT, and they bit in the direction this count
+    // exists to catch — in reverse. src/db/personas.ts was first written with `stack: string` and
+    // a reader that required a string, because the facade's parsing was not in view. It compiles:
+    // nothing types the seam. Every list then read back EMPTY from rows that held values —
+    // `redbot personas show ryangrowth12` printed "banned (none)" while
+    // `SELECT banned_phrases` returned `["good luck","cheers"]`. No throw, no log line, just a
+    // persona quietly missing half of itself. The round trip is pinned in
+    // src/test/persona-store.test.ts; the count here is what says a NEW column of the same shape
+    // has appeared and needs the same treatment.
     const expected = {
-      date: 44, json: 20, boolean: 13, blob: 3
+      date: 46, json: 24, boolean: 14, blob: 3
     };
 
     const rows = await getPool().query<{ name: string; sql: string }>(

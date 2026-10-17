@@ -499,6 +499,21 @@ async function countRows(db: Db, table: string): Promise<number> {
 export interface DataFingerprint {
   /** Newest observation timestamp, or null when nothing has ever been observed. */
   observedAt: string | null;
+  /**
+   * Newest `history` timestamp, or null when nothing has ever been recorded.
+   *
+   * WHY IT IS HERE AND NOT ONLY IN `observedAt`. Observations come from the karma probe, which
+   * runs on its own timer and keeps ticking while the engine does nothing — so `observedAt` can
+   * advance for days on an install that has collected, drafted and posted exactly nothing.
+   * `history` is the table every cycle stage writes to, so it is the only one whose silence means
+   * the engine is silent.
+   *
+   * MEASURED 2026-10-16: the newest `history` row was 2026-10-05T10:14:01Z — eleven days old —
+   * while `/api/pulse` answered `healthy: true` with an empty `problems` array, because the only
+   * inputs to that verdict were the 13 browsers and the existence of `dist/cli.js`. A karma
+   * observation from 2026-10-08 sat in the same database. See tools/product/engine-posture.mjs.
+   */
+  recordedAt: string | null;
   observations: number;
   interactions: number;
   draftsTotal: number;
@@ -523,6 +538,9 @@ export async function dataFingerprint(db: Db): Promise<DataFingerprint> {
   ]);
 
   const maxTs = await db.query<{ ts: string | null }>('SELECT max(ts) AS ts FROM observations');
+  /* One MAX over an indexed column, on the same pulse as the counts above — the cost argument in
+     this file's header applies unchanged. */
+  const maxHistory = await db.query<{ ts: string | null }>('SELECT max(ts) AS ts FROM history');
 
   /**
    * One karma row per account — the NEWEST, by a window function rather than by loading them all.
@@ -553,6 +571,7 @@ export async function dataFingerprint(db: Db): Promise<DataFingerprint> {
 
   return {
     observedAt: maxTs.rows[0]?.ts ?? null,
+    recordedAt: maxHistory.rows[0]?.ts ?? null,
     observations, interactions, draftsTotal, draftsPending, draftsPublished, karma
   };
 }
