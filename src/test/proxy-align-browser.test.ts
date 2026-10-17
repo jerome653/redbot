@@ -215,7 +215,28 @@ after(async () => {
     try { process.kill(chrome.pid, 'SIGKILL'); } catch { /* already gone */ }
   }
   if (httpServer) await new Promise<void>((r) => httpServer!.close(() => r()));
-  if (profileDir) rmSync(profileDir, { recursive: true, force: true });
+  /* WINDOWS, MEASURED. `process.kill(pid, 'SIGKILL')` above returns once the signal reaches the
+     process redbot spawned — Chrome's CHILDREN keep handles open inside `profileDir` for a moment
+     after it, so an immediate recursive delete raises EPERM and an `after` hook turned a run of
+     1,468 tests with 1,467 passing into a red build:
+
+       EPERM: rm '\\?\C:\Users\RUNNER~1\AppData\Local\Temp\redbot-align-test-b7ttfs'
+       actions/runs/39045859184 — windows-latest, 2026-10-17
+
+     `force: true` suppresses ENOENT, never EPERM. `maxRetries`/`retryDelay` is the documented
+     remedy: node retries EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM with linear backoff, so this waits
+     up to 2.5s for the handles to close — inside this hook's own 30s budget.
+
+     And if the OS still will not release a TEMP directory, that is not a verdict on proxy
+     alignment: it is reported, not thrown, because a cleanup failure must not overturn what the
+     assertions already proved. */
+  if (profileDir) {
+    try {
+      rmSync(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+    } catch (e) {
+      console.warn(`could not remove ${profileDir}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 }, { timeout: 30_000 });
 
 /* ------------------------------------------------------------------ *
