@@ -114,28 +114,34 @@ export function sentenceSpans(body: string): Span[] {
  * Finding a quote
  * ------------------------------------------------------------------ */
 
-/** Case, runs of whitespace, curly quotes, dashes and markdown `*`/backticks folded, with offsets back. */
+/**
+ * Case, runs of whitespace and dashes folded; markdown `*`/backticks and every quote mark dropped, with
+ * offsets back. Quote marks go because the claim extractor changes them: in the July log every quote
+ * miss was 'not indexed' for "not indexed", or "sticky sidebar" quoted without its marks.
+ */
 function fold(s: string): { text: string; at: number[] } {
   let text = '';
   const at: number[] = [];
   for (let i = 0; i < s.length; i++) {
     const c = s[i]!;
-    if (c === '*' || c === '`') continue;
+    if (c === '*' || c === '`' || QUOTE_MARK.test(c)) continue;
     if (/\s/.test(c)) {
       if (text && !text.endsWith(' ')) { text += ' '; at.push(i); }
       continue;
     }
-    const f = c === '’' || c === '‘' ? "'" : c === '“' || c === '”' ? '"' : c === '–' || c === '—' ? '-' : c.toLowerCase();
+    const f = c === '–' || c === '—' ? '-' : c.toLowerCase();
     text += f.length === 1 ? f : c;
     at.push(i);
   }
   return { text, at };
 }
 
-/** A quote as searchable fragments: split at any ellipsis, wrapping quotes and end punctuation off. */
+const QUOTE_MARK = /["'‘’“”]/;
+
+/** A quote as searchable fragments: split at any ellipsis, wrapping brackets and end punctuation off. */
 function fragments(quote: string): string[] {
   return quote.split(/\.{3}|…/)
-    .map((f) => fold(f).text.trim().replace(/^["'(\[]+|["')\].,;:!?]+$/g, '').trim())
+    .map((f) => fold(f).text.trim().replace(/^[(\[]+|[)\].,;:!?]+$/g, '').trim())
     .filter((f) => f.length >= MIN_QUOTE);
 }
 
@@ -223,7 +229,7 @@ export function planStrip(input: StripInput): StripPlan {
   const left = sentenceSpans(out).filter((s) => !(input.protect ?? []).some((p) => p && out.slice(s.start, s.end).includes(p))).length;
   if (left < minSentences) return no(`only ${left} sentence(s) would be left (the floor is ${minSentences})`);
   if (out.length < minKeepRatio * body.trim().length) {
-    return no(`only ${Math.round((100 * out.length) / body.trim().length)}% of the original length would be left (the floor is ${Math.round(100 * minKeepRatio)}%)`);
+    return no(`only ${Math.floor((100 * out.length) / body.trim().length)}% of the original length would be left (the floor is ${Math.round(100 * minKeepRatio)}%)`);
   }
   return { ok: true, body: out, removed: doomed.size, quotes };
 }

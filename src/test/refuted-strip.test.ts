@@ -70,6 +70,24 @@ describe('deleting what was refuted', () => {
     if (!p.ok) assert.match(p.why, /not found/);
   });
 
+  test('a quote whose inner quote marks differ from the body, or are dropped, is still found', () => {
+    /* All three quote misses in the July log were this: the claim says 'not indexed' where the body
+       says "not indexed", or drops the marks around "sticky sidebar". */
+    const body = 'Check Security & Manual Actions first. A manual action won’t show up as anything other than ' +
+      '"not indexed" in coverage. It is probably a "sticky sidebar" script. Then look at the redirects.';
+    const p = planStrip({
+      body,
+      certs: [cert({
+        reasons: [fatal('c1'), fatal('c2')],
+        claims: [claim('c1', "A manual action won't show up as anything other than 'not indexed' in coverage"),
+          claim('c2', 'probably a sticky sidebar script')]
+      })],
+      minSentences: 1, minKeepRatio: 0
+    });
+    assert.equal(p.ok, true, p.ok ? '' : p.why);
+    if (p.ok) assert.equal(p.body, 'Check Security & Manual Actions first. Then look at the redirects.');
+  });
+
   test('a dependent quote that cannot be found refuses the strip too', () => {
     const p = planStrip({
       body: BODY,
