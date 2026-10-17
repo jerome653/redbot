@@ -25,7 +25,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { profileInUse, sameDir, userDataDirFrom, orphanBrowsers, parseSsLine } from '../ports.js';
+import { profileInUse, sameDir, userDataDirFrom, orphanBrowsers, parseSsLine, lookupCeilingMs } from '../ports.js';
 import type { PortOwner } from '../ports.js';
 
 const PROFILE = join('X:', 'data', 'chrome-profile-c');            // portable-exempt: synthetic fixture
@@ -287,5 +287,19 @@ describe('parsing ss output', () => {
        that it is null rather than undefined is the contract PortOwner declares. */
     assert.equal(owner!.userDataDir, null);
     assert.equal(owner!.userDataDir, userDataDirFrom(owner!.commandLine));
+  });
+});
+
+describe('the Windows lookup ceiling', () => {
+  test('is 20s when nothing sets it', () => {
+    assert.equal(lookupCeilingMs({}), 20_000);
+  });
+  test('REDBOT_PORT_LOOKUP_TIMEOUT_MS moves it', () => {
+    assert.equal(lookupCeilingMs({ REDBOT_PORT_LOOKUP_TIMEOUT_MS: '90000' }), 90_000);
+  });
+  test('a value that is not a positive number leaves it at 20s', () => {
+    for (const v of ['', '0', '-5', 'soon', 'NaN']) {
+      assert.equal(lookupCeilingMs({ REDBOT_PORT_LOOKUP_TIMEOUT_MS: v }), 20_000, v);
+    }
   });
 });

@@ -448,6 +448,12 @@ function readProcComm(pid: number): string | null {
   try { return readFileSync(`/proc/${pid}/comm`, 'utf8').trim() || null; } catch { return null; }
 }
 
+/** How long the Windows lookup may run before it is stopped. 20s unless the environment says otherwise. */
+export function lookupCeilingMs(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.REDBOT_PORT_LOOKUP_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 20_000;
+}
+
 function inspectPortsNow(wanted: number[], key: string): Promise<PortLookup> {
 
   /* `procId`, not `pid`: `$PID` is an automatic variable in PowerShell and a property named
@@ -506,11 +512,17 @@ $items = foreach ($c in $conns) {
      * healthy machines, and every port silently became "cannot be identified" — the fail-closed
      * answer, given for the wrong reason. Generous enough to be a real ceiling now, with
      * `inFlight` below making sure a slow one cannot pile up behind the 6s poll.
+     *
+     * `REDBOT_PORT_LOOKUP_TIMEOUT_MS` moves the ceiling. Measured 2026-10-17 on a GitHub
+     * windows-latest runner (run 39047501017): the first CIM session of the job took longer than
+     * 20s, the lookup was stopped, and browser-open-already-running.test.mjs saw its stand-in as
+     * unproven and failed. Nothing in production sets it.
      */
+    const ceilingMs = lookupCeilingMs();
     const timer = setTimeout(() => {
       try { ps.kill(); } catch { /* gone */ }
-      finish(new Map(), 'the lookup took longer than 20s and was stopped');
-    }, 20_000);
+      finish(new Map(), `the lookup took longer than ${Math.round(ceilingMs / 1000)}s and was stopped`);
+    }, ceilingMs);
 
     ps.stdout.on('data', (d: Buffer) => out.push(String(d)));
     ps.stderr.on('data', (d: Buffer) => err.push(String(d)));
