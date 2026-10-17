@@ -11,7 +11,7 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -34,7 +34,10 @@ let browser: Browser;
 let page: Page;
 
 before(async () => {
-  const f = join(tmpdir(), 'redbot-composer-usable.html');
+  /* A folder of its own, not a fixed name in the shared temp dir. On cardinal 2026-10-17 a run as
+     root left /tmp/redbot-composer-usable.html owned by root, the next run as another user could
+     not overwrite it (EACCES), and all 13 tests failed in this hook. */
+  const f = join(mkdtempSync(join(tmpdir(), 'redbot-composer-usable-')), 'page.html');
   writeFileSync(f, PAGE);
   browser = await chromium.launch();
   page = await browser.newPage();

@@ -17,6 +17,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import {
   userDataDirFrom, sameDir, orphanBrowsers, DEBUG_PORT_FIRST, DEBUG_PORT_LAST, type PortOwner
 } from '../ports.js';
@@ -86,6 +87,14 @@ test('a command line with no user-data-dir yields no claim, rather than a guess'
 });
 
 const ROOT = 'C:\\Users\\Clark Pesa\\AppData\\Roaming\\redbot\\data';
+/* The four-hundred-browser case needs paths in the HOST's shape. orphanBrowsers resolves with the
+   host's path module, and `C:\…` is absolute only to path.win32: on Linux every claimed folder was
+   joined under the root as if relative, matched nothing, and all 200 of ours came back as orphans
+   (200 !== 100). On Windows these are the same strings the case always used. */
+const WIN = process.platform === 'win32';
+const HOST_ROOT = WIN ? ROOT : '/home/clark/.config/redbot/data';
+const HOST_FOREIGN = WIN ? 'C:\\Users\\Clark Pesa\\AppData\\Local\\Google\\Chrome\\User Data'
+                         : '/home/clark/.config/google-chrome';
 const owner = (port: number, dir: string): PortOwner => {
   const cl = shapeFor(dir, port).build(dir);
   return { port, pid: 1000 + port, process: 'chrome', commandLine: cl, userDataDir: userDataDirFrom(cl) };
@@ -93,15 +102,15 @@ const owner = (port: number, dir: string): PortOwner => {
 
 test('at four hundred browsers, ownership still splits ours from theirs exactly', () => {
   const mine: string[] = [], foreign: string[] = [];
-  for (let i = 0; i < 200; i++) mine.push(`${ROOT}\\chrome-profile-${i}`);
-  for (let i = 0; i < 200; i++) foreign.push(`C:\\Users\\Clark Pesa\\AppData\\Local\\Google\\Chrome\\User Data\\p${i}`);
+  for (let i = 0; i < 200; i++) mine.push(join(HOST_ROOT, `chrome-profile-${i}`));
+  for (let i = 0; i < 200; i++) foreign.push(join(HOST_FOREIGN, `p${i}`));
 
   const claimed = mine.slice(0, 100);
   const owners = new Map<number, PortOwner>();
   let port = DEBUG_PORT_FIRST;
   for (const d of [...mine, ...foreign]) { owners.set(port, owner(port, d)); port++; }
 
-  const orphans = orphanBrowsers(owners, ROOT, claimed);
+  const orphans = orphanBrowsers(owners, HOST_ROOT, claimed);
   const dirs = new Set(orphans.map((o) => o.profileDir));
   assert.equal(orphans.length, 100, 'exactly the unclaimed profiles under the root are reclaimable');
   assert.ok(claimed.every((d) => !dirs.has(d)), 'a live account must never be reclaimed');
@@ -109,10 +118,10 @@ test('at four hundred browsers, ownership still splits ours from theirs exactly'
 
   // The root is not a profile, and a sibling that merely shares its prefix is not underneath it.
   const tricky = new Map<number, PortOwner>([
-    [9999, owner(9999, ROOT)],
-    [9998, owner(9998, `${ROOT}-backup\\p`)]
+    [9999, owner(9999, HOST_ROOT)],
+    [9998, owner(9998, join(`${HOST_ROOT}-backup`, 'p'))]
   ]);
-  assert.equal(orphanBrowsers(tricky, ROOT, []).length, 0);
+  assert.equal(orphanBrowsers(tricky, HOST_ROOT, []).length, 0);
 
   for (const d of mine.slice(0, 50)) {
     const a = userDataDirFrom(SHAPES[0]!.build(d));
