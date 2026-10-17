@@ -2691,3 +2691,31 @@ test('no box types a timezone, and no card prints one without a date', () => {
   assert.equal(sites.length, 2,
     `both surfaces that used to print a.timezone must read the measurement instead — found ${sites.length}`);
 });
+
+/**
+ * A run is answered only once its footer is on disk.
+ *
+ * Main CI 2026-10-17 (run 39053563423): 'a finished run is written to disk and readable back'
+ * failed with done:false. The footer went through a WriteStream, which writes after write()
+ * returns, and /api/run answered before it had. The next request read the file without it.
+ */
+test('a WriteStream footer is not on disk when write() returns, and is once end() calls back', async () => {
+  const { createWriteStream } = await import('node:fs');
+  const f = join(mkdtempSync(join(tmpdir(), 'redbot-runlog-flush-')), 'run.jsonl');
+  const s = createWriteStream(f, { flags: 'a' });
+  s.write('{"t":"h"}\n');
+  s.write('{"t":"f","code":0}\n');
+  const early = existsSync(f) ? readFileSync(f, 'utf8') : '';
+  assert.ok(!early.includes('"t":"f"'), 'the control: read at once, the footer is not there yet');
+  await new Promise((done) => s.end(done));
+  assert.ok(readFileSync(f, 'utf8').includes('"t":"f"'), 'after end() calls back it is');
+});
+
+test('runAction answers after the run log is flushed, not before', () => {
+  const src = readFileSync(join(HERE, 'server.mjs'), 'utf8');
+  const finish = src.slice(src.indexOf('function runLogFinish('), src.indexOf('function runLogFinish(') + 1600);
+  assert.match(finish, /stream\.end\(\(\) =>/, 'runLogFinish settles on the stream end callback');
+  assert.match(finish, /return new Promise/, 'and returns that promise');
+  assert.match(src, /const flushed = runLogFinish\(code\);/, 'the close handler keeps it');
+  assert.match(src, /flushed\.then\(\(\) => resolve\(\{/, 'and answers the run only after it settles');
+});

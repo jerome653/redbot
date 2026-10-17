@@ -1390,8 +1390,18 @@ function runLogFinish(code) {
   /* A footer appended rather than the header rewritten: append-only means a reader never
      sees a half-updated record, and a run killed before this point simply has none. */
   runLogWrite({ t: 'f', code, lines: runLog.lines.length, dropped: runLog.dropped });
-  try { if (runLogStream) runLogStream.end(); } catch { /* already closed */ }
+  /* Settles once the stream has handed the footer to the OS. A WriteStream writes later than
+     write() returns: main CI 2026-10-17 read /api/run/history right after /api/run answered and
+     found no footer, so a run that exited 0 was listed as one that died mid-run. Bounded, so a
+     stream that never finishes cannot hold a run's response forever. */
+  const stream = runLogStream;
   runLogStream = null;
+  if (!stream) return Promise.resolve();
+  return new Promise((settle) => {
+    const giveUp = setTimeout(settle, 2000);
+    giveUp.unref?.();
+    try { stream.end(() => { clearTimeout(giveUp); settle(); }); } catch { clearTimeout(giveUp); settle(); }
+  });
 }
 
 /**
@@ -1582,7 +1592,7 @@ function runAction(key, opts) {
     const timer = setTimeout(() => { try { child.kill(); } catch {} }, 20 * 60 * 1000);
     child.on('close', (code) => {
       clearTimeout(timer); running = null; runningAccount = null; runningChild = null; runningSince = 0;
-      runLogFinish(code);
+      const flushed = runLogFinish(code);
       /* The moment the numbers changed. Fire-and-forget: the run's response must not wait on a
          network call, and a push that fails leaves its cursor alone and retries on the heartbeat. */
       try { pushScheduler?.trigger('run-end'); } catch { /* never let a push break a run */ }
@@ -1599,13 +1609,14 @@ function runAction(key, opts) {
          statement of fact. The flag is what a caller branches on; the note is what it says. */
       const nothing = !stopped && code === NOTHING_TO_DO;
       const note = nothing ? runNote({ code, out, err }) : null;
-      resolve({
+      // Answered once the log on disk says the run finished, so a reader asking next finds it so.
+      flushed.then(() => resolve({
         ok: code === 0 || nothing, code, stopped, ms: Date.now() - started,
         ...(nothing ? { nothing: true } : {}),
         ...(note ? { note } : {}),
         ...(error ? { error } : {}),
         output: (out + err).slice(-24000), command: `redbot ${args.join(' ')}`
-      });
+      }));
     });
     child.on('error', (e) => {
       clearTimeout(timer); running = null; runningAccount = null; runningChild = null; runningSince = 0;
