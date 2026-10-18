@@ -18,6 +18,7 @@
  */
 import type { Thread } from './types.js';
 import { assessClaims } from './claims.js';
+import { withoutDisclosureLines } from './disclosure.js';
 
 export type Severity = 'block' | 'warn';
 
@@ -145,7 +146,7 @@ export interface QualityContext {
 
 export function assessQuality(body: string, ctx: QualityContext = {}): QualityReport {
   const issues: QualityIssue[] = [];
-  const prose = body.replace(/```[\s\S]*?```/g, ' ');
+  const prose = withoutDisclosureLines(body).replace(/```[\s\S]*?```/g, ' ');
   const words = prose.trim().split(/\s+/).filter(Boolean).length;
   const sentences = sentencesOf(body);
   const lengths = sentences.map((s) => s.split(/\s+/).length);

@@ -38,6 +38,7 @@
 import { policy } from './policy.js';
 import { config } from './config.js';
 import { assessClaims } from './claims.js';
+import { withoutDisclosureLines } from './disclosure.js';
 
 export interface WarmingIssue {
   rule: string;
@@ -154,7 +155,7 @@ export function checkWarmingComment(body: string): WarmingVerdict {
   const issues: WarmingIssue[] = [];
   const warnings: string[] = [];
   const text = body.trim();
-  const words = text.split(/\s+/).filter(Boolean).length;
+  const words = withoutDisclosureLines(text).split(/\s+/).filter(Boolean).length;
 
   for (const re of LINK_PATTERNS) {
     if (re.test(text)) {

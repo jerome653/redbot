@@ -16,6 +16,7 @@ import {
   checkWarmingComment, checkWarmingPace, isWarmingTarget, warmingStage,
   WARMING_MAX_WORDS
 } from '../warming.js';
+import { config } from '../config.js';
 import { evaluateGates, type GateInput } from '../gates.js';
 import type { HealthCounters, HealthVerdict } from '../health.js';
 import type { ThreadState } from '../reddit/thread-state.js';
@@ -68,6 +69,13 @@ test('a one-liner is refused too — warming still has to be worth reading', () 
   const r = checkWarmingComment('Same here, following.');
   assert.equal(r.ok, false);
   assert.ok(r.issues.some((i) => i.rule === 'too-short'));
+});
+
+test('the AI disclosure line does not count toward the warming minimum (issue #33)', () => {
+  const r = checkWarmingComment(`Same here, the cache plugin fixed it for me.\n\n${config.aiDisclosureLine}`);
+  const short = r.issues.find((i) => i.rule === 'too-short');
+  assert.ok(short, '9 words of reply plus a 15-word label is still 9 words');
+  assert.match(short!.detail, /^9 words/);
 });
 
 /**
