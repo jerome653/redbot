@@ -21,8 +21,14 @@ export const STRIP_RULES: ReadonlySet<string> = new Set(['fatal-contradiction', 
 export const SOFT_RULES: ReadonlySet<string> = new Set([
   'overconfident-language', 'low-confidence-as-fact', 'no-provenance', 'falsifiable-claim-weak-evidence'
 ]);
-/** What is left must still be a reply: at least this many sentences (disclosure lines not counted)… */
-export const MIN_SENTENCES = 2;
+/**
+ * What is left must still be a reply: at least this many sentences (disclosure lines not counted)…
+ * One, not two: replayed on cardinal's 24 drafts carrying a refuted claim (18 Oct), a floor of 2
+ * refused 16 of them and let 6 through; 1 lets 10 through. The drafting prompt writes one-sentence
+ * replies itself, and a remainder still faces the 40% share below, the draft-time length check,
+ * the re-certification and the publish bar.
+ */
+export const MIN_SENTENCES = 1;
 /** …and at least this share of the original length. */
 export const MIN_KEEP_RATIO = 0.4;
 /** A quote shorter than this, once normalised, matches too much of any body to locate a claim by. */
