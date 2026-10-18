@@ -283,6 +283,14 @@ describe('splitting into sentences', () => {
     ]);
   });
 
+  test('a long run of boundaries that do not end a sentence is split in linear time', () => {
+    /* Re-reading the sentence so far at every boundary took 8.6 s on this; the last word alone takes ms. */
+    const body = 'a.b. '.repeat(20_000) + 'it fails. then it works. '.repeat(4_000);
+    const t = performance.now();
+    assert.equal(sentenceSpans(body).length, 1);
+    assert.ok(performance.now() - t < 2000, `took ${Math.round(performance.now() - t)} ms`);
+  });
+
   test('a refuted sentence holding "Dr." goes whole, leaving no "Ask Dr." behind', () => {
     const body = 'Ask Dr. Smith, who says MySQL truncates an oversized row silently. Raise max_allowed_packet in ' +
       'my.cnf and restart the service. Then rerun the import from the shell.';

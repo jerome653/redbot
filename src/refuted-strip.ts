@@ -87,16 +87,24 @@ const MARK_ONLY = /^[ \t]*(?:[-*+>]|\d+[.)])[ \t]*$/;
  */
 const NO_SPLIT = /`[^`\n]*`/g;
 const BOUNDARY = /[.!?]+["'”’)\]]*(?=\s)/g;
-const ABBREV = /(?:^|[\s(])(?:e\.g|i\.e|etc|vs|cf|approx|incl)\.$/i;
+const ABBREV = /^(?:e\.g|i\.e|etc|vs|cf|approx|incl)\.$/i;
 /** Titles as written, capital first, so "40 ms." still ends; dotted initialisms (U.S., a.m.) in any case. */
-const TITLE = /(?:^|[\s(])(?:Dr|Mrs?|Ms|St|Jr|Sr|(?:\p{L}\.)+\p{L})\.$/u;
+const TITLE = /^(?:Dr|Mrs?|Ms|St|Jr|Sr|(?:\p{L}\.)+\p{L})\.$/u;
 /** Only before a number: "No. 5" is an abbreviation, "No. You need…" is a one-word sentence. */
-const NUMBERED = /(?:^|[\s(])(?:No|Fig|[Vv]ol)\.$/;
+const NUMBERED = /^(?:No|Fig|[Vv]ol)\.$/;
 
-/** A boundary that does not end the sentence: an abbreviation, or a next word starting in lowercase. */
-function continues(before: string, after: string): boolean {
-  return ABBREV.test(before) || TITLE.test(before) || /^\s+\p{Ll}/u.test(after) ||
-    (NUMBERED.test(before) && /^\s+\d/.test(after));
+/**
+ * A boundary that does not end the sentence: an abbreviation, or a next word starting in lowercase.
+ * Only the word before and the character after are read, so a long run of boundaries that do not end
+ * a sentence costs each one its own word, not the whole sentence again (100k chars: 8.6 s before).
+ */
+function continues(line: string, start: number, end: number): boolean {
+  let w = end;
+  while (w > start && !/[\s(]/.test(line[w - 1]!)) w--;
+  let n = end;
+  while (n < line.length && /\s/.test(line[n]!)) n++;
+  const word = line.slice(w, end), next = line.slice(n, n + 2);
+  return ABBREV.test(word) || TITLE.test(word) || /^\p{Ll}/u.test(next) || (NUMBERED.test(word) && /^\d/.test(next));
 }
 
 /** Every sentence in the body, in order. A fenced code block is one unit; a list marker is not prose. */
@@ -116,7 +124,7 @@ export function sentenceSpans(body: string): Span[] {
       let start = LIST_MARK.exec(line)?.[0].length ?? 0;
       for (const m of masked.matchAll(BOUNDARY)) {
         const end = m.index + m[0].length;
-        if (m.index < start || continues(masked.slice(start, end), masked.slice(end))) continue;
+        if (m.index < start || continues(masked, start, end)) continue;
         push(s + start, s + end);
         start = end;
       }
