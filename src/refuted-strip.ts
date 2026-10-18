@@ -31,7 +31,10 @@ export const SOFT_RULES: ReadonlySet<string> = new Set([
 export const MIN_SENTENCES = 1;
 /** …and at least this share of the original length. */
 export const MIN_KEEP_RATIO = 0.4;
-/** A quote shorter than this, once normalised, matches too much of any body to locate a claim by. */
+/**
+ * A quote shorter than this, once normalised, matches too much of any body to locate a claim by. A
+ * quote holding such a piece refuses: stripping around it could leave that part of a false claim.
+ */
 const MIN_QUOTE = 8;
 
 /** On unless REDBOT_STRIP_REFUTED=0. Each strip costs one more certification (12-19 model calls). */
@@ -85,6 +88,16 @@ const MARK_ONLY = /^[ \t]*(?:[-*+>]|\d+[.)])[ \t]*$/;
 const NO_SPLIT = /`[^`\n]*`/g;
 const BOUNDARY = /[.!?]+["'”’)\]]*(?=\s)/g;
 const ABBREV = /(?:^|[\s(])(?:e\.g|i\.e|etc|vs|cf|approx|incl)\.$/i;
+/** Titles as written, capital first, so "40 ms." still ends; dotted initialisms (U.S., a.m.) in any case. */
+const TITLE = /(?:^|[\s(])(?:Dr|Mrs?|Ms|St|Jr|Sr|(?:\p{L}\.)+\p{L})\.$/u;
+/** Only before a number: "No. 5" is an abbreviation, "No. You need…" is a one-word sentence. */
+const NUMBERED = /(?:^|[\s(])(?:No|Fig|[Vv]ol)\.$/;
+
+/** A boundary that does not end the sentence: an abbreviation, or a next word starting in lowercase. */
+function continues(before: string, after: string): boolean {
+  return ABBREV.test(before) || TITLE.test(before) || /^\s+\p{Ll}/u.test(after) ||
+    (NUMBERED.test(before) && /^\s+\d/.test(after));
+}
 
 /** Every sentence in the body, in order. A fenced code block is one unit; a list marker is not prose. */
 export function sentenceSpans(body: string): Span[] {
@@ -103,7 +116,7 @@ export function sentenceSpans(body: string): Span[] {
       let start = LIST_MARK.exec(line)?.[0].length ?? 0;
       for (const m of masked.matchAll(BOUNDARY)) {
         const end = m.index + m[0].length;
-        if (m.index < start || ABBREV.test(masked.slice(start, end))) continue;
+        if (m.index < start || continues(masked.slice(start, end), masked.slice(end))) continue;
         push(s + start, s + end);
         start = end;
       }
@@ -149,15 +162,28 @@ function fold(s: string): { text: string; at: number[] } {
 
 const QUOTE_MARK = /["'‘’“”]/;
 
-/** A quote as searchable fragments: split at any ellipsis, wrapping brackets and end punctuation off. */
+/**
+ * A quote as searchable fragments: split at any ellipsis, wrapping brackets and end punctuation off.
+ * A piece with no letter or digit is dropped; a short one is kept, so planStrip can refuse it.
+ */
 function fragments(quote: string): string[] {
   return quote.split(/\.{3}|…/)
     .map((f) => fold(f).text.trim().replace(/^[(\[]+|[)\].,;:!?]+$/g, '').trim())
-    .filter((f) => f.length >= MIN_QUOTE);
+    .filter((f) => /[\p{L}\p{N}]/u.test(f));
 }
 
 /** Letters and digits only: what a restatement in other punctuation or spacing still shares. */
 const bare = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
+/**
+ * A match counts only on a word boundary: no letter, digit or combining mark against either edge, so
+ * "utf8" is not found in "utf8mb4". Read in the body itself, where an apostrophe the fold drops
+ * ("the server’s") still separates words. Two code units each way, so an astral letter is read whole.
+ */
+const WORD_END = /[\p{L}\p{N}\p{M}]$/u;
+const WORD_START = /^[\p{L}\p{N}\p{M}]/u;
+const onWordEdges = (s: string, from: number, to: number) =>
+  !WORD_END.test(s.slice(Math.max(0, from - 2), from)) && !WORD_START.test(s.slice(to, to + 2));
 
 /* ------------------------------------------------------------------ *
  * The plan
@@ -202,11 +228,16 @@ export function planStrip(input: StripInput): StripPlan {
   for (const id of [...e.refuted, ...e.dependents]) {
     const claim = cert!.claims.find((c) => c.id === id);
     const frags = claim ? fragments(claim.sourceQuote) : [];
-    if (!frags.length) return no(`quote of claim ${id} not found in the body: it is missing or too short to locate`);
+    if (!frags.length) return no(`quote of claim ${id} not found in the body: it is missing or holds no words`);
+    const short = frags.find((f) => f.length < MIN_QUOTE);
+    if (short !== undefined) {
+      return no(`quote of claim ${id} has a piece too short to locate ("${short}"): "${claim!.sourceQuote.slice(0, 80)}"`);
+    }
     for (const f of frags) {
       let found = 0;
       for (let i = folded.text.indexOf(f); i !== -1; i = folded.text.indexOf(f, i + 1)) {
         const from = folded.at[i]!, to = folded.at[i + f.length - 1]! + 1;
+        if (!onWordEdges(body, from, to)) continue;
         for (const s of spans) {
           if (s.start < to && from < s.end) { doomed.add(s); found++; }
         }
@@ -229,6 +260,9 @@ export function planStrip(input: StripInput): StripPlan {
   out = out.split('\n').filter((l) => !MARK_ONLY.test(l)).map((l) => l.trimEnd())
     .join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
+  /* A substring check on purpose, unlike the word-bounded search above: it is the net for restatements,
+     letters and digits only, so it has no word edges to read, and catching "reset the charset to utf8"
+     or a kept "utf8mb4" sentence can only ever add a refusal, never leave a refuted claim behind. */
   for (const f of refutedFragments) {
     if (bare(out).includes(bare(f))) return no(`the refuted claim is still in the body after deletion: "${f.slice(0, 80)}"`);
   }

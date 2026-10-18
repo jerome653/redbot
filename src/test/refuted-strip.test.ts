@@ -174,6 +174,55 @@ describe('deleting what was refuted', () => {
     assert.equal(p.ok, true, p.ok ? '' : p.why);
     if (p.ok) assert.equal(p.body, 'Two things to check here, in order.\n\n- Look at the slow query log first.\n- Then raise the packet limit and retry.');
   });
+
+  test('a quote found only inside a longer word is not found, so nothing is cut ("utf8" in "utf8mb4", "Caf" in "Caféine")', () => {
+    /* Issue #30 item 2: refuting "set the charset to utf8" deleted a correct utf8mb4 sentence. */
+    for (const [body, quote] of [
+      ['Your tables need a wider character set for emoji. Set the charset to utf8mb4 on each table. ' +
+        'Then convert the existing columns and rerun the import from the shell.', 'set the charset to utf8'],
+      ['Call the new site Caféine and launch it this week. Then add the menu and the footer. ' +
+        'Publish when the pages look right.', 'call the new site Caf']
+    ] as const) {
+      const p = planStrip({ body, certs: [cert({ reasons: [fatal('c1')], claims: [claim('c1', quote)] })] });
+      assert.equal(p.ok, false, `"${quote}" is not a word of the body`);
+      if (!p.ok) assert.match(p.why, /c1 not found/);
+    }
+  });
+
+  test('a quote also sitting inside a longer word refuses: the check after deletion stays a substring check', () => {
+    /* The exact sentence is located and only it is cut; the utf8mb4 sentence is kept, and the net
+       after deletion still sees "set the charset to utf8" in it, so the original REJECT stands. */
+    const body = 'Set the charset to utf8 in my.cnf first. Your tables need a wider set for emoji, so set the ' +
+      'charset to utf8mb4 on each table. Then convert the existing columns one at a time. Rerun the import ' +
+      'from the shell once that is done. Check the row counts against the source after.';
+    const p = planStrip({ body, certs: [cert({ reasons: [fatal('c1')], claims: [claim('c1', 'set the charset to utf8')] })] });
+    assert.equal(p.ok, false, 'the utf8mb4 sentence must not be deleted with it');
+    if (!p.ok) assert.match(p.why, /still in the body/);
+  });
+
+  test('an apostrophe the fold drops still ends a word: "the server" is found in "the server’s"', () => {
+    const body = 'Clear the cache from the dashboard first. Until a restart, the old opcache lives in the server’s ' +
+      'memory. Then reload the page to check.';
+    const p = planStrip({ body, certs: [cert({ reasons: [fatal('c1')], claims: [claim('c1', 'the old opcache lives in the server')] })] });
+    assert.equal(p.ok, true, p.ok ? '' : p.why);
+    if (p.ok) assert.equal(p.body, 'Clear the cache from the dashboard first. Then reload the page to check.');
+  });
+
+  test('a quote whose ellipsis leaves a piece too short to locate refuses, naming the claim', () => {
+    /* Issue #30 item 1: "the row" was skipped, "silently, always" was cut, and "MySQL cuts the row." stayed. */
+    const body = 'MySQL cuts the row. It happens silently, always, on every import. Raise max_allowed_packet in ' +
+      'my.cnf and restart the service. Then rerun the import from the shell.';
+    const p = planStrip({ body, certs: [cert({ reasons: [fatal('c1')], claims: [claim('c1', 'the row... silently, always')] })] });
+    assert.equal(p.ok, false, p.ok ? `stripped around the short piece, leaving: ${p.body}` : '');
+    if (!p.ok) assert.match(p.why, /claim c1 has a piece too short to locate \("the row"\)/);
+  });
+
+  test('a piece holding only punctuation or space is dropped, not refused', () => {
+    const p = planStrip({ body: BODY, certs: [cert({ reasons: [fatal('c2')], claims: [claim('c2', '…truncates an oversized row... — ...')] })] });
+    assert.equal(p.ok, true, p.ok ? '' : p.why);
+    if (p.ok) assert.equal(p.body, 'Your import is failing on the packet size. Raise max_allowed_packet in my.cnf and ' +
+      'restart the service. Then rerun the import from the shell.');
+  });
 });
 
 describe('splitting into sentences', () => {
@@ -204,6 +253,42 @@ describe('splitting into sentences', () => {
     const p = planStrip({ body, certs: [cert({ reasons: [fatal('c1')], claims: [claim('c1', 'Remove this. And this')] })], minKeepRatio: 0 });
     assert.equal(p.ok, true, p.ok ? '' : p.why);
     if (p.ok) assert.equal(p.body, 'Keep this one. Keep the last. And another to keep.');
+  });
+
+  test('titles, numbered abbreviations and dotted initialisms do not end a sentence', () => {
+    const body = 'Ask Dr. Smith first. He moved to the U.S. Navy base in 2019. The call is at 9 a.m. today, not ' +
+      '10 p.m. tonight. Mr. Jones, Mrs. Lee and Ms. Park agree. The office shuts on Martin Luther King Jr. Day, ' +
+      'says Sr. Maria Lopez. See Fig. 3 and vol. 2 for St. Louis, No. 5 first. Then stop.';
+    assert.deepEqual(texts(body), [
+      'Ask Dr. Smith first.',
+      'He moved to the U.S. Navy base in 2019.',
+      'The call is at 9 a.m. today, not 10 p.m. tonight.',
+      'Mr. Jones, Mrs. Lee and Ms. Park agree.',
+      'The office shuts on Martin Luther King Jr. Day, says Sr. Maria Lopez.',
+      'See Fig. 3 and vol. 2 for St. Louis, No. 5 first.',
+      'Then stop.'
+    ]);
+  });
+
+  test('a full stop before a lowercase word is not an end (an inline "1. then"); before a capital it still is', () => {
+    const body = 'Do it in order: 1. stop the service 2. edit my.cnf. Restart it after. No. You need a bigger ' +
+      'packet. It took 40 ms. Then it failed.';
+    assert.deepEqual(texts(body), [
+      'Do it in order: 1. stop the service 2. edit my.cnf.',
+      'Restart it after.',
+      'No.',
+      'You need a bigger packet.',
+      'It took 40 ms.',
+      'Then it failed.'
+    ]);
+  });
+
+  test('a refuted sentence holding "Dr." goes whole, leaving no "Ask Dr." behind', () => {
+    const body = 'Ask Dr. Smith, who says MySQL truncates an oversized row silently. Raise max_allowed_packet in ' +
+      'my.cnf and restart the service. Then rerun the import from the shell.';
+    const p = planStrip({ body, certs: [cert({ reasons: [fatal('c1')], claims: [claim('c1', 'truncates an oversized row silently')] })] });
+    assert.equal(p.ok, true, p.ok ? '' : p.why);
+    if (p.ok) assert.equal(p.body, 'Raise max_allowed_packet in my.cnf and restart the service. Then rerun the import from the shell.');
   });
 });
 
