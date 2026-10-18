@@ -25,6 +25,8 @@ import { draft } from './draft.js';
 import { certifyCmd } from './certify.js';
 import { reply } from './reply.js';
 import { autoPublishEnabled } from '../autopublish.js';
+import { stripRefutedEnabled } from '../refuted-strip.js';
+import { recheckWithoutRefuted } from '../refuted-recheck.js';
 import { record, say } from '../log.js';
 import { dailyDatabaseBackup, type DailyDatabaseBackup } from '../backup.js';
 /**
@@ -186,34 +188,7 @@ async function cycle(): Promise<number> {
 
   if (written > 0) {
     const newest = (await loadDrafts())[(await loadDrafts()).length - 1];
-    if (newest) {
-      say.step(`Fact-checking ${newest.id}…`);
-      await certifyCmd(newest.id);
-
-      /**
-       * AND, WHEN THIS INSTALL HAS BEEN SWITCHED TO IT, PUBLISH.
-       *
-       * The header of this file says the line it will not cross is publishing, and that stays
-       * true of every install that has not set REDBOT_AUTO_PUBLISH=1. On one that has, the
-       * decision moves from a person at a prompt to the rule in src/autopublish.ts — which asks
-       * for MORE than the prompt did: a CERTIFIED verdict (ESCALATE is explicitly "needs a person
-       * who knows the subject"), no hard gate, and no advisory at all.
-       *
-       * The draft is re-read rather than reused: certifyCmd has just written the verdict onto it,
-       * and `newest` is the object from before that write.
-       *
-       * `reply()` is left to do its own refusing. It re-runs the gates against the live page
-       * immediately before submitting (reply.ts, the second `evaluateGates`), and that check is
-       * the one that catches a thread locked or answered in the minutes since certification —
-       * facts no rule here could have known.
-       */
-      if (autoPublishEnabled()) {
-        const fresh = (await loadDrafts()).find((d) => d.id === newest.id);
-        const verdict = fresh?.certification?.verdict ?? null;
-        say.step(`Unattended publish check for ${newest.id} (certification: ${verdict ?? 'none'})…`);
-        await reply(newest.id, { unattended: true });
-      }
-    }
+    if (newest) await factCheckThenPublish(newest.id);
   } else {
     say.step('Nothing worth writing this cycle — that is a normal outcome.');
   }
@@ -250,6 +225,51 @@ async function cycle(): Promise<number> {
     ? 'Cycle finished. Publishing is UNATTENDED on this install — see the publish.* history rows for what it decided.'
     : 'Cycle finished. Nothing was published — that still needs you.');
   return 0;
+}
+
+export interface FactCheckDeps {
+  certify: (draftId: string) => Promise<number>;
+  reply: (draftId: string, opts: { unattended: true }) => Promise<number>;
+  publish: () => boolean;
+}
+
+/** The cycle's last step for the draft it just wrote. The seams exist so a test can stub the model. */
+export async function factCheckThenPublish(
+  draftId: string,
+  deps: FactCheckDeps = { certify: (id) => certifyCmd(id), reply, publish: autoPublishEnabled }
+): Promise<void> {
+  say.step(`Fact-checking ${draftId}…`);
+  await deps.certify(draftId);
+
+  /**
+   * AND, WHEN THIS INSTALL HAS BEEN SWITCHED TO IT, PUBLISH.
+   *
+   * The header of this file says the line it will not cross is publishing, and that stays
+   * true of every install that has not set REDBOT_AUTO_PUBLISH=1. On one that has, the
+   * decision moves from a person at a prompt to the rule in src/autopublish.ts — which asks
+   * for MORE than the prompt did: a CERTIFIED verdict (ESCALATE is explicitly "needs a person
+   * who knows the subject"), no hard gate, and no advisory at all.
+   *
+   * The draft is re-read rather than reused: certifyCmd has just written the verdict onto it.
+   *
+   * `reply()` is left to do its own refusing. It re-runs the gates against the live page
+   * immediately before submitting (reply.ts, the second `evaluateGates`), and that check is
+   * the one that catches a thread locked or answered in the minutes since certification —
+   * facts no rule here could have known.
+   */
+  if (!deps.publish()) return;
+
+  /**
+   * FIX-AND-RECHECK (Jerome, 2026-10-18). A REJECT whose only hard findings are claims proven false
+   * (and claims resting on them) has those sentences deleted and is certified ONCE more; the publish
+   * decision then runs on the new draft. Deletion, never a model rewrite — see src/refuted-strip.ts.
+   * Each strip costs one more certification (12-19 model calls); REDBOT_STRIP_REFUTED=0 turns it off.
+   */
+  const target = stripRefutedEnabled() ? await recheckWithoutRefuted(draftId, deps.certify) : draftId;
+  const fresh = (await loadDrafts()).find((d) => d.id === target);
+  const verdict = fresh?.certification?.verdict ?? null;
+  say.step(`Unattended publish check for ${target} (certification: ${verdict ?? 'none'})…`);
+  await deps.reply(target, { unattended: true });
 }
 
 /**

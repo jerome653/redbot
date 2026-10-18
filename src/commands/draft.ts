@@ -34,7 +34,8 @@ import { bannedPhraseHits } from '../persona.js';
 import { config, selectedAccount } from '../config.js';
 import { trace } from '../trace.js';
 import { record, say } from '../log.js';
-import type { Draft } from '../types.js';
+import type { Draft, Thread } from '../types.js';
+import type { AccountPersona } from '../db/personas.js';
 import { NOTHING_TO_DO } from '../exit-codes.js';
 
 interface RawDraft {
@@ -46,6 +47,73 @@ interface RawDraft {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+
+/** The draft id scheme. Shared with the refuted-claim strip, whose shorter draft is a new row. */
+export const newDraftId = (threadId: string, at: number = Date.now()): string => `d_${threadId}_${at.toString(36)}`;
+
+/**
+ * What a body is checked against before it is saved as a draft. Exported so the refuted-claim
+ * strip (src/refuted-recheck.ts) runs THESE checks on its shorter body, not a copy that can drift.
+ */
+export interface DraftChecks {
+  thread: Thread;
+  warming: boolean;
+  previousBodies: string[];
+  persona: AccountPersona | null;
+  handle: string | null;
+}
+
+export async function loadDraftChecks(thread: Thread, persona: AccountPersona | null): Promise<DraftChecks> {
+  const acct = selectedAccount();
+  /* One call, not one per field: src/health.ts:174 loads the whole history and the observation set
+     on every invocation, so reading two fields from two calls would read both twice. `zone` is
+     passed because the daily counts are bucketed by the account's own timezone (health.ts:169). */
+  const health = await counters(acct?.handle ?? null, new Date(), undefined, acct?.timezone);
+  const warmingNow = warmingStage({ karma: health.karma, accountAgeDays: health.accountAgeDays });
+  /**
+   * This account's own recent comments, most recent first, for the repetition family.
+   *
+   * `decidedAt ?? createdAt` because `decidedAt` is when it actually went out and is what a
+   * reader would have seen in order; `createdAt` is the fallback for a row written before the
+   * field existed rather than a reason to drop the comment from the comparison.
+   *
+   * Filtered to THIS account. A template is only recognisable when the same name carries it, and
+   * comparing a draft against a different account's history would block on a repetition no reader
+   * could ever see.
+   */
+  const previousBodies = (await loadDrafts())
+    .filter((d) => d.status === 'published' && d.body
+      && (acct?.handle ? d.account === acct.handle : true))
+    .sort((a, b) => (b.decidedAt ?? b.createdAt).localeCompare(a.decidedAt ?? a.createdAt))
+    .map((d) => d.body);
+  return { thread, warming: warmingNow.warming, previousBodies, persona, handle: acct?.handle ?? null };
+}
+
+/**
+ * The draft-time blocks, PLUS this account's own banned phrases.
+ *
+ * One function used by both the first assessment and the post-rewrite one. That is not tidiness:
+ * the rewrite is accepted on `stillBlocked.length < blocked.length`, so a family counted on one
+ * side and not the other makes every rewrite look like an improvement. The persona check has to
+ * be inside both counts or inside neither.
+ *
+ * A banned phrase is a `persona:banned-phrase` gate rather than a silent discard, so it travels
+ * through the existing one-rewrite path and is named in the `draft.rewrite` record like any
+ * other failure. The phrase is quoted, not the draft — `draftCorrection` sends the reason back
+ * to the model, and the model needs to know which words to drop.
+ */
+export function draftBlocks(c: DraftChecks, b: string, noveltyIssues: string[]): Array<{ gate: string; reason: string }> {
+  return [
+    ...draftTimeBlocks({
+      body: b, thread: c.thread, warming: c.warming, noveltyIssues, previousBodies: c.previousBodies
+    }),
+    ...bannedPhraseHits(b, c.persona).map((phrase) => ({
+      gate: 'persona:banned-phrase',
+      reason: `${c.handle ?? 'this account'} never writes "${phrase}" — remove it entirely `
+        + 'rather than rephrasing around it'
+    }))
+  ];
+}
 
 export async function draft(threadIdArg?: string): Promise<number> {
   say.head('redbot draft');
@@ -233,52 +301,8 @@ export async function draft(threadIdArg?: string): Promise<number> {
    * this cannot quietly become a second opinion — which is precisely how `assessOpportunity` and
    * `isWarmingTarget` came to disagree about thread age and then about answer count.
    */
-  const acct = selectedAccount();
-  /* One call, not one per field: src/health.ts:174 loads the whole history and the observation set
-     on every invocation, so reading two fields from two calls would read both twice. `zone` is
-     passed because the daily counts are bucketed by the account's own timezone (health.ts:169). */
-  const health = await counters(acct?.handle ?? null, new Date(), undefined, acct?.timezone);
-  const warmingNow = warmingStage({ karma: health.karma, accountAgeDays: health.accountAgeDays });
-  /**
-   * This account's own recent comments, most recent first, for the repetition family.
-   *
-   * `decidedAt ?? createdAt` because `decidedAt` is when it actually went out and is what a
-   * reader would have seen in order; `createdAt` is the fallback for a row written before the
-   * field existed rather than a reason to drop the comment from the comparison.
-   *
-   * Filtered to THIS account. A template is only recognisable when the same name carries it, and
-   * comparing a draft against a different account's history would block on a repetition no reader
-   * could ever see.
-   */
-  const previousBodies = (await loadDrafts())
-    .filter((d) => d.status === 'published' && d.body
-      && (acct?.handle ? d.account === acct.handle : true))
-    .sort((a, b) => (b.decidedAt ?? b.createdAt).localeCompare(a.decidedAt ?? a.createdAt))
-    .map((d) => d.body);
-
-  /**
-   * The draft-time blocks, PLUS this account's own banned phrases.
-   *
-   * One function used by both the first assessment and the post-rewrite one. That is not tidiness:
-   * the rewrite is accepted on `stillBlocked.length < blocked.length`, so a family counted on one
-   * side and not the other makes every rewrite look like an improvement. The persona check has to
-   * be inside both counts or inside neither.
-   *
-   * A banned phrase is a `persona:banned-phrase` gate rather than a silent discard, so it travels
-   * through the existing one-rewrite path and is named in the `draft.rewrite` record like any
-   * other failure. The phrase is quoted, not the draft — `draftCorrection` sends the reason back
-   * to the model, and the model needs to know which words to drop.
-   */
-  const blocksFor = (b: string, noveltyIssues: string[]): Array<{ gate: string; reason: string }> => [
-    ...draftTimeBlocks({
-      body: b, thread, warming: warmingNow.warming, noveltyIssues, previousBodies
-    }),
-    ...bannedPhraseHits(b, persona).map((phrase) => ({
-      gate: 'persona:banned-phrase',
-      reason: `${acct?.handle ?? 'this account'} never writes "${phrase}" — remove it entirely `
-        + 'rather than rephrasing around it'
-    }))
-  ];
+  const checks = await loadDraftChecks(thread, persona);
+  const blocksFor = (b: string, noveltyIssues: string[]) => draftBlocks(checks, b, noveltyIssues);
 
   let blocked = blocksFor(body, novelty.issues);
   if (blocked.length) {
@@ -327,7 +351,7 @@ export async function draft(threadIdArg?: string): Promise<number> {
   }
 
   const saved: Draft = {
-    id: `d_${thread.id}_${Date.now().toString(36)}`,
+    id: newDraftId(thread.id),
     threadId: thread.id,
     permalink: thread.permalink,
     title: thread.title,
