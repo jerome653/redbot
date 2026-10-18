@@ -2223,6 +2223,9 @@ test('/api/state sends one page of review but counts the whole queue', async () 
 
 test('the figures still describe the whole record once the reads are scoped', async () => {
   await clearScopeFixture();
+  /* Argus counts the whole shared database, so its figures are read before and after seeding
+     and only the difference belongs to this test (#30). */
+  const before = (await getJson('/api/state')).argus;
   await seedScopeFixture();
   try {
     /* Same seeding gap, same race — this one survived it only because the socket the previous
@@ -2251,9 +2254,10 @@ test('the figures still describe the whole record once the reads are scoped', as
     assert.equal(byKey.scopesubtwo, SEED_DRAFTS / 2);
 
     /* Argus is the console's answer to "can this be trusted" — it must never be page-derived. */
-    assert.ok(s.argus.runs >= 2, `argus must count every certification, got ${s.argus.runs}`);
-    assert.equal(s.argus.draftsCheckedTwice, 1, 'the draft certified twice must be found');
-    assert.deepEqual(s.argus.claimSpread, [[0, 0]], 'and its claim counts reported as a spread');
+    assert.equal(s.argus.runs - before.runs, 2, `argus must count every certification, got ${s.argus.runs}`);
+    assert.equal(s.argus.draftsCheckedTwice - before.draftsCheckedTwice, 1, 'the draft certified twice must be found');
+    const spreads = (a) => a.claimSpread.filter((l) => JSON.stringify(l) === '[0,0]').length;
+    assert.equal(spreads(s.argus) - spreads(before), 1, 'and its claim counts reported as a spread');
   } finally { await clearScopeFixture(); }
 });
 
