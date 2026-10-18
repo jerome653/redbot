@@ -139,16 +139,26 @@ describe('deleting what was refuted', () => {
     assert.equal(ok.ok, true, ok.ok ? '' : ok.why);
     if (ok.ok) assert.ok(ok.body.endsWith(`\n\n${DISCLOSURE}`));
 
-    const two = `Raise max_allowed_packet in my.cnf. MySQL truncates an oversized row silently.\n\n${DISCLOSURE}`;
-    const thin = planStrip({ body: two, protect: [DISCLOSURE], certs: [cert({ reasons: [fatal('c2')], claims: [claim('c2', 'truncates an oversized row silently')] })] });
-    assert.equal(thin.ok, false, 'one reply sentence plus a disclosure line is not two sentences');
+    const only = `MySQL truncates an oversized row silently, so raise max_allowed_packet.\n\n${DISCLOSURE}`;
+    const thin = planStrip({ body: only, protect: [DISCLOSURE], certs: [cert({ reasons: [fatal('c2')], claims: [claim('c2', 'truncates an oversized row silently')] })] });
+    assert.equal(thin.ok, false, 'a disclosure line alone is not a reply');
+    if (!thin.ok) assert.match(thin.why, /only 0 sentence/);
   });
 
-  test('too little left to be a reply refuses: under 2 sentences, or under 40% of the original', () => {
+  test('one sentence left is still a reply (the floor is 1), and the length share still applies', () => {
     const two = 'Raise max_allowed_packet in my.cnf and restart. MySQL truncates an oversized row silently.';
     const one = planStrip({ body: two, certs: [cert({ reasons: [fatal('c2')], claims: [claim('c2', 'truncates an oversized row silently')] })] });
-    assert.equal(one.ok, false);
-    if (!one.ok) assert.match(one.why, /1 sentence/);
+    assert.equal(one.ok, true, one.ok ? '' : one.why);
+    if (one.ok) assert.equal(one.body, 'Raise max_allowed_packet in my.cnf and restart.');
+  });
+
+  test('too little left to be a reply refuses: no sentence at all, or under 40% of the original', () => {
+    const none = planStrip({
+      body: 'MySQL truncates an oversized row silently.',
+      certs: [cert({ reasons: [fatal('c2')], claims: [claim('c2', 'truncates an oversized row silently')] })]
+    });
+    assert.equal(none.ok, false);
+    if (!none.ok) assert.match(none.why, /only 0 sentence\(s\) would be left \(the floor is 1\)/);
 
     const long = 'Check the log. Restart it. MySQL truncates an oversized row silently whenever the row is ' +
       'larger than the configured packet limit, and it reports nothing at all to the client while the import ' +
