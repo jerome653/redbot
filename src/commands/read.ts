@@ -27,6 +27,20 @@ import { record, say } from '../log.js';
  * So the default is `new` (`DEFAULT_FEED_SORT`) and `hot` is one flag away — `redbot read
  * r/WordPress --sort hot`.
  */
+/**
+ * A source page that yields no post links, recorded as a selector miss the way
+ * src/commands/session.ts records one.
+ *
+ * r/Wordpress_Development read "Collected 0 threads" in every cycle from 2026-10-17 with nothing
+ * else on record (#33): the page had no community feed and the generic site title, which a
+ * private, banned or misspelled community gives. The page title is kept so the row says which.
+ */
+export async function noteEmptyRead(page: { title(): Promise<string> }, name: string): Promise<void> {
+  const title = await page.title().catch(() => '');
+  await record('selector.miss', `no post links found on r/${name}`, { subreddit: name, selectors: 'sel.feedScope', title });
+  say.warn(`r/${name} showed no posts (page title "${title}"). If it stays empty, it may be private, banned or misspelled: \`redbot sources off ${name}\`.`);
+}
+
 export async function read(subreddit: string | undefined, limit?: number, sort?: string): Promise<number> {
   if (!subreddit) {
     say.fail('Usage: redbot read <subreddit>');
@@ -86,6 +100,7 @@ export async function read(subreddit: string | undefined, limit?: number, sort?:
 
     const links = await collectPermalinks(s.page, max, sel.feedScope);
     say.step(`Found ${links.length} post links.`);
+    if (links.length === 0) await noteEmptyRead(s.page, name);
 
     /* The loop lives in reddit/collect-run.ts, which is where a 429 stopped being a skip. */
     const out = await collectRun(links, {
