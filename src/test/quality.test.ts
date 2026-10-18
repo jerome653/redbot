@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assessQuality } from '../quality.js';
+import { config } from '../config.js';
 import type { Thread } from '../types.js';
 
 const THREAD: Pick<Thread, 'title' | 'body' | 'comments'> = {
@@ -59,6 +60,16 @@ test('a generic answer that could fit any thread is blocked', () => {
 test('length is bounded at both ends', () => {
   const tiny = codes('Check the log.', { thread: THREAD });
   assert.ok(tiny.includes('too-short'));
+
+  /* A disclosure line is a label, not reply: a 10-word body plus the 15-word AI line is 10 words.
+     Issue #33: before this, the pair counted 25 and cleared the floor. */
+  const labelled = codes(`Check the PHP error log for the fatal from admin-ajax.php.\n\n${config.aiDisclosureLine}`, { thread: THREAD });
+  assert.ok(labelled.includes('too-short'), 'the AI disclosure line does not count toward the minimum');
+  const branded = assessQuality(
+    `Check the PHP error log for the fatal that admin-ajax.php throws, then set WP_DEBUG_LOG to true and reproduce checkout once more.\n\n${config.brand.disclosureLine}`,
+    { thread: THREAD });
+  assert.match(branded.issues.find((i) => i.code === 'too-short')?.message ?? '', /^21 words/,
+    'the brand disclosure line does not count either, and the message reports the prose words');
 
   const bloated = `${GOOD} ${'The plugin log will show the fatal error on the first line. '.repeat(40)}`;
   assert.ok(codes(bloated, { thread: THREAD }).includes('too-long'));

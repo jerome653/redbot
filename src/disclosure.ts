@@ -262,6 +262,14 @@ export function ensureDisclosure(body: string): string {
 }
 
 /**
+ * The body with both sanctioned disclosure lines taken out. They are labels, not reply, so no
+ * length rule counts them: a 10-word answer with the 15-word AI line is a 10-word answer.
+ */
+export function withoutDisclosureLines(body: string): string {
+  return [config.brand.disclosureLine, config.aiDisclosureLine].reduce((t, line) => t.split(line).join(' '), body);
+}
+
+/**
  * Append the one sanctioned AI-provenance line, for a person opting to label a reply where a
  * subreddit requires it (evaluation M5). This exact wording is the only AI self-reference the
  * linter permits; the model is never allowed to write its own.
