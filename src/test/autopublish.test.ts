@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { GateResult } from '../gates.js';
 import { assessQuality } from '../quality.js';
-import { unattendedPublishDecision, publishBar, publishBarSummary } from '../autopublish.js';
+import { unattendedPublishDecision, publishBar, publishBarSummary, certificationOnlyRefusal } from '../autopublish.js';
 
 /* Built from the real GateResult (src/gates.ts:34-48) rather than cast past it: a fixture that
    lies about the shape stops catching the day the shape changes. `quality` is only carried
@@ -234,9 +234,10 @@ const R = {
   karma: 1
 };
 type RIn = Parameters<typeof unattendedPublishDecision>[0];
-function underBar<T>(bar: string, fn: () => T): T {
+function underBar<T>(bar: string | undefined, fn: () => T): T {
   const saved = process.env.REDBOT_PUBLISH_MIN_VERDICT;
-  process.env.REDBOT_PUBLISH_MIN_VERDICT = bar;
+  if (bar === undefined) delete process.env.REDBOT_PUBLISH_MIN_VERDICT;
+  else process.env.REDBOT_PUBLISH_MIN_VERDICT = bar;
   try { return fn(); } finally {
     if (saved === undefined) delete process.env.REDBOT_PUBLISH_MIN_VERDICT;
     else process.env.REDBOT_PUBLISH_MIN_VERDICT = saved;
@@ -363,4 +364,64 @@ test('the first unattended decision is taken before the thread dwell, not after 
   const decide = src.indexOf('unattendedPublishDecision(autoInput)');
   assert.ok(decide > src.indexOf('const pre = evaluateGates('), 'after the first gates, which it reads');
   assert.ok(decide < src.indexOf('viewThread('), 'before the thread dwell');
+});
+
+/* ---- certificationOnlyRefusal: what reply.ts may refuse before the page opens (#33 item 2) ----
+   It may only ever refuse what the full decision refuses, in the same words, whatever the page
+   says later. An early refusal the decision would have allowed is a lost post. */
+test('the certification check refuses exactly what the decision refuses on certification, with the same why', () => {
+  let a = 0x9877;
+  const rnd = (): number => { /* mulberry32: seeded, so a failure replays */
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]!;
+  const VERDICTS = [null, '', 'CERTIFIED', 'ESCALATE', 'REJECT', ' reject ', 'PASS', 'X'];
+  const AT = [null, TS, '2026-10-18T02:00:00.000Z', 'not a date'];
+  const RULES = ['all-claims-supported', 'overconfident-language', 'low-confidence-as-fact', 'no-provenance',
+    'falsifiable-claim-weak-evidence', 'fatal-contradiction', 'thread-resolved', 'unrefuted-falsifiable-claim', 'a-rule-nobody-wrote'];
+  const GATES = [clean, null, hardBlocked, withAdvisory('locked'), withAdvisory('certification')];
+  const WEBDEV = 'https://www.reddit.com/r/webdev/comments/1abc/t/';
+  const LINKS = [WEBDEV, 'https://www.reddit.com/r/Wordpress/comments/1abc/t/', null, 'not a url'];
+  for (const bar of [undefined, 'CERTIFIED', 'ESCALATE', 'REDDIT', 'ANY']) {
+    const seen = { refused: 0, passed: 0 };
+    underBar(bar, () => {
+      for (let i = 0; i < 4000; i++) {
+        const certVerdict = pick(VERDICTS);
+        const certAt = pick(AT);
+        const cert = {
+          enabled: pick([undefined, '1', '1', '0']), certVerdict, certAt,
+          latestCert: rnd() < 0.15 ? null : {
+            verdict: rnd() < 0.6 ? certVerdict ?? '' : pick(VERDICTS) ?? '',
+            certifiedAt: rnd() < 0.6 ? certAt : pick(AT),
+            rules: rnd() < 0.1 ? null : Array.from({ length: Math.floor(rnd() * 4) }, () => pick(rnd() < 0.6 ? RULES.slice(1, 5) : RULES))
+          }
+        };
+        const early = certificationOnlyRefusal(cert);
+        const full = unattendedPublishDecision({ ...cert, gates: pick(GATES), karma: pick([null, 1, 10]), permalink: pick(LINKS) });
+        const tag = `bar ${bar} ${JSON.stringify(cert)}`;
+        if ('refuse' in early) {
+          seen.refused++;
+          assert.deepEqual(full, { publish: false, why: early.refuse }, tag);
+        } else {
+          seen.passed++;
+          const best = unattendedPublishDecision({ ...cert, gates: clean, karma: 10_000, permalink: WEBDEV });
+          assert.equal(best.publish, true, `passed the early check, so only the page side may refuse: ${tag} -> ${best.why}`);
+        }
+      }
+    });
+    assert.ok(seen.refused > 50 && seen.passed > 50, `bar ${bar}: both outcomes exercised ${JSON.stringify(seen)}`);
+  }
+});
+
+test('the certification check leaves karma and the subreddit to the decision, and keeps its wording', () => {
+  const wp = { ...R, ...withRules('REJECT', ['overconfident-language', 'no-provenance']), permalink: 'https://www.reddit.com/r/Wordpress/comments/1abc/t/', karma: 1 };
+  assert.deepEqual(underBar('REDDIT', () => certificationOnlyRefusal(wp)),
+    { verdict: 'REJECT', bar: 'REDDIT', waived: ['overconfident-language', 'no-provenance'] });
+  assert.match(reddit(wp).why, /r\/wordpress waits for karma/, 'the decision still refuses it, on karma, after the page');
+  const x = { ...R, latestCert: { ...R.latestCert, verdict: 'X' } };
+  assert.deepEqual(underBar('REDDIT', () => certificationOnlyRefusal(x)),
+    { refuse: 'REDDIT bar: the latest certification carries verdict "X", which is not a verdict' });
 });
