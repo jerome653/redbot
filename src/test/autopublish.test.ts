@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { GateResult } from '../gates.js';
 import { assessQuality } from '../quality.js';
-import { unattendedPublishDecision, publishBar } from '../autopublish.js';
+import { unattendedPublishDecision, publishBar, publishBarSummary } from '../autopublish.js';
 
 /* Built from the real GateResult (src/gates.ts:34-48) rather than cast past it: a fixture that
    lies about the shape stops catching the day the shape changes. `quality` is only carried
@@ -97,6 +97,35 @@ test('the bar is a dial, and its default is the strict end', () => {
     if (saved === undefined) delete process.env.REDBOT_PUBLISH_MIN_VERDICT;
     else process.env.REDBOT_PUBLISH_MIN_VERDICT = saved;
   }
+});
+
+test('the boot line names the bar this install actually runs, not CERTIFIED every time', () => {
+  /* cardinal, 18 Oct 03:07 UTC: REDBOT_PUBLISH_MIN_VERDICT=REDDIT, and the first line of the run
+     still read "on a CERTIFIED verdict with no gate finding of any kind". */
+  assert.match(publishBarSummary('CERTIFIED'), /^on a CERTIFIED verdict with no gate finding of any kind\.$/);
+  assert.match(publishBarSummary('ESCALATE'), /on a CERTIFIED or ESCALATE verdict/);
+  const reddit = publishBarSummary('REDDIT');
+  assert.match(reddit, /REDBOT_PUBLISH_MIN_VERDICT=REDDIT/);
+  assert.match(reddit, /REJECT/);
+  assert.match(reddit, /overconfident-language, low-confidence-as-fact, no-provenance, falsifiable-claim-weak-evidence/);
+  assert.match(reddit, /r\/wordpress waits for karma \d+/);
+  assert.match(publishBarSummary('ANY'), /proven false included \(REDBOT_PUBLISH_MIN_VERDICT=ANY\)/);
+  for (const bar of ['CERTIFIED', 'ESCALATE', 'REDDIT', 'ANY'] as const) {
+    assert.match(publishBarSummary(bar), /no gate finding of any kind/, `${bar} must still say advisories refuse`);
+  }
+
+  const saved = process.env.REDBOT_PUBLISH_MIN_VERDICT;
+  try {
+    process.env.REDBOT_PUBLISH_MIN_VERDICT = 'reddit';
+    assert.equal(publishBarSummary(), publishBarSummary('REDDIT'), 'with no argument it reads the live setting');
+  } finally {
+    if (saved === undefined) delete process.env.REDBOT_PUBLISH_MIN_VERDICT;
+    else process.env.REDBOT_PUBLISH_MIN_VERDICT = saved;
+  }
+
+  const auto = readFileSync(new URL('../../src/commands/auto.ts', import.meta.url), 'utf8');
+  assert.match(auto, /This will post to Reddit without asking, ' \+ publishBarSummary\(\)/);
+  assert.doesNotMatch(auto, /on a CERTIFIED verdict/, 'the boot line must not hard-code the strict bar');
 });
 
 test('lowering the bar does NOT stop other advisories refusing', () => {
