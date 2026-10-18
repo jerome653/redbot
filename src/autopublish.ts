@@ -143,6 +143,22 @@ export function publishBar(): VerdictBar {
   return raw === 'ESCALATE' || raw === 'ANY' || raw === 'REDDIT' ? raw : 'CERTIFIED';
 }
 
+/**
+ * What an unattended post needs under `bar`, for the line every `auto` run opens with. It is read
+ * from the same sets the decision reads, so the line cannot drift from the decision.
+ */
+export function publishBarSummary(bar: VerdictBar = publishBar()): string {
+  const gates = 'with no gate finding of any kind.';
+  if (bar === 'ESCALATE') return `on a CERTIFIED or ESCALATE verdict ${gates}`;
+  if (bar === 'REDDIT') {
+    return `on any verdict, REJECT included, whose certification names only warning rules (${[...SOFT_RULES].join(', ')}), ` +
+      `${gates.slice(0, -1)} (REDBOT_PUBLISH_MIN_VERDICT=REDDIT); ` +
+      `${[...KARMA_FLOOR_SUBS].map((s) => `r/${s}`).join(', ')} waits for karma ${policy.cautionKarmaBelow.value}.`;
+  }
+  if (bar === 'ANY') return `on ANY verdict, claims proven false included (REDBOT_PUBLISH_MIN_VERDICT=ANY), ${gates}`;
+  return `on a CERTIFIED verdict ${gates}`;
+}
+
 /** Does `verdict` clear the configured bar? REDDIT admits every real verdict here and judges rules after. */
 function clearsBar(verdict: string, bar: VerdictBar): boolean {
   if (bar === 'ANY' || bar === 'REDDIT') return verdict === 'CERTIFIED' || verdict === 'ESCALATE' || verdict === 'REJECT';

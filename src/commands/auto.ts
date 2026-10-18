@@ -24,7 +24,7 @@ import { opportunity } from './opportunity.js';
 import { draft } from './draft.js';
 import { certifyCmd } from './certify.js';
 import { reply } from './reply.js';
-import { autoPublishEnabled } from '../autopublish.js';
+import { autoPublishEnabled, publishBarSummary } from '../autopublish.js';
 import { stripRefutedEnabled } from '../refuted-strip.js';
 import { recheckWithoutRefuted } from '../refuted-recheck.js';
 import { record, say } from '../log.js';
@@ -311,8 +311,7 @@ export async function auto(opts?: { once?: boolean; everyMinutes?: number }): Pr
   /* Say which install this is, loudly, on the first line of every run. An autonomous install that
      opened with "this never publishes" would be the single most misleading line in the product. */
   if (autoPublishEnabled()) {
-    say.warn('UNATTENDED PUBLISHING IS ON (REDBOT_AUTO_PUBLISH=1). This will post to Reddit ' +
-             'without asking, on a CERTIFIED verdict with no gate finding of any kind.');
+    say.warn('UNATTENDED PUBLISHING IS ON (REDBOT_AUTO_PUBLISH=1). This will post to Reddit without asking, ' + publishBarSummary());
   } else {
     say.warn('This never publishes. Approving a reply is still a person’s job.');
   }
