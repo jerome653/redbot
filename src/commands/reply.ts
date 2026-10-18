@@ -33,7 +33,9 @@ import { autoBackup } from '../backup.js';
 import { publishComment } from '../reddit/post.js';
 import { lintDraft, ensureDisclosure } from '../disclosure.js';
 import { evaluateGates } from '../gates.js';
-import { unattendedPublishDecision } from '../autopublish.js';
+import { unattendedPublishDecision, publishBar, type UnattendedInput } from '../autopublish.js';
+import { latestCertification } from '../db/certifications.js';
+import { getPool } from '../db.js';
 import { health } from '../health.js';
 import { viewThread } from '../behavior.js';
 import { makeRng, sessionSeed } from '../rand.js';
@@ -357,12 +359,26 @@ export async function reply(
      * unattended decision is being able to ask afterwards why it went the way it did.
      */
     let unattendedWhy: string | null = null;
+    /* Kept for the second decision after the final re-gate (step 6). */
+    let autoInput: UnattendedInput | null = null;
     if (opts?.unattended) {
-      const auto = unattendedPublishDecision({
+      autoInput = {
         enabled: process.env.REDBOT_AUTO_PUBLISH,
         certVerdict: target.certification?.verdict ?? null,
-        gates: pre
-      });
+        gates: pre,
+        /* Read by the REDDIT bar only. The certification row is loaded only under that bar, so the
+           other bars do exactly what they did, with no new read that could fail them. */
+        certAt: target.certification?.at ?? null,
+        latestCert: publishBar() === 'REDDIT'
+          ? await latestCertification(getPool(), target.id).catch((e: unknown) => {
+              say.warn(`  certification row unreadable: ${e instanceof Error ? e.message : String(e)}`);
+              return null;
+            })
+          : null,
+        permalink: target.permalink,
+        karma: verdict.counters.karma
+      };
+      const auto = unattendedPublishDecision(autoInput);
       if (!auto.publish) {
         say.fail(`  Not publishing unattended: ${auto.why}`);
         await record('publish.refused', `unattended publish refused for ${target.id}: ${auto.why}`, {
@@ -502,6 +518,22 @@ export async function reply(
         stage: 'final'
       });
       return 1;
+    }
+
+    /**
+     * Unattended: the rule again, against the FINAL gates and the karma just re-read. `!final.allow`
+     * only sees HARD gates, so an advisory that appeared during the read (the thread locked, our own
+     * comment already there) would otherwise not stop a post nobody is watching.
+     */
+    if (autoInput) {
+      const again = unattendedPublishDecision({ ...autoInput, gates: final, karma: verdict2.counters.karma });
+      if (!again.publish) {
+        say.fail(`  Not publishing unattended — at the final check: ${again.why}`);
+        await record('publish.refused', `unattended publish refused at final check for ${target.id}: ${again.why}`, {
+          draftId: target.id, why: again.why, stage: 'final'
+        });
+        return 1;
+      }
     }
 
     /* ---------- 7. publish ---------- */

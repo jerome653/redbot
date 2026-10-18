@@ -252,3 +252,15 @@ export async function selectCertifications(db: Db, scope: CertScope = {}): Promi
     return c;
   });
 }
+
+/**
+ * The NEWEST certification of one draft — max(certifications.id) — with the verdict and the rules
+ * read from that same row, or null when it was never certified. The REDDIT publish bar
+ * (src/autopublish.ts) reads it. Newest by id, not by clock: `selectCertifications` orders by id.
+ */
+export async function latestCertification(
+  db: Db, draftId: string
+): Promise<{ verdict: string; certifiedAt: string; rules: string[] } | null> {
+  const c = (await selectCertifications(db, { draftIds: [draftId] })).at(-1);
+  return c ? { verdict: c.verdict, certifiedAt: c.certifiedAt, rules: c.reasons.map((r) => r.rule) } : null;
+}

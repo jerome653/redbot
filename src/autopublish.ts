@@ -31,6 +31,7 @@
  * carry the plumbing and none of the judgement.
  */
 import type { GateResult } from './gates.js';
+import { policy } from './policy.js';
 
 /** What the caller knows at the moment it must decide. */
 export interface UnattendedInput {
@@ -40,6 +41,15 @@ export interface UnattendedInput {
   certVerdict: string | null | undefined;
   /** What src/gates.ts found for this publish, or null when the gates have not been run. */
   gates: GateResult | null;
+  /* The four below are read by the REDDIT bar only; every other bar ignores them. */
+  /** `drafts.cert_at` — which certification run the draft row's verdict came from. */
+  certAt?: string | null | undefined;
+  /** The NEWEST certification row for this draft (src/db/certifications.ts latestCertification). */
+  latestCert?: { verdict: string; certifiedAt: string | null; rules: string[] | null } | null | undefined;
+  /** The thread permalink, for the per-subreddit karma floor. */
+  permalink?: string | null | undefined;
+  /** The posting account's latest measured karma (health counters); null when never measured. */
+  karma?: number | null | undefined;
 }
 
 export interface UnattendedDecision {
@@ -119,24 +129,81 @@ export function autoPublishEnabled(): boolean {
  *
  *   CERTIFIED (default) — every claim adequately supported
  *   ESCALATE            — also post what "needs a person who knows the subject"
+ *   REDDIT              — judge the RULES, not the verdict: see SOFT_RULES below
  *   ANY                 — also post what the checker REJECTED as contradicted or false
  *
  * `ANY` means publishing statements the fact-checker has positively shown to be wrong. It exists
  * because the owner asked for it; it is not a recommendation, and the reason string says so on
  * every post so the choice is visible in the record rather than buried in a unit file.
  */
-type VerdictBar = 'CERTIFIED' | 'ESCALATE' | 'ANY';
+type VerdictBar = 'CERTIFIED' | 'ESCALATE' | 'ANY' | 'REDDIT';
 
 export function publishBar(): VerdictBar {
   const raw = (process.env.REDBOT_PUBLISH_MIN_VERDICT ?? '').trim().toUpperCase();
-  return raw === 'ESCALATE' || raw === 'ANY' ? raw : 'CERTIFIED';
+  return raw === 'ESCALATE' || raw === 'ANY' || raw === 'REDDIT' ? raw : 'CERTIFIED';
 }
 
-/** Does `verdict` clear the configured bar? */
+/** Does `verdict` clear the configured bar? REDDIT admits every real verdict here and judges rules after. */
 function clearsBar(verdict: string, bar: VerdictBar): boolean {
-  if (bar === 'ANY') return verdict === 'CERTIFIED' || verdict === 'ESCALATE' || verdict === 'REJECT';
+  if (bar === 'ANY' || bar === 'REDDIT') return verdict === 'CERTIFIED' || verdict === 'ESCALATE' || verdict === 'REJECT';
   if (bar === 'ESCALATE') return verdict === 'CERTIFIED' || verdict === 'ESCALATE';
   return verdict === 'CERTIFIED';
+}
+
+/**
+ * The REDDIT bar. Jerome, 2026-10-18, after 0 of 34 certifications ever came back CERTIFIED (28
+ * REJECT, 6 ESCALATE): tone and evidence rules become warnings; a claim proven false and an
+ * already-solved thread still block.
+ *
+ * AN ALLOWLIST, so a rule Argus learns tomorrow refuses until someone decides it is soft. Hard by
+ * omission, named so nobody "tidies" one in: fatal-contradiction, contested-contradiction and
+ * invalidated-dependency (a claim shown false, or resting on one), thread-resolved, and
+ * unrefuted-falsifiable-claim — that one fires when the refuter THREW or timed out
+ * (src/argus/pipeline.ts), so it is a check that never ran, not weak evidence.
+ */
+export const SOFT_RULES: ReadonlySet<string> = new Set([
+  'overconfident-language', 'low-confidence-as-fact', 'no-provenance', 'falsifiable-claim-weak-evidence'
+]);
+
+/** Subreddits an unattended post skips while the posting account's karma is under policy.cautionKarmaBelow.
+    Unattended only: the loop still DRAFTS there, for a person to send by hand. Lower case. */
+export const KARMA_FLOOR_SUBS: ReadonlySet<string> = new Set(['wordpress']);
+
+const VERDICTS: ReadonlySet<string> = new Set(['CERTIFIED', 'ESCALATE', 'REJECT']);
+
+/** Everything REDDIT asks beyond the verdict. Returns a refusal, or the soft rules it waived. */
+function redditBar(input: UnattendedInput, verdict: string): { refuse: string } | { waived: string[] } {
+  /* Verdict and rules from ONE row, the newest: certifications are append-only, and a verdict
+     from one run judged against the rules of another is a verdict nobody computed. */
+  const row = input.latestCert;
+  if (!row) return { refuse: 'no certification row could be read for this draft — nothing to read the rules from' };
+  const rowVerdict = (row.verdict ?? '').trim().toUpperCase();
+  if (!VERDICTS.has(rowVerdict)) return { refuse: `the latest certification carries verdict "${row.verdict}", which is not a verdict` };
+  if (rowVerdict !== verdict) {
+    return { refuse: `the draft row says ${verdict}, the latest certification says ${rowVerdict} — they are different runs` };
+  }
+  /* certify.ts writes cert.certifiedAt onto the draft as cert_at, so the two are one instant. */
+  if (input.certAt && Date.parse(input.certAt) !== Date.parse(row.certifiedAt ?? '')) {
+    return { refuse: `the draft was certified at ${input.certAt}, the latest certification row at ${row.certifiedAt} — they are different runs` };
+  }
+
+  let waived: string[] = [];
+  /* CERTIFIED carries `all-claims-supported` (src/argus/certify.ts), which is not a finding. */
+  if (verdict !== 'CERTIFIED') {
+    const rules = [...new Set(row.rules ?? [])];
+    if (!rules.length) return { refuse: `${verdict} with no rules on record — nothing says the findings were only tone or evidence` };
+    const hard = rules.filter((r) => !SOFT_RULES.has(r));
+    if (hard.length) return { refuse: `certification ${verdict} carries blocking rule(s): ${hard.join(', ')}` };
+    waived = rules;
+  }
+
+  const sub = /\/r\/([A-Za-z0-9_]+)(?:[/?#]|$)/.exec(input.permalink ?? '')?.[1]?.toLowerCase();
+  if (!sub || sub === 'unknown') return { refuse: `cannot read the subreddit from "${input.permalink ?? ''}"` };
+  const floor = policy.cautionKarmaBelow.value;
+  if (KARMA_FLOOR_SUBS.has(sub) && !(typeof input.karma === 'number' && input.karma >= floor)) {
+    return { refuse: `r/${sub} waits for karma ${floor} before posting unattended; the posting account has ${input.karma ?? 'never measured'}` };
+  }
+  return { waived };
 }
 
 export function unattendedPublishDecision(input: UnattendedInput): UnattendedDecision {
@@ -155,8 +222,10 @@ export function unattendedPublishDecision(input: UnattendedInput): UnattendedDec
   }
   const bar = publishBar();
   if (!clearsBar(verdict, bar)) {
-    return { publish: false, why: `certification verdict is ${verdict}, and this install requires ${bar === 'ANY' ? 'a verdict' : bar} to publish unattended` };
+    return { publish: false, why: `certification verdict is ${verdict}, and this install requires ${bar === 'ANY' || bar === 'REDDIT' ? 'a verdict' : bar} to publish unattended` };
   }
+  const reddit = bar === 'REDDIT' ? redditBar(input, verdict) : null;
+  if (reddit && 'refuse' in reddit) return { publish: false, why: `REDDIT bar: ${reddit.refuse}` };
 
   /* Gates not run is a refusal, not a pass. `evaluateGates` is what knows about duplicates,
      locked and archived threads, the warming rules and the window — every live-page fact that
@@ -190,7 +259,10 @@ export function unattendedPublishDecision(input: UnattendedInput): UnattendedDec
     };
   }
 
-  const caveat = verdict === PUBLISHABLE_VERDICT ? ''
+  /* Under REDDIT a REJECT here has no contradiction behind it (those rules refuse above), so the
+     ANY caveat would be false; the record names what was waived instead. */
+  const caveat = reddit ? (reddit.waived.length ? ` — waived: ${reddit.waived.join(', ')}` : '')
+    : verdict === PUBLISHABLE_VERDICT ? ''
     : verdict === 'ESCALATE'
       ? ' — ESCALATE means the checker wanted a person to confirm the facts and nobody did'
       : ' — REJECT means the checker found this CONTRADICTED and it is being published anyway';

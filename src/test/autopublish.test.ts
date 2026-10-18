@@ -7,6 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import type { GateResult } from '../gates.js';
 import { assessQuality } from '../quality.js';
 import { unattendedPublishDecision, publishBar } from '../autopublish.js';
@@ -191,4 +192,137 @@ test('the one publishing case says why it was allowed, not just that it was', ()
   assert.match(d.why, /no other advisory/);
   assert.match(d.why, /clears the CERTIFIED bar/,
     'the reason must name the bar in force — that string is the audit record of which one let it through');
+});
+
+/* ---- REDBOT_PUBLISH_MIN_VERDICT=REDDIT (Jerome, 2026-10-18) ---------------------------------
+   0 of 34 certifications ever CERTIFIED. His call: tone and evidence rules warn; a claim proven
+   false and an already-solved thread still block; r/Wordpress waits for karma 10. */
+const TS = '2026-10-18T01:00:00.000Z';
+const R = {
+  enabled: '1', certVerdict: 'REJECT', gates: clean, certAt: TS,
+  latestCert: { verdict: 'REJECT', certifiedAt: TS as string | null, rules: ['overconfident-language', 'no-provenance', 'overconfident-language'] },
+  permalink: 'https://www.reddit.com/r/webdev/comments/1abc/some_title/',
+  karma: 1
+};
+type RIn = Parameters<typeof unattendedPublishDecision>[0];
+function underBar<T>(bar: string, fn: () => T): T {
+  const saved = process.env.REDBOT_PUBLISH_MIN_VERDICT;
+  process.env.REDBOT_PUBLISH_MIN_VERDICT = bar;
+  try { return fn(); } finally {
+    if (saved === undefined) delete process.env.REDBOT_PUBLISH_MIN_VERDICT;
+    else process.env.REDBOT_PUBLISH_MIN_VERDICT = saved;
+  }
+}
+const reddit = (over: Partial<RIn>) => underBar('REDDIT', () => unattendedPublishDecision({ ...R, ...over }));
+const withRules = (verdict: string, rules: string[] | null): Partial<RIn> =>
+  ({ certVerdict: verdict, latestCert: { verdict, certifiedAt: TS, rules } });
+
+test('REDDIT: CERTIFIED passes, and its all-claims-supported rule is not judged as a rule', () => {
+  assert.equal(underBar('reddit', publishBar), 'REDDIT', 'the bar reads in any casing');
+  const d = reddit(withRules('CERTIFIED', ['all-claims-supported']));
+  assert.equal(d.publish, true, d.why);
+  assert.match(d.why, /clears the REDDIT bar/);
+});
+
+test('REDDIT: ESCALATE or REJECT on soft rules only passes, and the why names what was waived', () => {
+  for (const v of ['REJECT', 'ESCALATE']) {
+    const d = reddit(withRules(v, ['falsifiable-claim-weak-evidence', 'low-confidence-as-fact']));
+    assert.equal(d.publish, true, `${v}: ${d.why}`);
+    assert.match(d.why, /waived: falsifiable-claim-weak-evidence, low-confidence-as-fact/);
+  }
+  assert.match(reddit({}).why, /waived: overconfident-language, no-provenance(?!, overconfident)/, 'deduplicated');
+});
+
+test('REDDIT: a hard or unknown rule refuses, alone or beside soft ones', () => {
+  const hard = ['fatal-contradiction', 'thread-resolved', 'contested-contradiction', 'invalidated-dependency',
+    'unrefuted-falsifiable-claim', 'no-claims', 'graph-cycle', 'a-rule-nobody-wrote', 'Overconfident-Language'];
+  for (const v of ['REJECT', 'ESCALATE']) {
+    for (const rule of hard) {
+      for (const rules of [[rule], ['overconfident-language', rule]]) {
+        const d = reddit(withRules(v, rules));
+        assert.equal(d.publish, false, `${v} ${rules.join('+')} must refuse`);
+        assert.match(d.why, new RegExp(`blocking rule\\(s\\): ${rule}`));
+      }
+    }
+  }
+});
+
+test('REDDIT: no rules on record is not "only soft rules" — empty and null refuse', () => {
+  for (const rules of [[], null]) {
+    const d = reddit(withRules('REJECT', rules));
+    assert.equal(d.publish, false);
+    assert.match(d.why, /no rules on record/);
+  }
+});
+
+test('REDDIT: the latest certification row must exist and agree with the draft row', () => {
+  for (const latestCert of [null, undefined]) {
+    assert.equal(reddit({ latestCert }).publish, false);
+    assert.match(reddit({ latestCert }).why, /no certification row/);
+  }
+  const mismatch = reddit({ certVerdict: 'REJECT', latestCert: { ...R.latestCert, verdict: 'ESCALATE' } });
+  assert.equal(mismatch.publish, false);
+  assert.match(mismatch.why, /draft row says REJECT, the latest certification says ESCALATE/);
+  for (const certifiedAt of ['2026-10-18T01:00:00.001Z', 'not a date', null]) {
+    const d = reddit({ latestCert: { ...R.latestCert, certifiedAt } });
+    assert.equal(d.publish, false, `certifiedAt ${certifiedAt}`);
+    assert.match(d.why, /certified at/);
+  }
+  for (const verdict of ['PASS', 'REVIEW', '', 'pending']) {
+    assert.match(reddit({ latestCert: { ...R.latestCert, verdict } }).why, /which is not a verdict/, `cert verdict ${JSON.stringify(verdict)}`);
+  }
+  assert.equal(reddit({ certVerdict: 'PASS', latestCert: { ...R.latestCert, verdict: 'PASS' } }).publish, false);
+});
+
+test('REDDIT: r/Wordpress waits for karma 10 from the posting account, any casing', () => {
+  for (const sub of ['Wordpress', 'WordPress', 'wordpress', 'WORDPRESS']) {
+    const permalink = `https://www.reddit.com/r/${sub}/comments/1abc/t/`;
+    for (const karma of [1, 9, null, undefined, Number.NaN]) {
+      const d = reddit({ permalink, karma });
+      assert.equal(d.publish, false, `r/${sub} karma ${karma}`);
+      assert.match(d.why, /r\/wordpress/);
+    }
+    assert.equal(reddit({ permalink, karma: 10 }).publish, true, `r/${sub} at karma 10`);
+  }
+});
+
+test('REDDIT: other subs post at karma 1; an unreadable subreddit refuses', () => {
+  assert.equal(reddit({ karma: 1 }).publish, true);
+  for (const permalink of [null, undefined, '', 'https://www.reddit.com/r/unknown/comments/1/t/',
+    'https://www.reddit.com/user/someone/', 'not a url']) {
+    const d = reddit({ permalink });
+    assert.equal(d.publish, false, `permalink ${permalink}`);
+    assert.match(d.why, /subreddit/);
+  }
+});
+
+test('REDDIT: every non-certification advisory and hard gate still refuses', () => {
+  assert.equal(reddit({ gates: withAdvisory('locked') }).publish, false);
+  assert.equal(reddit({ gates: hardBlocked }).publish, false);
+  assert.equal(reddit({ gates: withAdvisory('certification') }).publish, true);
+});
+
+test('the other bars ignore every REDDIT input — they behave exactly as before', () => {
+  const lax = { latestCert: null, permalink: 'https://www.reddit.com/r/Wordpress/comments/1/t/', karma: 1 };
+  assert.equal(underBar('ANY', () => unattendedPublishDecision({ ...R, ...lax })).publish, true);
+  assert.equal(underBar('ESCALATE', () => unattendedPublishDecision({ ...R, ...lax, certVerdict: 'ESCALATE' })).publish, true);
+  assert.equal(underBar('CERTIFIED', () => unattendedPublishDecision({ ...R, ...lax, certVerdict: 'CERTIFIED' })).publish, true);
+});
+
+test('the decision runs AGAIN on the final gates, so a last-second advisory stops an unattended post', () => {
+  /* reply.ts re-gates against a freshly probed page just before the submit click. The first
+     decision was taken on `pre`; an advisory that appears only in `final` must refuse too. */
+  assert.equal(reddit({}).publish, true, 'allowed on the first gates');
+  assert.equal(reddit({ gates: withAdvisory('duplicate') }).publish, false, 'refused on the final gates');
+  const src = readFileSync(new URL('../../src/commands/reply.ts', import.meta.url), 'utf8');
+  const tail = src.slice(src.indexOf('const final = evaluateGates('));
+  /* The whole block, exactly: called on the final gates and re-read karma with nothing spread after
+     them, and a refusal that records and RETURNS. A looser match let three mutants through (the
+     block skipped, the refusal ignored, `pre` spread back in over `final`). */
+  const block = tail.search(new RegExp(
+    String.raw`if \(autoInput\) \{\s*const again = unattendedPublishDecision\(\{ \.\.\.autoInput, gates: final, karma: verdict2\.counters\.karma \}\);` +
+    String.raw`\s*if \(!again\.publish\) \{\s*say\.fail\([^\n]*\n\s*await record\('publish\.refused'[^\n]*\n[^\n]*\n\s*\}\);\s*return 1;\s*\}\s*\}`
+  ));
+  assert.ok(block > 0, 'reply.ts must decide again on the final gates and return on a refusal');
+  assert.ok(block < tail.indexOf('publishComment('), 'before publishComment is reached');
 });
