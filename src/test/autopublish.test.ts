@@ -355,3 +355,12 @@ test('the decision runs AGAIN on the final gates, so a last-second advisory stop
   assert.ok(block > 0, 'reply.ts must decide again on the final gates and return on a refusal');
   assert.ok(block < tail.indexOf('publishComment('), 'before publishComment is reached');
 });
+
+test('the first unattended decision is taken before the thread dwell, not after it', () => {
+  /* #33 item 2: every publish.refused row on cardinal came after a 60-360 s pre-reply read, and
+     every input the decision reads is ready once the first gates have run. */
+  const src = readFileSync(new URL('../../src/commands/reply.ts', import.meta.url), 'utf8');
+  const decide = src.indexOf('unattendedPublishDecision(autoInput)');
+  assert.ok(decide > src.indexOf('const pre = evaluateGates('), 'after the first gates, which it reads');
+  assert.ok(decide < src.indexOf('viewThread('), 'before the thread dwell');
+});

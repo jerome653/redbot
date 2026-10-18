@@ -196,6 +196,59 @@ export async function reply(
       return 1;
     }
 
+    /**
+     * UNATTENDED: decide by rule, because there is nobody to ask.
+     *
+     * `choose()` blocks on a terminal that does not exist inside `redbot auto`, which is why the
+     * loop never called this command at all. With `opts.unattended` the answer comes from
+     * `unattendedPublishDecision` (src/autopublish.ts) instead — and that rule is STRICTER than
+     * the person it replaces: CERTIFIED (not merely ESCALATE), no hard gate, and no advisory of
+     * any kind. An advisory is only overrulable by someone who has read it, and reading is the
+     * one thing a loop cannot do.
+     *
+     * The refusal is recorded with its reason, not just returned, because the whole value of an
+     * unattended decision is being able to ask afterwards why it went the way it did.
+     *
+     * It runs here, before step 3, because every input is ready once the gates have run: a refusal
+     * after the 60-360 s read is a read spent on a thread the account then never answers (#33).
+     */
+    let unattendedWhy: string | null = null;
+    /* Kept for the second decision after the final re-gate (step 6). */
+    let autoInput: UnattendedInput | null = null;
+    if (opts?.unattended) {
+      autoInput = {
+        enabled: process.env.REDBOT_AUTO_PUBLISH,
+        certVerdict: target.certification?.verdict ?? null,
+        gates: pre,
+        /* Read by the REDDIT bar only. The certification row is loaded only under that bar, so the
+           other bars do exactly what they did, with no new read that could fail them. */
+        certAt: target.certification?.at ?? null,
+        latestCert: publishBar() === 'REDDIT'
+          ? await latestCertification(getPool(), target.id).catch((e: unknown) => {
+              say.warn(`  certification row unreadable: ${e instanceof Error ? e.message : String(e)}`);
+              return null;
+            })
+          : null,
+        permalink: target.permalink,
+        karma: verdict.counters.karma
+      };
+      const auto = unattendedPublishDecision(autoInput);
+      if (!auto.publish) {
+        say.fail(`  Not publishing unattended: ${auto.why}`);
+        await record('publish.refused', `unattended publish refused for ${target.id}: ${auto.why}`, {
+          draftId: target.id, why: auto.why, stage: 'unattended'
+        });
+        return 1;
+      }
+      say.ok(`  Publishing unattended: ${auto.why}`);
+      /* Kept for the approval reason below: `auto` is block-scoped here, and the branch that needs
+         its `why` is outside this block. */
+      unattendedWhy = auto.why;
+      await record('publish.unattended', `unattended publish allowed for ${target.id}: ${auto.why}`, {
+        draftId: target.id, why: auto.why
+      });
+    }
+
     /* ---------- 3. read the thread ---------- */
     if (thread && !opts?.quick) {
       say.step('Reading the thread and its comments before replying…');
@@ -343,56 +396,6 @@ export async function reply(
     if (preApproved) {
       say.ok('  Approved in the console — publishing without asking again.');
       if (preApproved.note) say.step(`  Reason given: ${preApproved.note}`);
-    }
-
-    /**
-     * UNATTENDED: decide by rule, because there is nobody to ask.
-     *
-     * `choose()` blocks on a terminal that does not exist inside `redbot auto`, which is why the
-     * loop never called this command at all. With `opts.unattended` the answer comes from
-     * `unattendedPublishDecision` (src/autopublish.ts) instead — and that rule is STRICTER than
-     * the person it replaces: CERTIFIED (not merely ESCALATE), no hard gate, and no advisory of
-     * any kind. An advisory is only overrulable by someone who has read it, and reading is the
-     * one thing a loop cannot do.
-     *
-     * The refusal is recorded with its reason, not just returned, because the whole value of an
-     * unattended decision is being able to ask afterwards why it went the way it did.
-     */
-    let unattendedWhy: string | null = null;
-    /* Kept for the second decision after the final re-gate (step 6). */
-    let autoInput: UnattendedInput | null = null;
-    if (opts?.unattended) {
-      autoInput = {
-        enabled: process.env.REDBOT_AUTO_PUBLISH,
-        certVerdict: target.certification?.verdict ?? null,
-        gates: pre,
-        /* Read by the REDDIT bar only. The certification row is loaded only under that bar, so the
-           other bars do exactly what they did, with no new read that could fail them. */
-        certAt: target.certification?.at ?? null,
-        latestCert: publishBar() === 'REDDIT'
-          ? await latestCertification(getPool(), target.id).catch((e: unknown) => {
-              say.warn(`  certification row unreadable: ${e instanceof Error ? e.message : String(e)}`);
-              return null;
-            })
-          : null,
-        permalink: target.permalink,
-        karma: verdict.counters.karma
-      };
-      const auto = unattendedPublishDecision(autoInput);
-      if (!auto.publish) {
-        say.fail(`  Not publishing unattended: ${auto.why}`);
-        await record('publish.refused', `unattended publish refused for ${target.id}: ${auto.why}`, {
-          draftId: target.id, why: auto.why, stage: 'unattended'
-        });
-        return 1;
-      }
-      say.ok(`  Publishing unattended: ${auto.why}`);
-      /* Kept for the approval reason below: `auto` is block-scoped here, and the branch that needs
-         its `why` is outside this block. */
-      unattendedWhy = auto.why;
-      await record('publish.unattended', `unattended publish allowed for ${target.id}: ${auto.why}`, {
-        draftId: target.id, why: auto.why
-      });
     }
 
     // 'r' is the safe answer: an unclear response must never resolve to publishing.
