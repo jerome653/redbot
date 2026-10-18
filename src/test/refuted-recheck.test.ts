@@ -27,10 +27,14 @@ const { saveDraft, saveThreads, loadDrafts, loadHistory } = await import('../sto
 const { insertCertification } = await import('../db/certifications.js');
 const { draftTimeBlocks } = await import('../draft-gate.js');
 const { upsertAccounts } = await import('../db/accounts.js');
-const { getPool } = await import('../db.js');
+const { getPool, closePool } = await import('../db.js');
 await upsertAccounts(getPool(), [{ handle: 'stub_account', role: 'support', subreddits: ['mysql'], dailyCeiling: 2 }], 'test-machine');
 
-after(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+/* Close the database first: on Windows an open file keeps rmSync from removing the folder (#30). */
+after(async () => {
+  await closePool();
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+});
 
 const S1 = 'Your import stops because one BLOB row is larger than max_allowed_packet on the server.';
 const S2 = 'MySQL truncates an oversized row silently and keeps going.';
