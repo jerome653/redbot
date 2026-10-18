@@ -14,6 +14,7 @@
  * Nothing here touches the database, the browser or a model; src/refuted-recheck.ts does the I/O.
  */
 import type { Certification } from './argus/types.js';
+import { FALSIFIABLE_TYPES } from './argus/types.js';
 
 /** The hard rules a deletion can answer: a claim proven false, and claims resting on it. */
 export const STRIP_RULES: ReadonlySet<string> = new Set(['fatal-contradiction', 'invalidated-dependency']);
@@ -205,6 +206,8 @@ export interface StripInput {
   protect?: readonly string[];
   /** True when this draft was itself cut by a strip. It is never cut again. */
   fromStrip?: boolean;
+  /** The publish bar in force (REDBOT_PUBLISH_MIN_VERDICT). Unset, no bar is checked. */
+  bar?: StripBar;
   minSentences?: number;
   minKeepRatio?: number;
 }
@@ -213,12 +216,41 @@ export type StripPlan =
   | { ok: true; body: string; removed: number; quotes: string[] }
   | { ok: false; why: string };
 
+export type StripBar = 'CERTIFIED' | 'ESCALATE' | 'REDDIT' | 'ANY';
+
+/**
+ * A reason the strip leaves standing that the bar in force still refuses on, so the
+ * re-certification could only end below that bar (#30). A reason on a deleted claim goes with it.
+ *
+ * Under CERTIFIED every remaining reason refuses. Under ESCALATE only the ones Argus files as REJECT
+ * reasons do (src/argus/certify.ts): `no-provenance` always, `overconfident-language` when its claim
+ * is falsifiable, and an `invalidated-dependency` resting on a claim nobody refuted. REDDIT and ANY
+ * already publish on soft rules, so nothing is predicted there.
+ */
+export function reasonBelowBar(
+  cert: Certification, gone: ReadonlySet<string>, bar: StripBar | undefined
+): Certification['reasons'][number] | null {
+  if (bar !== 'CERTIFIED' && bar !== 'ESCALATE') return null;
+  for (const r of cert.reasons) {
+    if (r.claimId && gone.has(r.claimId)) continue;
+    if (bar === 'CERTIFIED' || STRIP_RULES.has(r.rule) || r.rule === 'no-provenance') return r;
+    const claim = cert.claims.find((c) => c.id === r.claimId);
+    if (r.rule === 'overconfident-language' && claim && FALSIFIABLE_TYPES.has(claim.type)) return r;
+  }
+  return null;
+}
+
 export function planStrip(input: StripInput): StripPlan {
   const no = (why: string): StripPlan => ({ ok: false, why });
   if (input.fromStrip) return no('this draft is already the product of a strip');
   const cert = input.certs[input.certs.length - 1];
   const e = stripEligibility(cert);
   if (!e.ok) return no(e.why);
+  const standing = reasonBelowBar(cert!, new Set([...e.refuted, ...e.dependents]), input.bar);
+  if (standing) {
+    return no(`under the ${input.bar} bar the shorter reply would still carry ${standing.rule}` +
+      `${standing.claimId ? ` on claim ${standing.claimId}` : ''}, so its certification could only refuse again`);
+  }
 
   const { body } = input;
   const spans = sentenceSpans(body);

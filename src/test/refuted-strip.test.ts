@@ -4,7 +4,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { planStrip, stripEligibility, sentenceSpans, stripRefutedEnabled } from '../refuted-strip.js';
+import { planStrip, stripEligibility, sentenceSpans, stripRefutedEnabled, type StripBar } from '../refuted-strip.js';
 import type { Certification, Claim, VerdictReason } from '../argus/types.js';
 
 const DISCLOSURE = 'Disclosure: I work on SGEN.';
@@ -348,5 +348,57 @@ describe('what qualifies', () => {
     assert.equal(stripRefutedEnabled({}), true);
     assert.equal(stripRefutedEnabled({ REDBOT_STRIP_REFUTED: '1' }), true);
     assert.equal(stripRefutedEnabled({ REDBOT_STRIP_REFUTED: '0' }), false);
+  });
+});
+
+/*
+ * #30 item 4: `no-provenance` is soft here but a REJECT reason to Argus, so under a strict bar a
+ * draft carrying it was stripped and certified again only to be refused again.
+ */
+describe('the bar in force', () => {
+  const refutedOnly = claim('c2', 'truncates an oversized row silently');
+  const kept = claim('c1', 'failing on the packet size');
+  const opinion: Claim = { ...claim('c1', 'failing on the packet size'), type: 'opinion' };
+  const soft = (rule: string, claimId: string): VerdictReason => ({ rule, claimId, detail: rule });
+  const plan = (bar: StripBar | undefined, reasons: VerdictReason[], claims: Claim[] = [kept, refutedOnly]) =>
+    planStrip({ body: BODY, certs: [cert({ reasons, claims })], ...(bar ? { bar } : {}) });
+
+  test('under CERTIFIED any reason the strip leaves standing refuses, and names it', () => {
+    for (const rule of ['no-provenance', 'low-confidence-as-fact', 'falsifiable-claim-weak-evidence', 'overconfident-language']) {
+      const p = plan('CERTIFIED', [fatal('c2'), soft(rule, 'c1')]);
+      assert.equal(p.ok, false, rule);
+      if (!p.ok) assert.match(p.why, new RegExp(`CERTIFIED bar .*${rule} on claim c1`));
+    }
+  });
+
+  test('under ESCALATE only what Argus files as a REJECT reason refuses', () => {
+    for (const rule of ['no-provenance', 'overconfident-language']) {
+      const p = plan('ESCALATE', [fatal('c2'), soft(rule, 'c1')]);
+      assert.equal(p.ok, false, `${rule} on a falsifiable claim`);
+    }
+    for (const rule of ['low-confidence-as-fact', 'falsifiable-claim-weak-evidence']) {
+      const p = plan('ESCALATE', [fatal('c2'), soft(rule, 'c1')]);
+      assert.equal(p.ok, true, `${rule} only escalates: ${p.ok ? '' : p.why}`);
+    }
+    const o = plan('ESCALATE', [fatal('c2'), soft('overconfident-language', 'c1')], [opinion, refutedOnly]);
+    assert.equal(o.ok, true, `overconfident-language on an opinion only escalates: ${o.ok ? '' : o.why}`);
+  });
+
+  test('under ESCALATE a dependency resting on a claim nobody refuted refuses', () => {
+    const p = plan('ESCALATE', [fatal('c2'), dep('c1')]);
+    assert.equal(p.ok, false);
+    if (!p.ok) assert.match(p.why, /invalidated-dependency on claim c1/);
+  });
+
+  test('a reason on a claim the strip deletes goes with it', () => {
+    const p = plan('CERTIFIED', [fatal('c2'), soft('no-provenance', 'c2')]);
+    assert.equal(p.ok, true, p.ok ? '' : p.why);
+  });
+
+  test('REDDIT, ANY and an unset bar predict nothing', () => {
+    for (const bar of ['REDDIT', 'ANY', undefined] as const) {
+      const p = plan(bar, [fatal('c2'), soft('no-provenance', 'c1')]);
+      assert.equal(p.ok, true, `${bar}: ${p.ok ? '' : p.why}`);
+    }
   });
 });
