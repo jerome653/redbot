@@ -227,6 +227,66 @@ describe('the cycle, after a REJECT that a deletion can fix', () => {
     assert.deepEqual(rows, [], 'nothing was refused, because there was nothing to strip');
   });
 
+  test('when the link row cannot be written, nothing else is: no new draft, the original pending, no reply', async () => {
+    await saveThreads([thread('a00000000007')]);
+    await saveDraft(original('a00000000007'));
+    const db = getPool();
+    await db.query(`CREATE TRIGGER refuse_strip_link BEFORE INSERT ON history
+      WHEN NEW.kind = 'draft.rewrite' AND json_extract(NEW.data, '$.to') IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'link row refused by the test'); END`);
+    const { calls, certify } = stubCertify((d) => (d.id.endsWith('_orig') ? REFUTED : CERTIFIED));
+    const { got, reply } = stubReply();
+    try {
+      await assert.rejects(factCheckThenPublish('d_a00000000007_orig', { certify, reply, publish: () => true }), /link row refused/);
+    } finally { await db.query('DROP TRIGGER refuse_strip_link'); }
+
+    const drafts = (await loadDrafts()).filter((d) => d.threadId === 'a00000000007');
+    assert.deepEqual(drafts.map((d) => [d.id, d.status]), [['d_a00000000007_orig', 'pending']], 'the link is written before any draft');
+    assert.deepEqual(calls, ['d_a00000000007_orig']);
+    assert.deepEqual(got, []);
+  });
+
+  test('the production disclosure line is protected: a refuted quote inside it keeps the original', async () => {
+    const { config } = await import('../config.js');
+    await saveThreads([thread('a00000000008')]);
+    await saveDraft({ ...original('a00000000008'), body: `${BODY}\n\n${config.aiDisclosureLine}` });
+    const quote = config.aiDisclosureLine.split(' ').slice(-5).join(' ').replace(/\.$/, '');
+    const { calls, certify } = stubCertify((d) => (d.id.endsWith('_orig')
+      ? { reasons: [{ rule: 'fatal-contradiction', claimId: 'c9', detail: '' }], claims: [claim('c9', quote)] }
+      : CERTIFIED));
+    const { got, reply } = stubReply();
+
+    await factCheckThenPublish('d_a00000000008_orig', { certify, reply, publish: () => true });
+
+    assert.equal((await loadDrafts()).filter((d) => d.threadId === 'a00000000008').length, 1, 'no new draft');
+    assert.deepEqual(calls, ['d_a00000000008_orig']);
+    assert.deepEqual(got, ['d_a00000000008_orig']);
+    const refusal = (await loadHistory()).find((h) => h.kind === 'draft.rewrite' && h.data?.from === 'd_a00000000008_orig');
+    assert.match(String(refusal?.data?.refused), /disclosure/);
+  });
+
+  test('an error while preparing the strip keeps the original, records it, and reply gets the original id', async () => {
+    await saveThreads([thread('a00000000009')]);
+    await saveDraft(original('a00000000009'));
+    const db = getPool();
+    const { calls, certify: inner } = stubCertify(() => REFUTED);
+    const certify = async (id: string) => {
+      const n = await inner(id);
+      await db.query('ALTER TABLE gap_analyses RENAME TO gap_analyses_away');
+      return n;
+    };
+    const { got, reply } = stubReply();
+    try {
+      await factCheckThenPublish('d_a00000000009_orig', { certify, reply, publish: () => true });
+    } finally { await db.query('ALTER TABLE gap_analyses_away RENAME TO gap_analyses'); }
+
+    assert.deepEqual(calls, ['d_a00000000009_orig']);
+    assert.deepEqual(got, ['d_a00000000009_orig']);
+    assert.equal((await loadDrafts()).filter((d) => d.threadId === 'a00000000009').length, 1);
+    const refusal = (await loadHistory()).find((h) => h.kind === 'draft.rewrite' && h.data?.from === 'd_a00000000009_orig');
+    assert.match(String(refusal?.data?.refused), /gap_analyses/);
+  });
+
   test('an install that does not publish unattended never strips', async () => {
     await saveThreads([thread('a00000000004')]);
     await saveDraft(original('a00000000004'));

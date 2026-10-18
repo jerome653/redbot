@@ -115,6 +115,24 @@ describe('deleting what was refuted', () => {
     if (!p.ok) assert.match(p.why, /disclosure/);
   });
 
+  test('a quote reaching into ONE of two disclosure lines refuses, though the other copy would survive', () => {
+    /* The text check after deletion would pass here (a copy is left), so this pins the sentence guard. */
+    const body = `${DISCLOSURE} Your import is failing on the packet size. Raise max_allowed_packet in my.cnf and ` +
+      `restart the service. Then rerun the import from the shell.\n\n${DISCLOSURE}`;
+    const p = planStrip({ body, protect: [DISCLOSURE], certs: [cert({ reasons: [fatal('c1')], claims: [claim('c1', 'work on SGEN. Your import is failing')] })] });
+    assert.equal(p.ok, false, 'one copy of the disclosure is still a disclosure removed');
+    if (!p.ok) assert.match(p.why, /disclosure/);
+  });
+
+  test('a disclosure line the clean-up would alter refuses: the last check compares the text itself', () => {
+    /* No refuted sentence touches the line, so this pins the text check, not the sentence guard:
+       trailing spaces on a line are trimmed by the clean-up, which changes the protected text. */
+    const line = `${DISCLOSURE}  `;
+    const p = planStrip({ body: `${BODY}\n\n${line}\nThanks for the details.`, protect: [line], certs: [cert({ reasons: [fatal('c2')], claims: [claim('c2', 'truncates an oversized row silently')] })] });
+    assert.equal(p.ok, false);
+    if (!p.ok) assert.match(p.why, /disclosure/);
+  });
+
   test('a strip elsewhere keeps the disclosure line, and it does not count as a sentence of the reply', () => {
     const body = `${BODY}\n\n${DISCLOSURE}`;
     const ok = planStrip({ body, protect: [DISCLOSURE], certs: [cert({ reasons: [fatal('c2')], claims: [claim('c2', 'truncates an oversized row silently')] })] });
