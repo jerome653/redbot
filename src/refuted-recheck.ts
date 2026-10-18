@@ -16,6 +16,7 @@ import { lintDraft } from './disclosure.js';
 import { checkNovelty } from './novelty.js';
 import { loadDraftChecks, draftBlocks, newDraftId } from './commands/draft.js';
 import { planStrip, hasRefutedClaim } from './refuted-strip.js';
+import { publishBar } from './autopublish.js';
 import { record, say } from './log.js';
 import type { Draft } from './types.js';
 
@@ -35,7 +36,8 @@ async function prepare(draftId: string): Promise<Prepared> {
     body: old.body,
     certs,
     protect: [config.brand.disclosureLine, config.aiDisclosureLine],
-    fromStrip: (await strippedFrom(db, draftId)) !== null
+    fromStrip: (await strippedFrom(db, draftId)) !== null,
+    bar: publishBar()
   });
   if (!plan.ok) return { why: plan.why };
 
