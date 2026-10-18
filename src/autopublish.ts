@@ -187,8 +187,8 @@ export const KARMA_FLOOR_SUBS: ReadonlySet<string> = new Set(['wordpress']);
 
 const VERDICTS: ReadonlySet<string> = new Set(['CERTIFIED', 'ESCALATE', 'REJECT']);
 
-/** Everything REDDIT asks beyond the verdict. Returns a refusal, or the soft rules it waived. */
-function redditBar(input: UnattendedInput, verdict: string): { refuse: string } | { waived: string[] } {
+/** What REDDIT asks of the certification row. Returns a refusal, or the soft rules it waived. */
+function redditBar(input: CertificationInput, verdict: string): { refuse: string } | { waived: string[] } {
   /* Verdict and rules from ONE row, the newest: certifications are append-only, and a verdict
      from one run judged against the rules of another is a verdict nobody computed. */
   const row = input.latestCert;
@@ -212,36 +212,60 @@ function redditBar(input: UnattendedInput, verdict: string): { refuse: string } 
     if (hard.length) return { refuse: `certification ${verdict} carries blocking rule(s): ${hard.join(', ')}` };
     waived = rules;
   }
+  return { waived };
+}
 
+/** What REDDIT asks that no certification knows: where the post would go, and the karma it goes with. */
+function redditPlacement(input: UnattendedInput): { refuse: string } | null {
   const sub = /\/r\/([A-Za-z0-9_]+)(?:[/?#]|$)/.exec(input.permalink ?? '')?.[1]?.toLowerCase();
   if (!sub || sub === 'unknown') return { refuse: `cannot read the subreddit from "${input.permalink ?? ''}"` };
   const floor = policy.cautionKarmaBelow.value;
   if (KARMA_FLOOR_SUBS.has(sub) && !(typeof input.karma === 'number' && input.karma >= floor)) {
     return { refuse: `r/${sub} waits for karma ${floor} before posting unattended; the posting account has ${input.karma ?? 'never measured'}` };
   }
-  return { waived };
+  return null;
 }
 
-export function unattendedPublishDecision(input: UnattendedInput): UnattendedDecision {
+/** The inputs the certification alone decides on: no page, no gates, no karma. */
+export type CertificationInput = Pick<UnattendedInput, 'enabled' | 'certVerdict' | 'certAt' | 'latestCert'>;
+
+/**
+ * The part of the decision that needs no page, so src/commands/reply.ts can run it before the
+ * thread opens: an unattended reply refused here never dwells 60-360 s on a thread it will not
+ * answer (issue #33 item 2). It ONLY refuses. A pass hands the verdict, the bar and (REDDIT only)
+ * the waived rules to unattendedPublishDecision, which calls this first, so the early refusal and
+ * the full one are one code path and cannot word the same reason two ways.
+ */
+export function certificationOnlyRefusal(input: CertificationInput):
+  { refuse: string } | { verdict: string; bar: VerdictBar; waived: string[] | null } {
   /* Off unless switched on explicitly, and only by exactly "1". A truthy-string check would
      make REDBOT_AUTO_PUBLISH=0 and =false both mean ON, which is the shape of switch that gets
      left on by accident. */
   if (input.enabled !== '1') {
-    return { publish: false, why: 'unattended publishing is off (REDBOT_AUTO_PUBLISH is not "1")' };
+    return { refuse: 'unattended publishing is off (REDBOT_AUTO_PUBLISH is not "1")' };
   }
 
   /* No certification at all is not the same as a failed one, and neither may publish. A draft
      that was never certified has had no claim checked against anything. */
   const verdict = (input.certVerdict ?? '').trim().toUpperCase();
   if (!verdict) {
-    return { publish: false, why: 'the draft carries no certification verdict — nothing has checked its claims' };
+    return { refuse: 'the draft carries no certification verdict — nothing has checked its claims' };
   }
   const bar = publishBar();
   if (!clearsBar(verdict, bar)) {
-    return { publish: false, why: `certification verdict is ${verdict}, and this install requires ${bar === 'ANY' || bar === 'REDDIT' ? 'a verdict' : bar} to publish unattended` };
+    return { refuse: `certification verdict is ${verdict}, and this install requires ${bar === 'ANY' || bar === 'REDDIT' ? 'a verdict' : bar} to publish unattended` };
   }
   const reddit = bar === 'REDDIT' ? redditBar(input, verdict) : null;
-  if (reddit && 'refuse' in reddit) return { publish: false, why: `REDDIT bar: ${reddit.refuse}` };
+  if (reddit && 'refuse' in reddit) return { refuse: `REDDIT bar: ${reddit.refuse}` };
+  return { verdict, bar, waived: reddit ? reddit.waived : null };
+}
+
+export function unattendedPublishDecision(input: UnattendedInput): UnattendedDecision {
+  const cert = certificationOnlyRefusal(input);
+  if ('refuse' in cert) return { publish: false, why: cert.refuse };
+  const { verdict, bar, waived } = cert;
+  const placed = bar === 'REDDIT' ? redditPlacement(input) : null;
+  if (placed) return { publish: false, why: `REDDIT bar: ${placed.refuse}` };
 
   /* Gates not run is a refusal, not a pass. `evaluateGates` is what knows about duplicates,
      locked and archived threads, the warming rules and the window — every live-page fact that
@@ -277,7 +301,7 @@ export function unattendedPublishDecision(input: UnattendedInput): UnattendedDec
 
   /* Under REDDIT a REJECT here has no contradiction behind it (those rules refuse above), so the
      ANY caveat would be false; the record names what was waived instead. */
-  const caveat = reddit ? (reddit.waived.length ? ` — waived: ${reddit.waived.join(', ')}` : '')
+  const caveat = waived ? (waived.length ? ` — waived: ${waived.join(', ')}` : '')
     : verdict === PUBLISHABLE_VERDICT ? ''
     : verdict === 'ESCALATE'
       ? ' — ESCALATE means the checker wanted a person to confirm the facts and nobody did'

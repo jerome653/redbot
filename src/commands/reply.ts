@@ -33,7 +33,7 @@ import { autoBackup } from '../backup.js';
 import { publishComment } from '../reddit/post.js';
 import { lintDraft, ensureDisclosure } from '../disclosure.js';
 import { evaluateGates } from '../gates.js';
-import { unattendedPublishDecision, publishBar, type UnattendedInput } from '../autopublish.js';
+import { unattendedPublishDecision, certificationOnlyRefusal, publishBar, type UnattendedInput } from '../autopublish.js';
 import { latestCertification } from '../db/certifications.js';
 import { getPool } from '../db.js';
 import { health } from '../health.js';
@@ -107,6 +107,39 @@ export async function reply(
   if (target.status !== 'pending') {
     say.warn(`Draft ${target.id} is already "${target.status}".`);
     return NOTHING_TO_DO;
+  }
+
+  /**
+   * UNATTENDED, before the page opens: what the certification alone decides. None of it needs the
+   * page, so a draft it refuses is refused before the account opens the thread and dwells on it
+   * (#33). It only ever refuses: the full decision below still runs on every unattended publish.
+   * A person-driven run is never refused here, because they may still overrule a REJECT.
+   */
+  let latestCert: UnattendedInput['latestCert'] = null;
+  if (opts?.unattended) {
+    /* Read by the REDDIT bar only. The certification row is loaded only under that bar, so the
+       other bars do exactly what they did, with no new read that could fail them. */
+    latestCert = publishBar() === 'REDDIT'
+      ? await latestCertification(getPool(), target.id).catch((e: unknown) => {
+          say.warn(`  certification row unreadable: ${e instanceof Error ? e.message : String(e)}`);
+          return null;
+        })
+      : null;
+    const early = certificationOnlyRefusal({
+      enabled: process.env.REDBOT_AUTO_PUBLISH,
+      certVerdict: target.certification?.verdict ?? null,
+      certAt: target.certification?.at ?? null,
+      latestCert
+    });
+    if ('refuse' in early) {
+      say.fail(`  Not publishing unattended: ${early.refuse}`);
+      /* Nothing has signed in for this draft yet, so the row names the draft's account (record()
+         falls back to the last setAccount when the draft carries none). */
+      await record('publish.refused', `unattended publish refused for ${target.id}: ${early.refuse}`, {
+        draftId: target.id, why: early.refuse, stage: 'unattended', before: 'page', account: target.account ?? null
+      });
+      return 1;
+    }
   }
 
   const thread = (await loadThreads()).find((t) => t.id === target.threadId);
@@ -220,15 +253,9 @@ export async function reply(
         enabled: process.env.REDBOT_AUTO_PUBLISH,
         certVerdict: target.certification?.verdict ?? null,
         gates: pre,
-        /* Read by the REDDIT bar only. The certification row is loaded only under that bar, so the
-           other bars do exactly what they did, with no new read that could fail them. */
+        /* Read by the REDDIT bar only; the row is the one read before the page opened. */
         certAt: target.certification?.at ?? null,
-        latestCert: publishBar() === 'REDDIT'
-          ? await latestCertification(getPool(), target.id).catch((e: unknown) => {
-              say.warn(`  certification row unreadable: ${e instanceof Error ? e.message : String(e)}`);
-              return null;
-            })
-          : null,
+        latestCert,
         permalink: target.permalink,
         karma: verdict.counters.karma
       };
