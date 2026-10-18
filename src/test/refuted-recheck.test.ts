@@ -27,10 +27,14 @@ const { saveDraft, saveThreads, loadDrafts, loadHistory } = await import('../sto
 const { insertCertification } = await import('../db/certifications.js');
 const { draftTimeBlocks } = await import('../draft-gate.js');
 const { upsertAccounts } = await import('../db/accounts.js');
-const { getPool } = await import('../db.js');
+const { getPool, closePool } = await import('../db.js');
 await upsertAccounts(getPool(), [{ handle: 'stub_account', role: 'support', subreddits: ['mysql'], dailyCeiling: 2 }], 'test-machine');
 
-after(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+/* Close the database first: on Windows an open file keeps rmSync from removing the folder (#30). */
+after(async () => {
+  await closePool();
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+});
 
 const S1 = 'Your import stops because one BLOB row is larger than max_allowed_packet on the server.';
 const S2 = 'MySQL truncates an oversized row silently and keeps going.';
@@ -298,5 +302,31 @@ describe('the cycle, after a REJECT that a deletion can fix', () => {
     assert.deepEqual(calls, ['d_a00000000004_orig']);
     assert.deepEqual(got, []);
     assert.equal((await loadDrafts()).filter((d) => d.threadId === 'a00000000004').length, 1);
+  });
+
+  test('the bar in force reaches the strip: CERTIFIED refuses a kept no-provenance claim, REDDIT strips (#30)', async () => {
+    const plan = { ...REFUTED, reasons: [...REFUTED.reasons, { rule: 'no-provenance', claimId: 'c1', detail: '' }] };
+    const prior = process.env.REDBOT_PUBLISH_MIN_VERDICT;
+    try {
+      process.env.REDBOT_PUBLISH_MIN_VERDICT = 'CERTIFIED';
+      await saveThreads([thread('a0000000000a')]);
+      await saveDraft(original('a0000000000a'));
+      const strict = stubCertify(() => plan);
+      await factCheckThenPublish('d_a0000000000a_orig', { certify: strict.certify, reply: stubReply().reply, publish: () => true });
+      assert.deepEqual(strict.calls, ['d_a0000000000a_orig'], 'no second certification under CERTIFIED');
+      assert.equal((await loadDrafts()).filter((d) => d.threadId === 'a0000000000a').length, 1, 'no new draft');
+      const refusal = (await loadHistory()).find((h) => h.kind === 'draft.rewrite' && h.data?.from === 'd_a0000000000a_orig');
+      assert.match(String(refusal?.data?.refused), /CERTIFIED bar .*no-provenance on claim c1/);
+
+      process.env.REDBOT_PUBLISH_MIN_VERDICT = 'REDDIT';
+      await saveThreads([thread('a0000000000b')]);
+      await saveDraft(original('a0000000000b'));
+      const reddit = stubCertify((d) => (d.id.endsWith('_orig') ? plan : CERTIFIED));
+      await factCheckThenPublish('d_a0000000000b_orig', { certify: reddit.certify, reply: stubReply().reply, publish: () => true });
+      assert.equal(reddit.calls.length, 2, 'under REDDIT the strip runs and the new draft is certified once');
+    } finally {
+      if (prior === undefined) delete process.env.REDBOT_PUBLISH_MIN_VERDICT;
+      else process.env.REDBOT_PUBLISH_MIN_VERDICT = prior;
+    }
   });
 });
