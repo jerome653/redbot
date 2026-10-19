@@ -63,6 +63,9 @@ import { counters } from '../health.js';
 import type { Draft, Thread } from '../types.js';
 import { NOTHING_TO_DO, FAILED } from '../exit-codes.js';
 
+/** Model calls per warmup: the draft plus one rewrite after a warming-rule refusal. */
+export const WARMUP_ATTEMPTS = 2;
+
 interface RawWarm { comment?: unknown; why?: unknown; decline?: unknown }
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
@@ -188,46 +191,62 @@ export async function warmupDraft(opts?: { dry?: boolean }): Promise<WarmupResul
         + `${persona.maxSentences !== null ? ` · max ${persona.maxSentences} sentence(s)` : ''}`
       : 'Voice   : none — no persona for this account'
   );
-  say.step(`Writing with ${config.llm.draftModel}…`);
-  let raw: string;
-  try {
-    raw = await complete({
-      prompt: warmupPrompt(thread, persona),
-      model: config.llm.draftModel,
-      maxTokens: 700,
-      temperature: 0.6
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    say.fail(msg);
-    await record('error', `warmup draft failed for ${thread.id}: ${msg}`);
-    return done(1, `model call failed: ${msg}`);
-  }
-
-  let parsed: RawWarm;
-  try {
-    parsed = extractJson<RawWarm>(raw);
-  } catch {
-    say.fail('The model did not return the required JSON. Nothing saved.');
-    return done(1, 'model returned no JSON');
-  }
-
   /**
-   * Declining is a correct outcome and is recorded as one. A warming comment on a thread the
-   * model has nothing useful to say about is worse than no comment — it is the filler that
-   * makes an account look like a bot.
+   * TWO ATTEMPTS. A first draft the warming rules refuse is rewritten once, with the refusal
+   * quoted back, before the thread is given up: the cheap local check (outcome-claim above all,
+   * measured 2026-10-19) is what keeps a doomed comment from costing a certification run, and a
+   * second model call is cheaper than that run. Never a third.
    */
-  if (parsed.decline === true || !str(parsed.comment)) {
-    say.ok('Declined — nothing genuinely useful to add here.');
-    say.step(str(parsed.why) || '(no reason given)');
-    await record('draft.declined', `warmup declined for ${thread.id}`, { threadId: thread.id, account: account.handle, warming: true });
-    return done(0, 'declined — nothing useful to add');
-  }
+  let feedback = '';
+  let body = '';
+  let warm = checkWarmingComment('');
+  for (let attempt = 1; attempt <= WARMUP_ATTEMPTS; attempt++) {
+    say.step(`Writing with ${config.llm.draftModel}…${attempt > 1 ? ` (rewrite ${attempt}/${WARMUP_ATTEMPTS})` : ''}`);
+    let raw: string;
+    try {
+      raw = await complete({
+        prompt: warmupPrompt(thread, persona) + feedback,
+        model: config.llm.draftModel,
+        maxTokens: 700,
+        temperature: 0.6
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      say.fail(msg);
+      await record('error', `warmup draft failed for ${thread.id}: ${msg}`);
+      return done(1, `model call failed: ${msg}`);
+    }
 
-  const body = str(parsed.comment);
+    let parsed: RawWarm;
+    try {
+      parsed = extractJson<RawWarm>(raw);
+    } catch {
+      say.fail('The model did not return the required JSON. Nothing saved.');
+      return done(1, 'model returned no JSON');
+    }
+
+    /**
+     * Declining is a correct outcome and is recorded as one. A warming comment on a thread the
+     * model has nothing useful to say about is worse than no comment — it is the filler that
+     * makes an account look like a bot.
+     */
+    if (parsed.decline === true || !str(parsed.comment)) {
+      say.ok('Declined — nothing genuinely useful to add here.');
+      say.step(str(parsed.why) || '(no reason given)');
+      await record('draft.declined', `warmup declined for ${thread.id}`, { threadId: thread.id, account: account.handle, warming: true });
+      return done(0, 'declined — nothing useful to add');
+    }
+
+    body = str(parsed.comment);
+    warm = checkWarmingComment(body);
+    if (warm.ok || attempt === WARMUP_ATTEMPTS) break;
+    for (const i of warm.issues) say.warn(`  [${i.rule}] ${i.detail} — rewriting`);
+    feedback = `\n\nYOUR PREVIOUS DRAFT WAS REFUSED:\n"${body}"\n` +
+      warm.issues.map((i) => `- ${i.rule}: ${i.detail}`).join('\n') +
+      `\nWrite it again: one clarifying question, optionally after one "I'd check X first." line.`;
+  }
 
   /* ---------- 4. the warming rules, actually applied ---------- */
-  const warm = checkWarmingComment(body);
   const lint = lintDraft(body);
 
   say.info('\n--- draft ---\n');
