@@ -35,6 +35,7 @@ import { lintDraft, ensureDisclosure } from '../disclosure.js';
 import { evaluateGates } from '../gates.js';
 import { unattendedPublishDecision, certificationOnlyRefusal, publishBar, type UnattendedInput } from '../autopublish.js';
 import { latestCertification } from '../db/certifications.js';
+import { isWarmupDraftId } from '../warming.js';
 import { getPool } from '../db.js';
 import { health } from '../health.js';
 import { viewThread } from '../behavior.js';
@@ -109,6 +110,12 @@ export async function reply(
     return NOTHING_TO_DO;
   }
 
+  /* A warmup draft (`w_…`, src/commands/warmup.ts) is tagged on every publish.* row, so karma
+     progress can be audited from history alone; its body feeds the REDDIT bar's warmup waiver. */
+  const warmup = isWarmupDraftId(target.id);
+  const warmTag = warmup ? { warming: true } : {};
+  const warmupBody = warmup ? target.body : null;
+
   /**
    * UNATTENDED, before the page opens: what the certification alone decides. None of it needs the
    * page, so a draft it refuses is refused before the account opens the thread and dwells on it
@@ -129,14 +136,15 @@ export async function reply(
       enabled: process.env.REDBOT_AUTO_PUBLISH,
       certVerdict: target.certification?.verdict ?? null,
       certAt: target.certification?.at ?? null,
-      latestCert
+      latestCert,
+      warmupBody
     });
     if ('refuse' in early) {
       say.fail(`  Not publishing unattended: ${early.refuse}`);
       /* Nothing has signed in for this draft yet, so the row names the draft's account (record()
          falls back to the last setAccount when the draft carries none). */
       await record('publish.refused', `unattended publish refused for ${target.id}: ${early.refuse}`, {
-        draftId: target.id, why: early.refuse, stage: 'unattended', before: 'page', account: target.account ?? null
+        draftId: target.id, why: early.refuse, stage: 'unattended', before: 'page', account: target.account ?? null, ...warmTag
       });
       return 1;
     }
@@ -257,13 +265,14 @@ export async function reply(
         certAt: target.certification?.at ?? null,
         latestCert,
         permalink: target.permalink,
-        karma: verdict.counters.karma
+        karma: verdict.counters.karma,
+        warmupBody
       };
       const auto = unattendedPublishDecision(autoInput);
       if (!auto.publish) {
         say.fail(`  Not publishing unattended: ${auto.why}`);
         await record('publish.refused', `unattended publish refused for ${target.id}: ${auto.why}`, {
-          draftId: target.id, why: auto.why, stage: 'unattended'
+          draftId: target.id, why: auto.why, stage: 'unattended', ...warmTag
         });
         return 1;
       }
@@ -272,7 +281,7 @@ export async function reply(
          its `why` is outside this block. */
       unattendedWhy = auto.why;
       await record('publish.unattended', `unattended publish allowed for ${target.id}: ${auto.why}`, {
-        draftId: target.id, why: auto.why
+        draftId: target.id, why: auto.why, ...warmTag
       });
     }
 
@@ -560,7 +569,7 @@ export async function reply(
       if (!again.publish) {
         say.fail(`  Not publishing unattended — at the final check: ${again.why}`);
         await record('publish.refused', `unattended publish refused at final check for ${target.id}: ${again.why}`, {
-          draftId: target.id, why: again.why, stage: 'final'
+          draftId: target.id, why: again.why, stage: 'final', ...warmTag
         });
         return 1;
       }
@@ -574,7 +583,7 @@ export async function reply(
 
     say.step('Publishing…');
     await record('publish.attempt', `submitting to ${target.permalink}`, {
-      draftId: target.id, permalink: target.permalink, body: target.body
+      draftId: target.id, permalink: target.permalink, body: target.body, ...warmTag
     });
 
     const result = await publishComment(s.page, target.permalink, target.body);
@@ -590,7 +599,7 @@ export async function reply(
         say.warn('Reddit did not expose a comment permalink on the node — checkpoints will match on text instead.');
       }
       await record('publish.ok', `published ${target.id}`, {
-        draftId: target.id, url: result.url, commentPermalink: result.commentPermalink, commentId: result.commentId
+        draftId: target.id, url: result.url, commentPermalink: result.commentPermalink, commentId: result.commentId, ...warmTag
       });
 
       /**
@@ -646,7 +655,7 @@ export async function reply(
     say.fail(`Publish failed: ${result.error}`);
     say.warn('If you are unsure whether it landed, open the thread and check by hand before retrying.');
     await record('publish.fail', `failed ${target.id}: ${result.error}`, {
-      draftId: target.id, error: result.error
+      draftId: target.id, error: result.error, ...warmTag
     });
     return 1;
   } finally {

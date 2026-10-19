@@ -34,7 +34,9 @@
  *   5. saves it as a draft owned by this account
  *
  * It does **not** publish. A warming comment is public content, so it stops at the same gate
- * every other public statement stops at.
+ * every other public statement stops at. `redbot auto` (src/commands/auto.ts warmupStep) calls
+ * `warmupDraft` and hands the saved id to the same unattended publish path the contribution draft
+ * takes, so pacing, gates, health and the publish bar decide — never this file.
  *
  * ## Why warming is not the contribution pipeline
  *
@@ -54,8 +56,9 @@ import { config, selectedAccount } from '../config.js';
 import { policy } from '../policy.js';
 import { record, say } from '../log.js';
 import {
-  isWarmingTarget, checkWarmingPace, checkWarmingComment
+  isWarmingTarget, checkWarmingPace, checkWarmingComment, WARMUP_DRAFT_PREFIX
 } from '../warming.js';
+import { KARMA_FLOOR_SUBS } from '../autopublish.js';
 import { counters } from '../health.js';
 import type { Draft, Thread } from '../types.js';
 import { NOTHING_TO_DO, FAILED } from '../exit-codes.js';
@@ -79,13 +82,47 @@ async function minutesSinceLastPublish(account: string): Promise<number | null> 
   return last === undefined ? null : (Date.now() - last) / 60_000;
 }
 
+/**
+ * The threads worth a warming comment, youngest first.
+ *
+ * Under the karma floor the KARMA_FLOOR_SUBS (r/wordpress) are skipped: a karma-1 comment there is
+ * filtered by the subreddit, and the unattended publish refuses it anyway (src/autopublish.ts
+ * redditPlacement) — so drafting one spends a model call on a comment that cannot be seen.
+ */
+export function warmingCandidates(
+  threads: Thread[], drafted: ReadonlySet<string>, now: number, karma: number | null
+): Array<{ t: Thread; age: number | null; verdict: { ok: boolean; why: string } }> {
+  const underFloor = !(typeof karma === 'number' && karma >= policy.cautionKarmaBelow.value);
+  return threads
+    .filter((t) => !drafted.has(t.id))
+    .filter((t) => !(underFloor && KARMA_FLOOR_SUBS.has(t.subreddit.toLowerCase())))
+    .map((t) => ({ t, age: currentAgeHours(t, now), verdict: isWarmingTarget({
+      ageHours: currentAgeHours(t, now),
+      commentCount: t.commentCount,
+      subreddit: t.subreddit,
+      title: t.title
+    }) }))
+    .filter((r) => r.verdict.ok)
+    // youngest first: the whole point is being read before the thread is buried
+    .sort((a, b) => (a.age ?? 1e9) - (b.age ?? 1e9));
+}
+
+/** What one warmup run did: the CLI's exit code, and the draft it saved (null when none). */
+export interface WarmupResult { code: number; draftId: string | null; reason: string }
+
+/** `redbot warmup`. The exit code is unchanged; the work is in warmupDraft. */
 export async function warmup(opts?: { dry?: boolean }): Promise<number> {
+  return (await warmupDraft(opts)).code;
+}
+
+export async function warmupDraft(opts?: { dry?: boolean }): Promise<WarmupResult> {
   say.head('redbot warmup');
+  const done = (code: number, reason: string, draftId: string | null = null): WarmupResult => ({ code, draftId, reason });
 
   const account = selectedAccount();
   if (!account) {
     say.fail('No account selected. Warming is per-account — set REDBOT_ACCOUNT.');
-    return FAILED;
+    return done(FAILED, 'no account selected');
   }
 
   /* ---------- 1. may this account act at all right now? ---------- */
@@ -102,23 +139,12 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
     for (const i of pace.issues) say.fail(`  [${i.rule}] ${i.detail}`);
     say.step('Nothing was drafted. Warming is a marathon — this is the pace holding, not a failure.');
     /* And now the exit code agrees with that sentence, which it did not for the pace's whole life. */
-    return NOTHING_TO_DO;
+    return done(NOTHING_TO_DO, `pace: ${pace.issues.map((i) => i.rule).join(', ')}`);
   }
 
   /* ---------- 2. which threads are worth a comment ---------- */
   const drafted = new Set((await loadDrafts()).map((d) => d.threadId));
-  const now = Date.now();
-  const candidates = (await loadThreads())
-    .filter((t) => !drafted.has(t.id))
-    .map((t) => ({ t, age: currentAgeHours(t, now), verdict: isWarmingTarget({
-      ageHours: currentAgeHours(t, now),
-      commentCount: t.commentCount,
-      subreddit: t.subreddit,
-      title: t.title
-    }) }))
-    .filter((r) => r.verdict.ok)
-    // youngest first: the whole point is being read before the thread is buried
-    .sort((a, b) => (a.age ?? 1e9) - (b.age ?? 1e9));
+  const candidates = warmingCandidates(await loadThreads(), drafted, Date.now(), c.karma);
 
   say.step(`Targets : ${candidates.length} thread(s) inside the warming window`);
   if (!candidates.length) {
@@ -140,7 +166,7 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
     say.warn(`No thread is young enough with few enough answers. Collect again closer to the hour —`);
     say.warn(`warming needs threads under ${maxAge}h with at most ${maxAnswers} answers, and a batch collected hours ago has none left.`);
     /* A corpus with nothing young enough is nothing to do, not a fault in warming. */
-    return NOTHING_TO_DO;
+    return done(NOTHING_TO_DO, 'no thread inside the warming window');
   }
 
   const pick = candidates[0]!;
@@ -174,8 +200,8 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     say.fail(msg);
-    record('error', `warmup draft failed for ${thread.id}: ${msg}`);
-    return 1;
+    await record('error', `warmup draft failed for ${thread.id}: ${msg}`);
+    return done(1, `model call failed: ${msg}`);
   }
 
   let parsed: RawWarm;
@@ -183,7 +209,7 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
     parsed = extractJson<RawWarm>(raw);
   } catch {
     say.fail('The model did not return the required JSON. Nothing saved.');
-    return 1;
+    return done(1, 'model returned no JSON');
   }
 
   /**
@@ -194,8 +220,8 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
   if (parsed.decline === true || !str(parsed.comment)) {
     say.ok('Declined — nothing genuinely useful to add here.');
     say.step(str(parsed.why) || '(no reason given)');
-    record('draft.declined', `warmup declined for ${thread.id}`, { threadId: thread.id, account: account.handle });
-    return 0;
+    await record('draft.declined', `warmup declined for ${thread.id}`, { threadId: thread.id, account: account.handle, warming: true });
+    return done(0, 'declined — nothing useful to add');
   }
 
   const body = str(parsed.comment);
@@ -212,10 +238,10 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
   if (!warm.ok) {
     for (const i of warm.issues) say.fail(`  [${i.rule}] ${i.detail}`);
     say.step('Refused by the warming rules. Nothing was saved.');
-    record('gate.block', `warmup refused for ${thread.id}`, {
-      threadId: thread.id, account: account.handle, rules: warm.issues.map((i) => i.rule)
+    await record('gate.block', `warmup refused for ${thread.id}`, {
+      threadId: thread.id, account: account.handle, rules: warm.issues.map((i) => i.rule), warming: true
     });
-    return 1;
+    return done(1, `warming rules: ${warm.issues.map((i) => i.rule).join(', ')}`);
   }
   /**
    * This account's own banned phrases, checked rather than requested.
@@ -230,26 +256,26 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
   if (banned.length) {
     for (const phrase of banned) say.fail(`  [persona] ${account.handle} never writes "${phrase}"`);
     say.step('Refused by this account\'s own phrase list. Nothing was saved.');
-    record('gate.block', `warmup refused for ${thread.id}`, {
+    await record('gate.block', `warmup refused for ${thread.id}`, {
       threadId: thread.id, account: account.handle,
-      rules: ['persona:banned-phrase'], phrases: banned
+      rules: ['persona:banned-phrase'], phrases: banned, warming: true
     });
-    return 1;
+    return done(1, 'persona banned phrase');
   }
   if (!lint.ok) {
     for (const i of lint.issues) say.fail(`  [linter] ${i}`);
     say.step('Refused by the safety linter. Nothing was saved.');
-    return 1;
+    return done(1, `linter: ${lint.issues.join('; ')}`);
   }
 
   if (opts?.dry) {
     say.ok('Dry run — passed every warming rule. Not saved.');
-    return 0;
+    return done(0, 'dry run — not saved');
   }
 
   /* ---------- 5. save it, owned by this account ---------- */
   const saved: Draft = {
-    id: `w_${thread.id}_${Date.now().toString(36)}`,
+    id: `${WARMUP_DRAFT_PREFIX}${thread.id}_${Date.now().toString(36)}`,
     threadId: thread.id,
     permalink: thread.permalink,
     title: thread.title,
@@ -261,12 +287,13 @@ export async function warmup(opts?: { dry?: boolean }): Promise<number> {
     account: account.handle,
     status: 'pending'
   };
-  saveDraft(saved);
+  /* Awaited: it was not, and `redbot auto` reads the draft back the moment this returns. */
+  await saveDraft(saved);
 
   say.ok(`Saved ${saved.id} — passed every stage-1 warming rule.`);
   say.step('Publishing is still a person: approve it in the console, or `redbot reply ' + saved.id + '`.');
-  record('draft', `warmup drafted for "${thread.title.slice(0, 50)}"`, {
+  await record('draft', `warmup drafted for "${thread.title.slice(0, 50)}"`, {
     draftId: saved.id, threadId: thread.id, account: account.handle, warming: true
   });
-  return 0;
+  return done(0, 'saved', saved.id);
 }
