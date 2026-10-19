@@ -151,6 +151,14 @@ function promotionalTerms(): string[] {
 export const WARMING_MAX_WORDS = 120;
 export const WARMING_MIN_WORDS = 12;
 
+/** Phrases that promise a result: the shape Argus contradicts (see checkWarmingComment). */
+export const OUTCOME_CLAIM_PATTERNS: readonly RegExp[] = [
+  /\bso (?:that )?(?:users?|you|people|visitors|they|it|nobody|no one)\b[^.?!]{0,40}\b(?:aren't|won't|don't|can't|isn't|never|will|stays?|gets?)\b/i,
+  /\b(?:prevents?|ensures?|guarantees?|eliminates?)\b/i,
+  /\bwill (?:fix|solve|stop|prevent|resolve|speed up|make sure)\b/i,
+  /\b(?:is|are) (?:always|never) (?:better|faster|safer)\b/i
+];
+
 export function checkWarmingComment(body: string): WarmingVerdict {
   const issues: WarmingIssue[] = [];
   const warnings: string[] = [];
@@ -183,6 +191,24 @@ export function checkWarmingComment(body: string): WarmingVerdict {
   }
   if (words < WARMING_MIN_WORDS) {
     issues.push({ rule: 'too-short', detail: `${words} words — too thin to be worth a stranger's attention` });
+  }
+
+  /**
+   * OUTCOME CLAIMS ARE REFUSED HERE, before certification spends a model run on them.
+   *
+   * Measured 2026-10-19 01:22 UTC, the first auto-warmup on production: w_bc17a048a6d4 ended
+   * "...so users aren't surprised by a stale graph", and Argus returned REJECT
+   * `fatal-contradiction` on exactly that clause (alternative-explanation: documenting a limit
+   * does not prevent the surprise). A promised outcome is an inference the certifier can always
+   * contradict; a question or an "I'd check X" cannot be. Refused rather than warned, because the
+   * certifier refuses it anyway, one paid run later.
+   */
+  const outcome = OUTCOME_CLAIM_PATTERNS.find((re) => re.test(withoutDisclosureLines(text)));
+  if (outcome) {
+    issues.push({
+      rule: 'outcome-claim',
+      detail: `promises an outcome ("${withoutDisclosureLines(text).match(outcome)?.[0]}") — a warming comment asks or says what it would check, it does not predict results`
+    });
   }
 
   /**
