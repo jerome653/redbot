@@ -41,11 +41,16 @@ test('the same advisories still refuse a contribution draft', () => {
 });
 
 test('every other advisory still refuses a warmup draft', () => {
-  for (const g of ['duplicate', 'locked', 'archived', 'warming:spacing', 'window', 'health', 'stale-thread', 'quality:generic', 'priority']) {
+  for (const g of ['duplicate', 'locked', 'archived', 'warming:spacing', 'window', 'health', 'stale-thread', 'quality:generic']) {
     const d = withBar('REDDIT', () => unattendedPublishDecision({ ...base, warmupBody: PROD, gates: adv('triage', g) }));
     assert.equal(d.publish, false, g);
     assert.ok(d.why.includes(g), `${g}: ${d.why}`);
   }
+});
+
+test('priority (the Opportunity Engine score floor) is waived for a warmup, as triage is', () => {
+  const d = withBar('REDDIT', () => unattendedPublishDecision({ ...base, warmupBody: PROD, gates: adv('priority', 'triage') }));
+  assert.equal(d.publish, true, d.why);
 });
 
 test('a warmup body that fails the warming rules gets no waiver', () => {
@@ -59,6 +64,6 @@ test('outside REDDIT nothing is waived', () => {
   assert.ok(d.why.includes('triage'), d.why);
 });
 
-test('the waivable set is exactly the three', () => {
-  assert.deepEqual([...WARMUP_WAIVABLE_ADVISORIES].sort(), ['not-a-question', 'quality:too-short', 'triage']);
+test('the waivable set is exactly the four', () => {
+  assert.deepEqual([...WARMUP_WAIVABLE_ADVISORIES].sort(), ['not-a-question', 'priority', 'quality:too-short', 'triage']);
 });

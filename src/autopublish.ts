@@ -209,15 +209,16 @@ const WARMUP_WAIVABLE: ReadonlySet<string> = new Set(['no-claims']);
 /**
  * The CONTRIBUTION pipeline's advisories that a warmup comment answers differently, measured on
  * production 2026-10-19 03:50 UTC (w_cb0696aba79f: ESCALATE on soft rules only, then refused on
- * exactly these three):
+ * exactly these three; `priority` added after 06:15 UTC, w_68a2223c4c54):
  *   quality:too-short  the contribution length floor; warming has its own (checkWarmingComment)
  *   triage             the Opportunity Engine's "contribute" verdict; warmup picks its thread with
  *                      isWarmingTarget and never asks that engine
+ *   priority           that same engine's score floor, so it has nothing to say about a warmup
  *   not-a-question     contributions answer questions; a warming comment is ordinary
  *                      participation, on any young, lightly-answered thread
  * Waived under REDDIT for an eligible warmup body only. Every other advisory still refuses.
  */
-export const WARMUP_WAIVABLE_ADVISORIES: ReadonlySet<string> = new Set(['quality:too-short', 'triage', 'not-a-question']);
+export const WARMUP_WAIVABLE_ADVISORIES: ReadonlySet<string> = new Set(['quality:too-short', 'triage', 'not-a-question', 'priority']);
 
 function warmupEligible(body: string | null | undefined): boolean {
   if (typeof body !== 'string' || !body.trim()) return false;
