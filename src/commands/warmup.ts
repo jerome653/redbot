@@ -60,11 +60,25 @@ import {
 } from '../warming.js';
 import { KARMA_FLOOR_SUBS } from '../autopublish.js';
 import { counters } from '../health.js';
+import { assessQuality } from '../quality.js';
 import type { Draft, Thread } from '../types.js';
 import { NOTHING_TO_DO, FAILED } from '../exit-codes.js';
 
 /** Model calls per warmup: the draft plus one rewrite after a warming-rule refusal. */
 export const WARMUP_ATTEMPTS = 2;
+
+/**
+ * The warming rules plus the publish gate's `quality:generic` check, applied to the draft
+ * before it is saved. Production 2026-10-19 06:15 UTC: w_68a2223c4c54 passed the warming rules,
+ * spent a certification run, and was then refused at publish as generic (no overlapping terms
+ * with its thread). Checking it here gets that refusal into the one rewrite instead.
+ */
+export function warmupDraftCheck(body: string, thread: Pick<Thread, 'title' | 'body' | 'comments'>): ReturnType<typeof checkWarmingComment> {
+  const warm = checkWarmingComment(body);
+  const generic = assessQuality(body, { thread }).issues.find((i) => i.code === 'generic');
+  if (!generic) return warm;
+  return { ...warm, ok: false, issues: [...warm.issues, { rule: 'generic', detail: `${generic.message}; name something specific from the post` }] };
+}
 
 interface RawWarm { comment?: unknown; why?: unknown; decline?: unknown }
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
@@ -238,7 +252,7 @@ export async function warmupDraft(opts?: { dry?: boolean }): Promise<WarmupResul
     }
 
     body = str(parsed.comment);
-    warm = checkWarmingComment(body);
+    warm = warmupDraftCheck(body, thread);
     if (warm.ok || attempt === WARMUP_ATTEMPTS) break;
     for (const i of warm.issues) say.warn(`  [${i.rule}] ${i.detail} — rewriting`);
     feedback = `\n\nYOUR PREVIOUS DRAFT WAS REFUSED:\n"${body}"\n` +
