@@ -24,6 +24,8 @@ import { opportunity } from './opportunity.js';
 import { draft } from './draft.js';
 import { certifyCmd } from './certify.js';
 import { reply } from './reply.js';
+import { warmupDraft, type WarmupResult } from './warmup.js';
+import { warmingStage } from '../warming.js';
 import { autoPublishEnabled, publishBarSummary } from '../autopublish.js';
 import { stripRefutedEnabled } from '../refuted-strip.js';
 import { recheckWithoutRefuted } from '../refuted-recheck.js';
@@ -193,6 +195,9 @@ async function cycle(): Promise<number> {
     say.step('Nothing worth writing this cycle — that is a normal outcome.');
   }
 
+  /* In addition to the contribution draft, never instead of it — see warmupStep. */
+  const warm = await warmupStep();
+
   /**
    * RETENTION, ONCE PER CYCLE. This is the only loop in the product and therefore the only place
    * that knows a cycle just ended.
@@ -216,7 +221,8 @@ async function cycle(): Promise<number> {
   }
 
   await record('auto.cycle', `unattended cycle finished`, {
-    account: account?.handle ?? null, collected, drafted: written
+    account: account?.handle ?? null, collected, drafted: written,
+    warmup: warm.ran ? (warm.draftId ?? 'none') : 'off'
   });
   /* The message has to tell the truth about which install this is. It read "Nothing was
      published — that still needs you" unconditionally, which on an autonomous install would be
@@ -225,6 +231,72 @@ async function cycle(): Promise<number> {
     ? 'Cycle finished. Publishing is UNATTENDED on this install — see the publish.* history rows for what it decided.'
     : 'Cycle finished. Nothing was published — that still needs you.');
   return 0;
+}
+
+/**
+ * `REDBOT_AUTO_WARMUP=0` turns the warmup step off. Default ON (Jerome, 2026-10-19: "we need to start
+ * growing karma- no excuses"). Exactly "0", read per call like REDBOT_AUTO_PUBLISH.
+ */
+export function autoWarmupEnabled(): boolean {
+  return process.env.REDBOT_AUTO_WARMUP !== '0';
+}
+
+export interface WarmupStepDeps {
+  enabled: () => boolean;
+  /** warmingStage for the selected account; null when no account is selected. */
+  stage: () => Promise<{ warming: boolean; why: string } | null>;
+  warmup: () => Promise<WarmupResult>;
+  publish: (draftId: string) => Promise<void>;
+  /** The history writer; a test passes a stub so the shared test database gets no rows. */
+  rec?: typeof record;
+}
+
+/**
+ * THE KARMA LIFELINE, WIRED INTO THE LOOP.
+ *
+ * Measured on cardinal 2026-10-18: jordangrowth at karma 1, the one CERTIFIED contribution draft in
+ * days refused by the r/wordpress karma floor, 0 publishes — and with 0 publishes karma never grows,
+ * so the floor never opens. `redbot warmup` existed to break exactly that, and nothing called it.
+ *
+ * While the account is still in warming stage 1 (src/warming.ts warmingStage) each cycle drafts one
+ * short ordinary comment (warmupDraft picks the thread, checks the pace, applies the warming rules,
+ * the persona and the linter) and hands it to `factCheckThenPublish` — the SAME path the contribution
+ * draft takes, so certification, REDBOT_AUTO_PUBLISH, the publish bar, the gates (pace, ceiling,
+ * spacing, locked/archived, health, warming), the karma floor and the history rows all still apply.
+ * Nothing here publishes on its own authority. Once the account clears stage 1 the step stops.
+ *
+ * Never fatal: a warmup that throws costs this cycle its warmup comment and nothing else.
+ */
+export async function warmupStep(deps: WarmupStepDeps = {
+  enabled: autoWarmupEnabled,
+  stage: async () => {
+    const account = (() => { try { return selectedAccount(); } catch { return null; } })();
+    if (!account) return null;
+    const c = await counters(account.handle, new Date(), undefined, account.timezone);
+    return warmingStage({ karma: c.karma, accountAgeDays: c.accountAgeDays });
+  },
+  warmup: () => warmupDraft(),
+  publish: (id) => factCheckThenPublish(id)
+}): Promise<{ ran: boolean; draftId: string | null; why: string }> {
+  if (!deps.enabled()) return { ran: false, draftId: null, why: 'warmup is off (REDBOT_AUTO_WARMUP=0)' };
+  try {
+    const stage = await deps.stage();
+    if (!stage) return { ran: false, draftId: null, why: 'no account selected' };
+    if (!stage.warming) return { ran: false, draftId: null, why: stage.why };
+    say.step(`Warming: ${stage.why} — writing one short ordinary comment…`);
+    const r = await deps.warmup();
+    if (!r.draftId) {
+      say.step(`Warmup: nothing to send this cycle (${r.reason}).`);
+      return { ran: true, draftId: null, why: r.reason };
+    }
+    await deps.publish(r.draftId);
+    return { ran: true, draftId: r.draftId, why: r.reason };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    say.warn(`Warmup step failed: ${msg}`);
+    await (deps.rec ?? record)('error', `auto warmup failed: ${msg}`, { level: 'warn', warming: true }).catch(() => undefined);
+    return { ran: true, draftId: null, why: msg };
+  }
 }
 
 export interface FactCheckDeps {

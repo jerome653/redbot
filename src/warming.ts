@@ -286,3 +286,18 @@ export function isWarmingTarget(t: WarmingTarget): { ok: boolean; why: string } 
     why: `${Math.round(t.ageHours)}h old with ${t.commentCount ?? 'unknown'} answers — early enough to be read`
   };
 }
+
+/* ------------------------------------------------------------------ *
+ * Warmup drafts
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every draft `redbot warmup` saves is named `w_<thread>_<ts>` (src/commands/warmup.ts). The prefix
+ * is the only mark a warmup draft carries — there is no column for it — so the publish path and the
+ * history rows read it from here rather than each spelling the string.
+ */
+export const WARMUP_DRAFT_PREFIX = 'w_';
+
+export function isWarmupDraftId(id: string): boolean {
+  return id.startsWith(WARMUP_DRAFT_PREFIX);
+}

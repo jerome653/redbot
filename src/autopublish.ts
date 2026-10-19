@@ -32,6 +32,8 @@
  */
 import type { GateResult } from './gates.js';
 import { policy } from './policy.js';
+import { checkWarmingComment } from './warming.js';
+import { lintDraft } from './disclosure.js';
 
 /** What the caller knows at the moment it must decide. */
 export interface UnattendedInput {
@@ -50,6 +52,9 @@ export interface UnattendedInput {
   permalink?: string | null | undefined;
   /** The posting account's latest measured karma (health counters); null when never measured. */
   karma?: number | null | undefined;
+  /** The body when the draft is a warmup draft (`w_…`, src/warming.ts isWarmupDraftId); null or
+      absent for every other draft. Read by the REDDIT bar only — see WARMUP_WAIVABLE. */
+  warmupBody?: string | null | undefined;
 }
 
 export interface UnattendedDecision {
@@ -185,6 +190,27 @@ export const SOFT_RULES: ReadonlySet<string> = new Set([
     Unattended only: the loop still DRAFTS there, for a person to send by hand. Lower case. */
 export const KARMA_FLOOR_SUBS: ReadonlySet<string> = new Set(['wordpress']);
 
+/**
+ * AUTO-WARMUP (Jerome, 2026-10-19: "we need to start growing karma- no excuses"). A warmup comment is
+ * short and ordinary on purpose — it answers from experience or asks a clarifying question — so the
+ * claim extractor often finds nothing to check, and src/argus/certify.ts Rule 0 returns REJECT
+ * `no-claims`: "there is nothing to certify". Nothing was found FALSE; there was nothing to find. Under
+ * REDDIT that rule refused every such comment, which with the karma floor on the contribution path left
+ * a karma-1 account with no way to ever post (measured on cardinal 2026-10-18: 0 publishes).
+ *
+ * So `no-claims` is waived for a WARMUP draft only, and only when the comment itself still passes the
+ * stage-1 warming rules (no links, no promotion, 12-120 words) and the disclosure linter, re-checked
+ * here rather than trusted from the drafting step. Everything else is unchanged: a warmup draft WITH
+ * claims is certified like any other; a hard rule beside `no-claims` still refuses; the floor, the
+ * gates and every advisory still run. Other bars are untouched.
+ */
+const WARMUP_WAIVABLE: ReadonlySet<string> = new Set(['no-claims']);
+
+function warmupEligible(body: string | null | undefined): boolean {
+  if (typeof body !== 'string' || !body.trim()) return false;
+  return checkWarmingComment(body).ok && lintDraft(body).ok;
+}
+
 const VERDICTS: ReadonlySet<string> = new Set(['CERTIFIED', 'ESCALATE', 'REJECT']);
 
 /** What REDDIT asks of the certification row. Returns a refusal, or the soft rules it waived. */
@@ -208,7 +234,8 @@ function redditBar(input: CertificationInput, verdict: string): { refuse: string
   if (verdict !== 'CERTIFIED') {
     const rules = [...new Set(row.rules ?? [])];
     if (!rules.length) return { refuse: `${verdict} with no rules on record — nothing says the findings were only tone or evidence` };
-    const hard = rules.filter((r) => !SOFT_RULES.has(r));
+    const warmup = warmupEligible(input.warmupBody);
+    const hard = rules.filter((r) => !SOFT_RULES.has(r) && !(warmup && WARMUP_WAIVABLE.has(r)));
     if (hard.length) return { refuse: `certification ${verdict} carries blocking rule(s): ${hard.join(', ')}` };
     waived = rules;
   }
@@ -227,7 +254,7 @@ function redditPlacement(input: UnattendedInput): { refuse: string } | null {
 }
 
 /** The inputs the certification alone decides on: no page, no gates, no karma. */
-export type CertificationInput = Pick<UnattendedInput, 'enabled' | 'certVerdict' | 'certAt' | 'latestCert'>;
+export type CertificationInput = Pick<UnattendedInput, 'enabled' | 'certVerdict' | 'certAt' | 'latestCert' | 'warmupBody'>;
 
 /**
  * The part of the decision that needs no page, so src/commands/reply.ts can run it before the
