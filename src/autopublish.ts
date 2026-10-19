@@ -348,5 +348,8 @@ export function unattendedPublishDecision(input: UnattendedInput): UnattendedDec
     : verdict === 'ESCALATE'
       ? ' — ESCALATE means the checker wanted a person to confirm the facts and nobody did'
       : ' — REJECT means the checker found this CONTRADICTED and it is being published anyway';
-  return { publish: true, why: `certification ${verdict} clears the ${bar} bar, no hard block, no other advisory${caveat}` };
+  /* The record a person reviews an unattended publish from names every advisory it stepped over. */
+  const waivedAdvisories = input.gates.advisories.filter((b) => b.gate !== 'certification' && !unread.includes(b)).map((b) => b.gate);
+  const advisoryNote = waivedAdvisories.length ? `, warmup waived advisories: ${waivedAdvisories.join(', ')}` : '';
+  return { publish: true, why: `certification ${verdict} clears the ${bar} bar, no hard block, no other advisory${advisoryNote}${caveat}` };
 }

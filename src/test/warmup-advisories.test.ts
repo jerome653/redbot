@@ -31,6 +31,7 @@ function withBar<T>(bar: string, fn: () => T): T {
 test('the production warmup refusal publishes once the three contribution advisories are waived', () => {
   const d = withBar('REDDIT', () => unattendedPublishDecision({ ...base, warmupBody: PROD, gates: adv('quality:too-short', 'triage', 'not-a-question', 'certification') }));
   assert.equal(d.publish, true, d.why);
+  assert.match(d.why, /warmup waived advisories: quality:too-short, triage, not-a-question/, 'the record names what was stepped over');
 });
 
 test('the same advisories still refuse a contribution draft', () => {
