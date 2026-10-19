@@ -206,6 +206,19 @@ export const KARMA_FLOOR_SUBS: ReadonlySet<string> = new Set(['wordpress']);
  */
 const WARMUP_WAIVABLE: ReadonlySet<string> = new Set(['no-claims']);
 
+/**
+ * The CONTRIBUTION pipeline's advisories that a warmup comment answers differently, measured on
+ * production 2026-10-19 03:50 UTC (w_cb0696aba79f: ESCALATE on soft rules only, then refused on
+ * exactly these three):
+ *   quality:too-short  the contribution length floor; warming has its own (checkWarmingComment)
+ *   triage             the Opportunity Engine's "contribute" verdict; warmup picks its thread with
+ *                      isWarmingTarget and never asks that engine
+ *   not-a-question     contributions answer questions; a warming comment is ordinary
+ *                      participation, on any young, lightly-answered thread
+ * Waived under REDDIT for an eligible warmup body only. Every other advisory still refuses.
+ */
+export const WARMUP_WAIVABLE_ADVISORIES: ReadonlySet<string> = new Set(['quality:too-short', 'triage', 'not-a-question']);
+
 function warmupEligible(body: string | null | undefined): boolean {
   if (typeof body !== 'string' || !body.trim()) return false;
   return checkWarmingComment(body).ok && lintDraft(body).ok;
@@ -317,7 +330,9 @@ export function unattendedPublishDecision(input: UnattendedInput): UnattendedDec
    * verdict, once. Every OTHER advisory — duplicate, locked, archived, warming, window, health —
    * still refuses, because each is a live fact about the thread that nothing here has judged.
    */
-  const unread = input.gates.advisories.filter((b) => b.gate !== 'certification');
+  const warmupWaiver = bar === 'REDDIT' && warmupEligible(input.warmupBody);
+  const unread = input.gates.advisories.filter((b) =>
+    b.gate !== 'certification' && !(warmupWaiver && WARMUP_WAIVABLE_ADVISORIES.has(b.gate)));
   if (unread.length) {
     const named = unread.map((b) => b.gate).join(', ');
     return {
