@@ -81,11 +81,31 @@ function tally(needs) {
 }
 
 /**
+ * Who the rotation holds, and which turn holds it. A turn releases only its own hold, so a late
+ * release from an older turn can never clear a newer turn's. `live` is true from the start of a
+ * turn until its Chrome is closed and the hold released — Stop does not end a turn, it ends the loop.
+ */
+export function holdRegistry() {
+  let held = null, by = null, live = false;
+  return {
+    holds: (h) => held === h,
+    held: () => held,
+    hold: (h) => { const token = {}; held = h; by = token; return token; },
+    release: (h, token) => { if (by === token && held === h) { held = null; by = null; } },
+    get live() { return live; },
+    set live(v) { live = !!v; }
+  };
+}
+
+/**
  * One tick. Returns what it did, for the loop log and for tests.
  *
  * deps: now() · shift · needs(now) -> need rows (src/rotation-need.ts fleetNeeds) · last() /
  * setLast(h) · browserState(h) -> 'free' | 'running' | 'foreign' | 'unknown' · openBrowser(h) ->
  * { ok, error? } · runCycle(h) -> exit code · closeBrowser(h) · log(line)
+ * Optional: busy(h) -> true while a console button drives that account · hold(h) -> token /
+ * release(h, token) bracket the whole turn so the buttons refuse that account · alive() -> false once Stop was
+ * pressed, checked after the (slow) Chrome open and before the cycle starts.
  */
 export async function rotationTick(deps) {
   const now = deps.now();
@@ -108,35 +128,48 @@ export async function rotationTick(deps) {
 
   for (const need of queue) {
     const handle = need.handle;
-    const state = await deps.browserState(handle);
-    if (state === 'running' && operatorOn) {
-      deps.log(`${handle}: its Chrome is open during the operator's shift — theirs, left alone.`);
+    if (deps.busy && deps.busy(handle)) {
+      deps.log(`${handle}: a console button is driving its Chrome — skipped this turn.`);
       continue;
     }
-    if (state !== 'free' && state !== 'running') {
-      deps.log(`${handle}: its debug port is ${state}, not this account's Chrome — skipped this turn.`);
-      continue;
-    }
-    /* Recorded BEFORE the cycle, so an account whose cycle crashes does not win every tie after. */
-    deps.setLast(handle);
+    /* Held straight after the busy check with no await between, so a button cannot start on this
+       account while its port is being probed; released in the finally on every path. */
+    const token = deps.hold ? deps.hold(handle) : undefined;
     let opened = false;
-    if (state === 'free') {
-      const r = await deps.openBrowser(handle);
-      if (!r || !r.ok) {
-        deps.log(`${handle}: Chrome would not open (${(r && r.error) || 'no reason given'}) — skipped this turn.`);
+    try {
+      const state = await deps.browserState(handle);
+      if (state === 'running' && operatorOn) {
+        deps.log(`${handle}: its Chrome is open during the operator's shift — theirs, left alone.`);
         continue;
       }
-      opened = true;
-    }
+      if (state !== 'free' && state !== 'running') {
+        deps.log(`${handle}: its debug port is ${state}, not this account's Chrome — skipped this turn.`);
+        continue;
+      }
+      /* Recorded BEFORE the cycle, so an account whose cycle crashes does not win every tie after. */
+      deps.setLast(handle);
+      if (state === 'free') {
+        const r = await deps.openBrowser(handle);
+        if (!r || !r.ok) {
+          deps.log(`${handle}: Chrome would not open (${(r && r.error) || 'no reason given'}) — skipped this turn.`);
+          continue;
+        }
+        opened = true;
+      }
+      /* Stop can land while Chrome is opening; a cycle started after it would run unsupervised. */
+      if (deps.alive && !deps.alive()) {
+        deps.log(`${handle}: stopped while its Chrome was opening — no cycle run.`);
+        return { ran: false, why: 'stopped', handle };
+      }
 
-    deps.log(`${handle}: ${need.servedToday} of ${need.target} today — running one cycle.`);
-    let code = 1;
-    try { code = await deps.runCycle(handle); }
-    finally {
+      deps.log(`${handle}: ${need.servedToday} of ${need.target} today — running one cycle.`);
+      const code = await deps.runCycle(handle);
+      deps.log(`${handle}: cycle ended, exit ${code}.`);
+      return { ran: true, handle, code, opened };
+    } finally {
       if (opened) { try { await deps.closeBrowser(handle); } catch { /* the next open checks the port again */ } }
+      if (deps.release) deps.release(handle, token);
     }
-    deps.log(`${handle}: cycle ended, exit ${code}.`);
-    return { ran: true, handle, code, opened };
   }
   deps.log(`${queue.length} account(s) due, none available this tick.`);
   return { ran: false, why: 'none-available' };
