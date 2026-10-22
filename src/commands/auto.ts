@@ -15,9 +15,13 @@
  */
 import { loadDrafts, countThreads, loadHistory } from '../store.js';
 import type { HistoryEntry } from '../types.js';
-import { selectedAccount, config, DATA } from '../config.js';
-import { checkWindow } from '../window.js';
-import { counters } from '../health.js';
+import type { HistoryKind } from '../types.js';
+import { selectedAccount, config, DATA, type AccountRecord } from '../config.js';
+import { checkWindow, type WindowVerdict } from '../window.js';
+import { counters, health, type HealthVerdict } from '../health.js';
+import { policy } from '../policy.js';
+import { isBrowserUp } from '../browser.js';
+import { observeDue, type ObserveDueResult } from './observe.js';
 import { hitCollectionWall } from '../collect-wall.js';
 import { read } from './read.js';
 import { search } from './search.js';
@@ -57,27 +61,109 @@ const TRACE_KEEP = Number(process.env.REDBOT_TRACE_KEEP ?? 200_000);
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/**
+ * A removal (or a suspension, or repeated login failures) on record: the turn ends here.
+ *
+ * reply() refuses a braked account anyway — this says it before the turn spends a collection, a
+ * draft and a certification on a reply that cannot go out. Reply SPACING is a Cooldown too, and it
+ * is deliberately not a brake: drafting while the spacing clock runs is normal work.
+ */
+export function removalBrake(v: HealthVerdict, now: Date = new Date()): string | null {
+  if (v.state === 'Stop') return v.reasons[0] ?? 'account health is Stop';
+  const at = v.counters.lastRemovalAt;
+  if (at && Date.parse(at) + policy.removalCooldownMs.value > now.getTime()) {
+    return `a removal was observed at ${at}; this account is cooling off`;
+  }
+  return null;
+}
+
+export interface ObserveStepResult { stop: boolean; why: string }
+export interface ObserveStepDeps {
+  browserUp: () => Promise<boolean>;
+  observeDue: (o: { account: string; now: Date }) => Promise<ObserveDueResult>;
+  verdict: (account: string) => Promise<HealthVerdict>;
+  rec: (kind: HistoryKind, summary: string, extra?: Record<string, unknown>) => Promise<void>;
+  now: () => Date;
+}
+
+/**
+ * OBSERVE FIRST, every turn. The health brake (src/health.ts: 2 removals -> Stop, 1 -> a 24h
+ * Cooldown) only knows what `observe` has recorded, and nothing ran it unattended — measured on
+ * cardinal, the last `observe` row was 2026-10-01 with 11 `publish.ok` rows after it. So each turn
+ * looks at this account's due comments, then reads health, and stops on a 429, a block page or a
+ * brake. Any other observe failure is logged and the turn goes on: a missed look costs a look.
+ */
+export async function observeStep(handle: string | null, deps: ObserveStepDeps = {
+  browserUp: () => isBrowserUp(),
+  observeDue: (o) => observeDue(o),
+  verdict: (h) => health(h),
+  rec: record,
+  now: () => new Date()
+}): Promise<ObserveStepResult> {
+  if (!handle) return { stop: false, why: 'no account selected' };
+  if (await deps.browserUp()) {
+    try {
+      const r = await deps.observeDue({ account: handle, now: deps.now() });
+      if (r.stopped === 'ratelimit') return { stop: true, why: `Reddit rate-limited (429) ${handle} while observing` };
+      if (r.stopped === 'blocked') return { stop: true, why: `Reddit served a block page to ${handle} while observing` };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      say.warn(`Observe failed: ${msg} — going on with the turn`);
+      await deps.rec('error', `auto observe failed: ${msg}`, { level: 'warn', account: handle }).catch(() => undefined);
+    }
+  }
+  try {
+    const brake = removalBrake(await deps.verdict(handle), deps.now());
+    if (brake) return { stop: true, why: brake };
+  } catch { /* unreadable here is read again, and refused on, by reply() */ }
+  return { stop: false, why: '' };
+}
+
+export interface CycleDeps {
+  account: () => AccountRecord | null;
+  window: (account: AccountRecord | null) => Promise<WindowVerdict>;
+  observe: (handle: string | null) => Promise<ObserveStepResult>;
+  work: (account: AccountRecord | null) => Promise<number>;
+  rec: (kind: HistoryKind, summary: string, extra?: Record<string, unknown>) => Promise<void>;
+}
+
 /** One full pass. Returns 0 when the cycle completed or was legitimately skipped. */
-async function cycle(): Promise<number> {
-  const account = (() => {
+export async function cycle(deps: CycleDeps = {
+  account: () => {
     try { return selectedAccount(); } catch (e) {
       say.fail(e instanceof Error ? e.message : String(e));
       return null;
     }
-  })();
-
-  const verdict = checkWindow({
+  },
+  window: async (account) => checkWindow({
     account,
     repliesToday: account ? (await counters(account.handle)).repliesToday : 0
-  });
+  }),
+  observe: (h) => observeStep(h),
+  work,
+  rec: record
+}): Promise<number> {
+  const account = deps.account();
+  const verdict = await deps.window(account);
 
   if (!verdict.allowed) {
     say.warn(`Skipping this cycle — ${verdict.detail}`);
-    await record('auto.skip', verdict.detail, { rule: verdict.rule ?? null, account: account?.handle ?? null });
+    await deps.rec('auto.skip', verdict.detail, { rule: verdict.rule ?? null, account: account?.handle ?? null });
     return 0;
   }
   say.ok(verdict.detail);
 
+  const seen = await deps.observe(account?.handle ?? null);
+  if (seen.stop) {
+    say.warn(`Ending this turn — ${seen.why}. Nothing is drafted or published.`);
+    await deps.rec('auto.skip', seen.why, { rule: 'observe', account: account?.handle ?? null });
+    return 0;
+  }
+  return deps.work(account);
+}
+
+/** Everything after the observe: collect, score, draft, publish, warm up, prune. */
+async function work(account: AccountRecord | null): Promise<number> {
   /**
    * A source list that cannot be read STOPS the cycle. It does not become an empty list.
    *

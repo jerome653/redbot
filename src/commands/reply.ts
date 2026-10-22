@@ -148,6 +148,21 @@ export async function reply(
       });
       return 1;
     }
+
+    /* The account's health, before the page too. A removal recorded by this turn's observe (auto.ts
+       observeStep) puts the account in Cooldown or Stop; the gates below refuse that after the page,
+       but a braked account should not open and dwell on a thread it may not answer. Same verdict,
+       asked earlier; the after-page check still runs. */
+    const owner = target.account ?? selectedAccount()?.handle ?? null;
+    const early2 = owner ? await health(owner) : null;
+    if (early2 && !early2.mayPublish) {
+      const why = `account health is ${early2.state}${early2.resumeAt ? ` until ${early2.resumeAt}` : ''} — ${early2.reasons[0] ?? 'blocked'}`;
+      say.fail(`  Not publishing unattended: ${why}`);
+      await record('publish.refused', `unattended publish refused for ${target.id}: ${why}`, {
+        draftId: target.id, why, gate: 'health', stage: 'unattended', before: 'page', account: owner, ...warmTag
+      });
+      return 1;
+    }
   }
 
   const thread = (await loadThreads()).find((t) => t.id === target.threadId);
