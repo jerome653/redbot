@@ -407,8 +407,15 @@ async function observeTargets(
   const out = await openSignedOut(s.browser);
   const threads = await loadThreads();
 
+  /* Unattended only: a page that rendered no comment at all is unreadable, not "absent". Reddit
+     leaves a node behind after a removal, so zero nodes means the page did not load — and
+     health.ts counts a signed-in absence as a removal, so recording it would stop the account. */
+  const unattended = Boolean(opts.expectAccount);
+  const rendered = async (page: Page) => (await page.locator('shreddit-comment').count().catch(() => 0)) > 0;
+
   try {
     for (const draft of targets) {
+     try {
       const threadRec = threads.find((t) => t.id === draft.threadId);
       const url = observeUrl(draft);
       const publishedAt = draft.decidedAt ?? draft.createdAt;
@@ -440,6 +447,10 @@ async function observeTargets(
       }
       setAccount(me.username);
       await s.page.waitForTimeout(2000);
+      if (unattended && !(await rendered(s.page))) {
+        say.warn(`  ${draft.id}: the page rendered no comments — unreadable, nothing recorded`);
+        continue;
+      }
       const inView = await lookFor(s.page, draft);
 
       say.step(`  signed in : ${inView.present ? 'visible' : 'NOT VISIBLE'}` +
@@ -486,12 +497,20 @@ async function observeTargets(
 
       /* ---- signed out ---- */
       let outSight: CommentSighting | null = null;
-      if (!out) {
+      if (out && unattended) {
+        await out.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+        await out.page.waitForTimeout(2000);
+      }
+      if (out && unattended && !(await rendered(out.page))) {
+        say.warn('  signed out: the page rendered no comments — unreadable, not recorded.');
+      } else if (!out) {
         say.warn('  signed out: UNAVAILABLE — no logged-out context could be opened on this Chrome.');
         say.warn('              Check by hand in a private window. Not recorded as an observation.');
       } else {
-        await out.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-        await out.page.waitForTimeout(2000);
+        if (!unattended) {
+          await out.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+          await out.page.waitForTimeout(2000);
+        }
         const outView = await lookFor(out.page, draft);
         outSight = outView;
 
@@ -611,6 +630,12 @@ async function observeTargets(
         say.warn(`interaction rows not written: ${e instanceof Error ? e.message : String(e)}`);
       }
       observed++;
+     } catch (e) {
+      /* One comment that will not load must not starve the others: in the unattended sweep it is
+         logged and the next due comment is observed. The CLI keeps failing loudly. */
+      if (!unattended) throw e;
+      say.warn(`  ${draft.id}: could not be observed (${e instanceof Error ? e.message : String(e)}) — next one`);
+     }
     }
 
     say.ok(`Recorded. Next checkpoints: ${CHECKPOINTS.join(' → ')}. Observations in data/observations.jsonl`);
