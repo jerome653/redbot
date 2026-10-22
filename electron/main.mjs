@@ -827,13 +827,61 @@ async function boot() {
 /**
  * One instance. Two would each start a server and drive the same account's Chrome, and the
  * database would serialise their writes while they disagreed about what was running.
+ *
+ * A SERVICE DOES NOT QUIT ON A HELD LOCK — IT WAITS FOR IT. Measured on cardinal, 21 Oct PDT: the
+ * operator closed the window, systemd scheduled a restart 20 s out, and the operator double-clicked
+ * the desktop icon in between. That copy took the lock; every service start for the next three
+ * minutes found it held, quit 0, and systemd stopped restarting with `start-limit-hit`. When the
+ * hand-launched window closed, nothing brought the loop back. So under systemd (INVOCATION_ID) or
+ * REDBOT_SERVICE=1 the losing copy stays up, asks again every SERVICE_LOCK_RETRY_MS, and boots the
+ * moment the lock is free. A desktop launch still quits and the holder focuses its window.
+ *
+ * Asking again is safe: in Electron 43 a refused `requestSingleInstanceLock` resets its singleton
+ * (shell/browser/api/electron_api_app.cc, the PROCESS_NOTIFIED case), so the next call is a fresh
+ * attempt. But every refused attempt also NOTIFIES the holder, which emits 'second-instance' — so
+ * the attempt carries WAITING_FOR_LOCK and the holder does not pull its window forward for it.
  */
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
-  });
+export const SERVICE_LOCK_RETRY_MS = 15_000;
+export const WAITING_FOR_LOCK = Object.freeze({ redbotService: 'waiting-for-lock' });
+
+export function isServiceRun(env = process.env) {
+  return Boolean(env.INVOCATION_ID) || env.REDBOT_SERVICE === '1';
+}
+
+/**
+ * Claim the instance. Returns 'won' (onWon ran), 'quit' (desktop second launch) or 'waiting'
+ * (a service polling the lock; onWon runs once when it is obtained).
+ */
+export function claimInstance({
+  app: a = app, env = process.env, onWon, log = boot_log,
+  retryMs = SERVICE_LOCK_RETRY_MS, setInterval: every = setInterval, clearInterval: stop = clearInterval
+} = {}) {
+  const service = isServiceRun(env);
+  const ask = () => (service ? a.requestSingleInstanceLock(WAITING_FOR_LOCK) : a.requestSingleInstanceLock());
+  if (ask()) { onWon(); return 'won'; }
+  if (!service) { a.quit(); return 'quit'; }
+
+  log('instance    another redbot holds the instance lock — waiting; this service takes over when it closes');
+  let done = false;
+  const timer = every(() => {
+    if (done || !ask()) return;
+    done = true;
+    stop(timer);
+    log('instance    lock obtained — booting');
+    onWon();
+  }, retryMs);
+  return 'waiting';
+}
+
+/** The holder's answer to another launch: bring the window up — unless it is a service waiting. */
+export function focusOnSecondInstance(w, additionalData) {
+  if (additionalData && additionalData.redbotService === WAITING_FOR_LOCK.redbotService) return;
+  if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
+}
+
+/** Everything the lock holder wires. Runs exactly once, and only after the lock is ours. */
+export function wireInstance(app) {
+  app.on('second-instance', (_e, _argv, _cwd, additionalData) => focusOnSecondInstance(win, additionalData));
 
   app.whenReady().then(boot).catch((e) => {
     /**
@@ -892,6 +940,12 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
 }
+
+/* The waiting line must reach boot.log too — it is the file a person is asked to send. */
+if (isServiceRun()) {
+  try { logFile = join(app.getPath('userData'), 'boot.log'); } catch { /* stdout still has it */ }
+}
+claimInstance({ onWon: () => wireInstance(app) });
 
 /**
  * A menu that exists but is never shown.
