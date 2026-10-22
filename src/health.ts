@@ -240,9 +240,13 @@ export async function counters(
   const fleetSize = fleet ?? await countAccounts(getPool()).catch(() => 1);
   const chargeUnowned = fleetSize <= 1;
 
+  /* Case-insensitive: Reddit usernames are, and observations are filed under the name Reddit
+     shows (observe.ts setAccount(me.username)) while the caller passes the configured handle.
+     An exact compare let a removal be recorded and never reach the stop. */
+  const me = account ? account.toLowerCase() : null;
   const mine = <T extends { account?: string | null }>(rows: T[]) =>
-    account
-      ? rows.filter((r) => r.account === account || (r.account == null && chargeUnowned))
+    me
+      ? rows.filter((r) => (r.account != null && r.account.toLowerCase() === me) || (r.account == null && chargeUnowned))
       : rows;
 
   const h = mine(history);
