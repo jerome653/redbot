@@ -1506,7 +1506,7 @@ function whyReplyCannotStart(requestedAccount) {
         ? `Configured: ${knownAccountHandles.join(', ')}.`
         : 'No accounts are configured yet — add one on the Accounts screen.');
   }
-  if (autoProc && autoProc.account === account) {
+  if (loopHolds(account)) {
     return `The unattended loop is already running as ${account}. Stop it first — two processes on one Chrome read each other's pages.`;
   }
   return null;
@@ -1551,7 +1551,7 @@ function runAction(key, opts) {
      * could never block a person from pressing a button. This keeps that, and only refuses the
      * case that actually collides.
      */
-    if (spec.needsBrowser && autoProc && autoProc.account === account) {
+    if (spec.needsBrowser && loopHolds(account)) {
       return resolve({
         ok: false,
         status: 409,
@@ -2703,6 +2703,11 @@ async function exitRemove(body) {
  * ------------------------------------------------------------------ */
 let autoProc = null;
 let autoLog = [];
+/* The account the rotation is driving right now. Kept apart from autoProc on purpose: Stop clears
+   autoProc at once, but the turn still owns that Chrome until it has closed it. */
+let rotationHeld = null;
+/** True while the unattended loop — single account or rotation — owns this account's Chrome. */
+const loopHolds = (account) => !!(autoProc && autoProc.account === account) || rotationHeld === account;
 
 /**
  * Run a CLI verb and hand back what it said.
@@ -2864,6 +2869,10 @@ function rotationStart({ everyMinutes }) {
       last = h;
       try { if (pushStateApi) pushStateApi.writePushState({ ...pushStateApi.readPushState(), rotationLast: h }); } catch { /* in memory still advances */ }
     },
+    busy: (h) => !!(running && ACTIONS[running] && ACTIONS[running].needsBrowser && runningAccount === h),
+    hold: (h) => { rotationHeld = h; },
+    release: (h) => { if (rotationHeld === h) rotationHeld = null; },
+    alive: () => autoProc === me,
     browserState: async (h) => { const a = await findAccount(h); if (!a) return 'unknown'; const [st] = await portStatusImpl([a]); return st ? st.state : 'unknown'; },
     openBrowser: (h) => launchChrome(h, { background: true }),
     closeBrowser: async (h) => { const a = await findAccount(h); if (a) await stopBrowserImpl(a); },

@@ -162,3 +162,68 @@ test('no accounts at all is said, not a crash', async () => {
   const d = deps({ needs: async () => [] });
   assert.equal((await rotationTick(d)).why, 'no-accounts');
 });
+
+/** hold/release recorded as calls, so a test can see what the buttons would have been refused. */
+const guarded = (over = {}) => {
+  let held = null;
+  const d = deps({
+    hold: (h) => { held = h; d.calls.push(['hold', h]); },
+    release: (h) => { if (held === h) held = null; d.calls.push(['release', h]); },
+    ...over
+  });
+  d.held = () => held;
+  return d;
+};
+
+test('the account is held from before its Chrome opens until after it is closed', async () => {
+  const d = guarded({ runCycle: async (h) => { d.calls.push(['cycle', h, d.held()]); return 0; } });
+  await rotationTick(d);
+  assert.deepEqual(withoutProbes(d), [['setLast', 'a'], ['hold', 'a'], ['open', 'a'], ['cycle', 'a', 'a'], ['close', 'a'], ['release', 'a']]);
+  assert.equal(d.held(), null);
+});
+
+test('Stop pressed while Chrome is opening: no cycle runs, what it opened is closed, the hold is released', async () => {
+  let alive = true;
+  const d = guarded({
+    openBrowser: async (h) => { d.calls.push(['open', h]); alive = false; return { ok: true }; },
+    alive: () => alive
+  });
+  const r = await rotationTick(d);
+  assert.equal(r.why, 'stopped');
+  assert.equal(d.calls.some((c) => c[0] === 'cycle'), false);
+  assert.deepEqual(withoutProbes(d).slice(-2), [['close', 'a'], ['release', 'a']]);
+  assert.equal(d.held(), null);
+});
+
+test('a failed open releases its hold and the next due account runs', async () => {
+  const d = guarded({ openBrowser: async (h) => { d.calls.push(['open', h]); return h === 'a' ? { ok: false, error: 'no chrome' } : { ok: true }; } });
+  const r = await rotationTick(d);
+  assert.equal(r.handle, 'b');
+  const w = withoutProbes(d);
+  assert.deepEqual(w.slice(0, 4), [['setLast', 'a'], ['hold', 'a'], ['open', 'a'], ['release', 'a']]);
+  assert.equal(w.some((c) => c[0] === 'close' && c[1] === 'a'), false);
+  assert.equal(d.held(), null);
+});
+
+test('the hold is released even when the cycle throws', async () => {
+  const d = guarded({ runCycle: async () => { throw new Error('boom'); } });
+  await assert.rejects(rotationTick(d), /boom/);
+  assert.equal(d.held(), null);
+  assert.deepEqual(d.calls.at(-1), ['release', 'a']);
+});
+
+test('an account a console button is driving is skipped without probing its port', async () => {
+  const d = guarded({ busy: (h) => h === 'a' });
+  const r = await rotationTick(d);
+  assert.equal(r.handle, 'b');
+  assert.equal(d.calls.some((c) => c[1] === 'a'), false);
+});
+
+test('server.mjs wires the guard: both button checks ask loopHolds, the rotation passes busy/hold/release/alive', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8');
+  assert.equal((src.match(/autoProc && autoProc\.account === account\)/g) || []).length, 1, 'only loopHolds itself reads autoProc.account');
+  assert.equal((src.match(/loopHolds\(account\)/g) || []).length, 2);
+  for (const k of ['busy', 'hold', 'release', 'alive']) assert.match(src, new RegExp(String.raw`\n\s+${k}: \(h?\) =>`), k);
+  assert.match(src, /alive: \(\) => autoProc === me/);
+});
