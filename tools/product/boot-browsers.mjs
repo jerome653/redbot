@@ -34,6 +34,16 @@
 export const DEFAULT_WANT = 'loop';
 
 /**
+ * `autoLoop.account` when the unattended loop is the ROTATION rather than one named account.
+ *
+ * Not a handle, and the same sentinel `tools/product/server.mjs` already reads at
+ * `autoStart` (`if (rotate === true || account === '*') return rotationStart(...)`).
+ * `rememberAutoLoop` writes it straight into `data/push-state.json`, which is the file
+ * `electron/main.mjs` reads to tell this module which account the loop runs as.
+ */
+export const ROTATION = '*';
+
+/**
  * @param {object} s
  * @param {string[]} s.handles            every account bound to this machine
  * @param {string} [s.want]               `REDBOT_BOOT_BROWSERS`: 'loop' | 'all' | 'a,b,c'
@@ -54,6 +64,22 @@ export function bootBrowserSelection({ handles, want = DEFAULT_WANT, loopAccount
        account somebody relies on, which is a worse failure than opening one too many — so this
        falls back to everything, and says which case it is. */
     if (!loopAccount) return { expected: null, why: 'no loop registered' };
+    /* THE ROTATION IS NOT A HANDLE, AND TREATING IT AS ONE OPENS NOTHING.
+     *
+     * This branch only ever knew literal handles, so the rotation sentinel became
+     * `Set(['*'])` — a selection no account can match. MEASURED on cardinal, boot log
+     * 2026-10-22 13:59:11 UTC+0 -0700: `browsers    opening 1 of 13 — * is the account the
+     * loop runs as`, immediately followed by all thirteen accounts `not opened at boot`.
+     * Zero browsers opened. `redbot-karma.service` then failed its 11:00 UTC run with
+     * `no account's browser is running (13 with a debug port)`.
+     *
+     * EMPTY, NOT NULL, and the difference is the whole point of this module: `rotation.mjs`
+     * opens an account's Chrome for its own turn (`deps.openBrowser(handle)`) and closes it
+     * after, so at boot NO account is expected to be open. Null would mean all thirteen are,
+     * which is exactly the twelve-false-alarm case the header above records. */
+    if (String(loopAccount).trim() === ROTATION) {
+      return { expected: new Set(), why: 'the rotation opens each account for its own turn' };
+    }
     return {
       expected: new Set([String(loopAccount).toLowerCase()]),
       why: `${loopAccount} is the account the loop runs as`
@@ -92,5 +118,7 @@ export function expectedOpen(expected, handle) {
  */
 export function minimiseAtBoot(handle, loopAccount = null) {
   if (!loopAccount) return true;
+  /* Under the rotation no window is the loop's permanent one, so none is the exception. */
+  if (String(loopAccount).trim() === ROTATION) return true;
   return String(handle).toLowerCase() !== String(loopAccount).toLowerCase();
 }
