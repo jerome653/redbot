@@ -58,7 +58,7 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 import { startAlignedBrowser } from './browser-start.mjs';
 import { createAddAccountFlows, karmaFromOutput } from './add-account-flow.mjs';
 import { replyAccount, ensureBrowser } from './reply-browser.mjs';
-import { rotationTick, parseShift, DEFAULT_SHIFT, loopHolds as loopHoldsImpl } from './rotation.mjs';
+import { rotationTick, parseShift, DEFAULT_SHIFT } from './rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -1506,7 +1506,7 @@ function whyReplyCannotStart(requestedAccount) {
         ? `Configured: ${knownAccountHandles.join(', ')}.`
         : 'No accounts are configured yet — add one on the Accounts screen.');
   }
-  if (loopHolds(account)) {
+  if (autoProc && autoProc.account === account) {
     return `The unattended loop is already running as ${account}. Stop it first — two processes on one Chrome read each other's pages.`;
   }
   return null;
@@ -1551,7 +1551,7 @@ function runAction(key, opts) {
      * could never block a person from pressing a button. This keeps that, and only refuses the
      * case that actually collides.
      */
-    if (spec.needsBrowser && loopHolds(account)) {
+    if (spec.needsBrowser && autoProc && autoProc.account === account) {
       return resolve({
         ok: false,
         status: 409,
@@ -2704,9 +2704,6 @@ async function exitRemove(body) {
 let autoProc = null;
 let autoLog = [];
 
-/* Whether the loop (either kind) is driving this account's Chrome — see rotation.mjs loopHolds. */
-const loopHolds = (account) => loopHoldsImpl(autoProc, account);
-
 /**
  * Run a CLI verb and hand back what it said.
  *
@@ -2867,13 +2864,7 @@ function rotationStart({ everyMinutes }) {
       last = h;
       try { if (pushStateApi) pushStateApi.writePushState({ ...pushStateApi.readPushState(), rotationLast: h }); } catch { /* in memory still advances */ }
     },
-    browserState: async (h) => {
-      /* A button is driving this account's Chrome — not ours to share this turn. */
-      if (running && runningAccount === h) return 'busy';
-      const a = await findAccount(h); if (!a) return 'unknown'; const [st] = await portStatusImpl([a]); return st ? st.state : 'unknown';
-    },
-    hold: (h) => { me.turnAccount = h; },
-    release: (h) => { if (me.turnAccount === h) me.turnAccount = null; },
+    browserState: async (h) => { const a = await findAccount(h); if (!a) return 'unknown'; const [st] = await portStatusImpl([a]); return st ? st.state : 'unknown'; },
     openBrowser: (h) => launchChrome(h, { background: true }),
     closeBrowser: async (h) => { const a = await findAccount(h); if (a) await stopBrowserImpl(a); },
     runCycle: (h) => new Promise((resolve) => {
