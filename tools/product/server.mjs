@@ -56,6 +56,7 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
    decisions were unreachable without spawning Chrome, which is why nothing tested them and
    why the two halves of detection could both be green while nothing connected them. */
 import { startAlignedBrowser } from './browser-start.mjs';
+import { rotationTick, parseShift, DEFAULT_SHIFT } from './rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -2569,8 +2570,9 @@ function spawnCli(args, timeoutMs = 5 * 60 * 1000) {
   });
 }
 
-function autoStart({ account, everyMinutes }) {
+function autoStart({ account, everyMinutes, rotate }) {
   if (autoProc) return { ok: false, error: 'The unattended loop is already running.' };
+  if (rotate === true || account === '*') return rotationStart({ everyMinutes });
   if (!account) return { ok: false, error: 'Choose which account it should run as.' };
   /* The mirror of the check in runAction: whichever starts second is the one that must refuse,
      or the guard only holds in one direction and the collision comes back by starting the
@@ -2621,7 +2623,7 @@ function autoStart({ account, everyMinutes }) {
 
 function autoStop() {
   if (!autoProc) return { ok: false, error: 'The loop is not running.' };
-  try { autoProc.child.kill(); } catch { /* already gone */ }
+  try { if (autoProc.child) autoProc.child.kill(); } catch { /* already gone */ }
   autoProc = null;
   /* A STOP MUST SURVIVE A RESTART AS FIRMLY AS A START. Forgetting the record here is what
      stops `resumeAutoLoop` resurrecting a loop somebody deliberately switched off — a resume
@@ -2661,15 +2663,74 @@ function resumeAutoLoop() {
   try { saved = pushStateApi ? pushStateApi.readPushState().autoLoop ?? null : null; }
   catch { return; }                                   // an unreadable state file resumes nothing
   if (!saved) return;
-  const r = autoStart({ account: saved.account, everyMinutes: saved.everyMinutes });
+  const r = autoStart({ account: saved.account, everyMinutes: saved.everyMinutes, rotate: saved.rotate === true });
   console.log(r.ok
     ? `[auto] resumed after restart: ${saved.account}, every ${saved.everyMinutes} min`
     : `[auto] could not resume ${saved.account}: ${r.error}`);
 }
 
+/* ------------------------------------------------------------------ *
+ * The off-shift rotation — every account, one at a time, while the operator is off shift.
+ * The decisions live in ./rotation.mjs; this is the wiring to Chrome and the CLI.
+ * ------------------------------------------------------------------ */
+function rotationStart({ everyMinutes }) {
+  const shiftText = process.env.REDBOT_OPERATOR_SHIFT || DEFAULT_SHIFT;
+  const shift = parseShift(shiftText);
+  if (!shift) return { ok: false, error: `REDBOT_OPERATOR_SHIFT="${shiftText}" is not "HH-HH@Zone" (for example 07-16@Asia/Manila).` };
+  /* The gap between one account's cycle ending and the next one starting. */
+  const gap = Math.max(5, Number(everyMinutes) || 10);
+  autoLog = [];
+  const keep = (d) => {
+    autoLog.push(String(d).replace(/\[[0-9;]*m/g, ''));
+    if (autoLog.length > 400) autoLog = autoLog.slice(-400);
+  };
+  const me = { child: null, account: '*', rotate: true, every: gap, startedAt: new Date().toISOString() };
+  autoProc = me;
+  const readLast = () => { try { return pushStateApi ? pushStateApi.readPushState().rotationLast ?? null : null; } catch { return null; } };
+  let last = readLast();
+  const findAccount = async (h) => (await consoleAccounts()).accounts.find((x) => x.handle === h);
+  const deps = {
+    now: () => new Date(),
+    shift,
+    handles: async () => (await consoleAccounts()).accounts.map((a) => a.handle),
+    last: () => last,
+    setLast: (h) => {
+      last = h;
+      try { if (pushStateApi) pushStateApi.writePushState({ ...pushStateApi.readPushState(), rotationLast: h }); } catch { /* in memory still advances */ }
+    },
+    browserState: async (h) => { const a = await findAccount(h); if (!a) return 'unknown'; const [st] = await portStatusImpl([a]); return st ? st.state : 'unknown'; },
+    openBrowser: (h) => launchChrome(h, { background: true }),
+    closeBrowser: async (h) => { const a = await findAccount(h); if (a) await stopBrowserImpl(a); },
+    runCycle: (h) => new Promise((resolve) => {
+      const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), 'auto', '--once'], {
+        cwd: SPAWN_CWD,
+        env: { ...process.env, REDBOT_ACCOUNT: h, REDBOT_LLM: selectedProvider, ...(selectedOperator ? { REDBOT_OPERATOR: selectedOperator } : {}) },
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      me.child = child;
+      child.stdout.on('data', keep);
+      child.stderr.on('data', keep);
+      child.on('error', (e) => { keep(`\n[${h}: cycle failed to start: ${e.message}]\n`); me.child = null; resolve(1); });
+      child.on('close', (code) => { me.child = null; resolve(code ?? 1); });
+    }),
+    log: (line) => keep(`[rotation ${new Date().toISOString()}] ${line}\n`)
+  };
+  (async () => {
+    while (autoProc === me) {
+      try { await rotationTick(deps); }
+      catch (e) { deps.log(`tick failed: ${e && e.message ? e.message : e}`); }
+      if (autoProc !== me) break;
+      await new Promise((r) => setTimeout(r, gap * 60_000));
+    }
+  })();
+  rememberAutoLoop({ account: '*', rotate: true, everyMinutes: gap });
+  return { ok: true, ...autoStatus() };
+}
+
 function autoStatus() {
   return {
     running: !!autoProc,
+    rotate: !!(autoProc && autoProc.rotate),
     account: autoProc ? autoProc.account : null,
     everyMinutes: autoProc ? autoProc.every : null,
     startedAt: autoProc ? autoProc.startedAt : null,
