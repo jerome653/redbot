@@ -58,7 +58,7 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 import { startAlignedBrowser } from './browser-start.mjs';
 import { createAddAccountFlows, karmaFromOutput } from './add-account-flow.mjs';
 import { replyAccount, ensureBrowser } from './reply-browser.mjs';
-import { rotationTick, parseShift, DEFAULT_SHIFT } from './rotation.mjs';
+import { rotationTick, parseShift, holdRegistry, DEFAULT_SHIFT } from './rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -1506,9 +1506,7 @@ function whyReplyCannotStart(requestedAccount) {
         ? `Configured: ${knownAccountHandles.join(', ')}.`
         : 'No accounts are configured yet — add one on the Accounts screen.');
   }
-  if (loopHolds(account)) {
-    return `The unattended loop is already running as ${account}. Stop it first — two processes on one Chrome read each other's pages.`;
-  }
+  if (loopHolds(account)) return loopHoldsMessage(account);
   return null;
 }
 
@@ -1552,11 +1550,7 @@ function runAction(key, opts) {
      * case that actually collides.
      */
     if (spec.needsBrowser && loopHolds(account)) {
-      return resolve({
-        ok: false,
-        status: 409,
-        error: `The unattended loop is already running as ${account}. Stop it first — two processes on one Chrome read each other's pages.`
-      });
+      return resolve({ ok: false, status: 409, error: loopHoldsMessage(account) });
     }
 
     const args = spec.args(opts || {}).filter((a) => a !== '');
@@ -2705,9 +2699,14 @@ let autoProc = null;
 let autoLog = [];
 /* The account the rotation is driving right now. Kept apart from autoProc on purpose: Stop clears
    autoProc at once, but the turn still owns that Chrome until it has closed it. */
-let rotationHeld = null;
+/* Kept apart from autoProc on purpose: Stop clears autoProc at once, but the turn still owns that
+   Chrome until it has closed it. See holdRegistry in ./rotation.mjs. */
+const rotationHolds = holdRegistry();
 /** True while the unattended loop — single account or rotation — owns this account's Chrome. */
-const loopHolds = (account) => !!(autoProc && autoProc.account === account) || rotationHeld === account;
+const loopHolds = (account) => !!(autoProc && autoProc.account === account) || rotationHolds.holds(account);
+const loopHoldsMessage = (account) => (rotationHolds.holds(account) && !(autoProc && autoProc.account === account))
+  ? `The rotation is working ${account}'s Chrome right now. Wait for its turn to finish — two processes on one Chrome read each other's pages.`
+  : `The unattended loop is already running as ${account}. Stop it first — two processes on one Chrome read each other's pages.`;
 
 /**
  * Run a CLI verb and hand back what it said.
@@ -2740,6 +2739,9 @@ function spawnCli(args, timeoutMs = 5 * 60 * 1000) {
 
 function autoStart({ account, everyMinutes, rotate }) {
   if (autoProc) return { ok: false, error: 'The unattended loop is already running.' };
+  /* A stopped rotation may still be closing the Chrome of the turn it was in. Starting now would
+     let a new turn open that same account while the old turn closes it under it. */
+  if (rotationHolds.live) return { ok: false, error: 'The rotation is still finishing its last turn (closing that account’s Chrome). Try again in a minute.' };
   if (rotate === true || account === '*') return rotationStart({ everyMinutes });
   if (!account) return { ok: false, error: 'Choose which account it should run as.' };
   /* The mirror of the check in runAction: whichever starts second is the one that must refuse,
@@ -2870,8 +2872,8 @@ function rotationStart({ everyMinutes }) {
       try { if (pushStateApi) pushStateApi.writePushState({ ...pushStateApi.readPushState(), rotationLast: h }); } catch { /* in memory still advances */ }
     },
     busy: (h) => !!(running && ACTIONS[running] && ACTIONS[running].needsBrowser && runningAccount === h),
-    hold: (h) => { rotationHeld = h; },
-    release: (h) => { if (rotationHeld === h) rotationHeld = null; },
+    hold: rotationHolds.hold,
+    release: rotationHolds.release,
     alive: () => autoProc === me,
     browserState: async (h) => { const a = await findAccount(h); if (!a) return 'unknown'; const [st] = await portStatusImpl([a]); return st ? st.state : 'unknown'; },
     openBrowser: (h) => launchChrome(h, { background: true }),
@@ -2899,8 +2901,10 @@ function rotationStart({ everyMinutes }) {
   };
   (async () => {
     while (autoProc === me) {
+      rotationHolds.live = true;
       try { await rotationTick(deps); }
       catch (e) { deps.log(`tick failed: ${e && e.message ? e.message : e}`); }
+      finally { rotationHolds.live = false; }
       if (autoProc !== me) break;
       await new Promise((r) => setTimeout(r, gap * 60_000));
     }

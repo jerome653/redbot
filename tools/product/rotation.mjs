@@ -81,13 +81,30 @@ function tally(needs) {
 }
 
 /**
+ * Who the rotation holds, and which turn holds it. A turn releases only its own hold, so a late
+ * release from an older turn can never clear a newer turn's. `live` is true from the start of a
+ * turn until its Chrome is closed and the hold released — Stop does not end a turn, it ends the loop.
+ */
+export function holdRegistry() {
+  let held = null, by = null, live = false;
+  return {
+    holds: (h) => held === h,
+    held: () => held,
+    hold: (h) => { const token = {}; held = h; by = token; return token; },
+    release: (h, token) => { if (by === token && held === h) { held = null; by = null; } },
+    get live() { return live; },
+    set live(v) { live = !!v; }
+  };
+}
+
+/**
  * One tick. Returns what it did, for the loop log and for tests.
  *
  * deps: now() · shift · needs(now) -> need rows (src/rotation-need.ts fleetNeeds) · last() /
  * setLast(h) · browserState(h) -> 'free' | 'running' | 'foreign' | 'unknown' · openBrowser(h) ->
  * { ok, error? } · runCycle(h) -> exit code · closeBrowser(h) · log(line)
- * Optional: busy(h) -> true while a console button drives that account · hold(h) / release(h)
- * bracket the whole turn so the buttons refuse that account · alive() -> false once Stop was
+ * Optional: busy(h) -> true while a console button drives that account · hold(h) -> token /
+ * release(h, token) bracket the whole turn so the buttons refuse that account · alive() -> false once Stop was
  * pressed, checked after the (slow) Chrome open and before the cycle starts.
  */
 export async function rotationTick(deps) {
@@ -115,20 +132,22 @@ export async function rotationTick(deps) {
       deps.log(`${handle}: a console button is driving its Chrome — skipped this turn.`);
       continue;
     }
-    const state = await deps.browserState(handle);
-    if (state === 'running' && operatorOn) {
-      deps.log(`${handle}: its Chrome is open during the operator's shift — theirs, left alone.`);
-      continue;
-    }
-    if (state !== 'free' && state !== 'running') {
-      deps.log(`${handle}: its debug port is ${state}, not this account's Chrome — skipped this turn.`);
-      continue;
-    }
-    /* Recorded BEFORE the cycle, so an account whose cycle crashes does not win every tie after. */
-    deps.setLast(handle);
-    if (deps.hold) deps.hold(handle);
+    /* Held straight after the busy check with no await between, so a button cannot start on this
+       account while its port is being probed; released in the finally on every path. */
+    const token = deps.hold ? deps.hold(handle) : undefined;
     let opened = false;
     try {
+      const state = await deps.browserState(handle);
+      if (state === 'running' && operatorOn) {
+        deps.log(`${handle}: its Chrome is open during the operator's shift — theirs, left alone.`);
+        continue;
+      }
+      if (state !== 'free' && state !== 'running') {
+        deps.log(`${handle}: its debug port is ${state}, not this account's Chrome — skipped this turn.`);
+        continue;
+      }
+      /* Recorded BEFORE the cycle, so an account whose cycle crashes does not win every tie after. */
+      deps.setLast(handle);
       if (state === 'free') {
         const r = await deps.openBrowser(handle);
         if (!r || !r.ok) {
@@ -149,7 +168,7 @@ export async function rotationTick(deps) {
       return { ran: true, handle, code, opened };
     } finally {
       if (opened) { try { await deps.closeBrowser(handle); } catch { /* the next open checks the port again */ } }
-      if (deps.release) deps.release(handle);
+      if (deps.release) deps.release(handle, token);
     }
   }
   deps.log(`${queue.length} account(s) due, none available this tick.`);

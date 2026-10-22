@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseShift, onShift, nextHandle, orderByNeed, rotationTick, DEFAULT_SHIFT } from './rotation.mjs';
+import { parseShift, onShift, nextHandle, orderByNeed, rotationTick, holdRegistry, DEFAULT_SHIFT } from './rotation.mjs';
 
 const shift = parseShift(DEFAULT_SHIFT);
 // 2026-10-22 10:00 Manila = 02:00Z (on shift); 20:00 Manila = 12:00Z (off shift).
@@ -175,10 +175,10 @@ const guarded = (over = {}) => {
   return d;
 };
 
-test('the account is held from before its Chrome opens until after it is closed', async () => {
+test('the account is held from before its port is probed until after its Chrome is closed', async () => {
   const d = guarded({ runCycle: async (h) => { d.calls.push(['cycle', h, d.held()]); return 0; } });
   await rotationTick(d);
-  assert.deepEqual(withoutProbes(d), [['setLast', 'a'], ['hold', 'a'], ['open', 'a'], ['cycle', 'a', 'a'], ['close', 'a'], ['release', 'a']]);
+  assert.deepEqual(d.calls, [['hold', 'a'], ['state', 'a'], ['setLast', 'a'], ['open', 'a'], ['cycle', 'a', 'a'], ['close', 'a'], ['release', 'a']]);
   assert.equal(d.held(), null);
 });
 
@@ -200,7 +200,7 @@ test('a failed open releases its hold and the next due account runs', async () =
   const r = await rotationTick(d);
   assert.equal(r.handle, 'b');
   const w = withoutProbes(d);
-  assert.deepEqual(w.slice(0, 4), [['setLast', 'a'], ['hold', 'a'], ['open', 'a'], ['release', 'a']]);
+  assert.deepEqual(w.slice(0, 4), [['hold', 'a'], ['setLast', 'a'], ['open', 'a'], ['release', 'a']]);
   assert.equal(w.some((c) => c[0] === 'close' && c[1] === 'a'), false);
   assert.equal(d.held(), null);
 });
@@ -219,11 +219,28 @@ test('an account a console button is driving is skipped without probing its port
   assert.equal(d.calls.some((c) => c[1] === 'a'), false);
 });
 
-test('server.mjs wires the guard: both button checks ask loopHolds, the rotation passes busy/hold/release/alive', async () => {
+test('holdRegistry: a late release from an older turn cannot clear a newer turn hold', () => {
+  const r = holdRegistry();
+  const t1 = r.hold('x');
+  const t2 = r.hold('x');
+  r.release('x', t1);
+  assert.equal(r.holds('x'), true, 'the old turn release must not clear the new turn hold');
+  r.release('x', t2);
+  assert.equal(r.holds('x'), false);
+  assert.equal(r.live, false);
+  r.live = true; assert.equal(r.live, true);
+});
+
+test('server.mjs wires the guard: button checks ask loopHolds, Start waits for a live turn, the rotation passes busy/hold/release/alive', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8');
-  assert.equal((src.match(/autoProc && autoProc\.account === account\)/g) || []).length, 1, 'only loopHolds itself reads autoProc.account');
   assert.equal((src.match(/loopHolds\(account\)/g) || []).length, 2);
-  for (const k of ['busy', 'hold', 'release', 'alive']) assert.match(src, new RegExp(String.raw`\n\s+${k}: \(h?\) =>`), k);
+  assert.match(src, /const rotationHolds = holdRegistry\(\)/);
+  assert.match(src, /if \(rotationHolds\.live\) return \{ ok: false/);
+  assert.match(src, /rotationHolds\.live = true;\s+try \{ await rotationTick\(deps\); \}/);
+  assert.match(src, /finally \{ rotationHolds\.live = false; \}/);
+  assert.match(src, /busy: \(h\) => /);
+  assert.match(src, /hold: rotationHolds\.hold,/);
+  assert.match(src, /release: rotationHolds\.release,/);
   assert.match(src, /alive: \(\) => autoProc === me/);
 });
