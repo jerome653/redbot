@@ -40,15 +40,28 @@ export function endpointPort(endpoint: string): string {
   return '9222';
 }
 
+/**
+ * The fix is platform-specific. Production runs on Linux (cardinal), where this message used to
+ * print a PowerShell `& "C:\Program Files\..."` line — seen verbatim in the console 21-22 Oct.
+ * There the operator opens the account's browser from the console, so that comes first.
+ */
 export class NoBrowserError extends Error {
-  constructor(endpoint: string) {
+  constructor(endpoint: string, platform: NodeJS.Platform = process.platform) {
+    const port = endpointPort(endpoint);
+    const start = platform === 'win32'
+      ? `Start one (once per session), then re-run:\n\n` +
+        `  & "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" \`\n` +
+        `      --remote-debugging-port=${port} \`\n` +
+        `      --user-data-dir="${config.browser.profileDir}" \`\n` +
+        `      --no-first-run --no-default-browser-check\n\n`
+      : `Open that account's browser from the console (Accounts -> Open Chrome), then re-run.\n\n` +
+        `Or start one from a shell:\n\n` +
+        `  google-chrome --remote-debugging-port=${port} \\\n` +
+        `      --user-data-dir="${config.browser.profileDir}" \\\n` +
+        `      --no-first-run --no-default-browser-check\n\n`;
     super(
       `No debuggable Chrome at ${endpoint}.\n\n` +
-      `Start one (once per session), then re-run:\n\n` +
-      `  & "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" \`\n` +
-      `      --remote-debugging-port=${endpointPort(endpoint)} \`\n` +
-      `      --user-data-dir="${config.browser.profileDir}" \`\n` +
-      `      --no-first-run --no-default-browser-check\n\n` +
+      start +
       `Then run \`node dist/cli.js login\` and sign in to Reddit in that window.`
     );
     this.name = 'NoBrowserError';
