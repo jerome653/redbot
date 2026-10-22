@@ -4769,6 +4769,12 @@ function accounts(){
   addBtnTop.onclick=()=>openDialog('Add an account','four steps, about ten minutes',addAccount);
   ahead.append(addBtnTop);
   r.append(ahead);
+  /* The account list sits directly under the header, before the notices and the cards. It was
+     appended after the card grid — below every card — so on a 13-account install the one control
+     that says who exists was the last thing on the screen (operator report, 22 Oct 2026). No
+     unattributable count: every row here IS an account, so passing 0 keeps "+0 hidden" off. */
+  const lensA=acctLens(accounts,0);
+  if(lensA)r.append(lensA);
   orphanCard(r);
   personaFleetCard(r);
 
@@ -4843,10 +4849,6 @@ function accounts(){
   r.append(grid);
 
   const g=el('div','cards');
-  /* No unattributable count: every row here IS an account, so the lens can never hide one it
-     cannot place. Passing 0 keeps the control's warning off rather than printing "+0 hidden". */
-  const lensA=acctLens(accounts,0);
-  if(lensA)r.append(lensA);
   S.accounts.filter(a=>inLens(a.handle)).forEach(a=>{
     const c=el('div','card'+(a.stage==='warming'?' attn':''));
     c.append(el('div','chead',`<b>${esc(a.handle)}</b>`+
