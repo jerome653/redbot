@@ -2833,8 +2833,10 @@ function resumeAutoLoop() {
 }
 
 /* ------------------------------------------------------------------ *
- * The off-shift rotation — every account, one at a time, while the operator is off shift.
- * The decisions live in ./rotation.mjs; this is the wiring to Chrome and the CLI.
+ * The rotation — every account, one at a time, at any hour, each tick working the account that
+ * most needs it (never an account whose Chrome the operator has open during the shift).
+ * The decisions live in ./rotation.mjs and src/rotation-need.ts; this is the wiring to Chrome and
+ * the CLI.
  * ------------------------------------------------------------------ */
 function rotationStart({ everyMinutes }) {
   const shiftText = process.env.REDBOT_OPERATOR_SHIFT || DEFAULT_SHIFT;
@@ -2855,7 +2857,8 @@ function rotationStart({ everyMinutes }) {
   const deps = {
     now: () => new Date(),
     shift,
-    handles: async () => (await consoleAccounts()).accounts.map((a) => a.handle),
+    /* Read from the history table only — a tick with nothing due opens no Chrome. */
+    needs: async (now) => (await import('../../dist/rotation-need.js')).fleetNeeds(now),
     last: () => last,
     setLast: (h) => {
       last = h;
@@ -2867,7 +2870,14 @@ function rotationStart({ everyMinutes }) {
     runCycle: (h) => new Promise((resolve) => {
       const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), 'auto', '--once'], {
         cwd: SPAWN_CWD,
-        env: { ...process.env, REDBOT_ACCOUNT: h, REDBOT_LLM: selectedProvider, ...(selectedOperator ? { REDBOT_OPERATOR: selectedOperator } : {}) },
+        /* Warmup-first turns: re-collect only when the shared corpus is older than this (default
+           180 min, src/commands/auto.ts collectEveryMinutes). Set ONLY here, so the single-account
+           loop keeps collecting every cycle. */
+        env: {
+          ...process.env, REDBOT_ACCOUNT: h, REDBOT_LLM: selectedProvider,
+          REDBOT_COLLECT_EVERY_MINUTES: process.env.REDBOT_COLLECT_EVERY_MINUTES || '180',
+          ...(selectedOperator ? { REDBOT_OPERATOR: selectedOperator } : {})
+        },
         stdio: ['ignore', 'pipe', 'pipe']
       });
       me.child = child;

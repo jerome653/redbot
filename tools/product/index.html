@@ -6022,12 +6022,12 @@ function autoLoopCard(){
      which both want the whole measure. */
   const lb=el('div','collect-b loop-b');
   const st=(PULSE_LAST&&PULSE_LAST.auto)||{running:false};
-  lb.append(el('div','tiny','Collects threads, works out which are worth answering, writes a reply and fact-checks it — on a loop, without you. It stops there. Approving and sending stays yours, and it will not act during an account’s quiet hours or past its daily limit.'));
+  lb.append(el('div','tiny','Collects threads, works out which are worth answering, writes a reply and fact-checks it — on a loop, without you. It stops there. Approving and sending stays yours, and it will not act during an account’s quiet hours or past its daily limit. “All accounts” works whichever account most needs it, at any hour, and skips any account whose Chrome is open during the operator’s shift.'));
 
   const ctl=el('div');ctl.style.cssText='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.8rem';
   const who=el('select','sel');
-  /* Every account, one at a time, only outside the operator's shift — see tools/product/rotation.mjs. */
-  {const o=el('option',null,'All accounts, outside the operator shift');o.value='*';o.selected=true;who.append(o)}
+  /* Every account, one at a time, at any hour, never in a Chrome the operator has open on shift — see tools/product/rotation.mjs. */
+  {const o=el('option',null,'All accounts, any hour');o.value='*';o.selected=true;who.append(o)}
   S.accounts.forEach(a=>{const o=el('option',null,a.handle);o.value=a.handle;who.append(o)});
   const mins=el('select','sel');
   [['30','every 30 minutes'],['60','every hour'],['180','every 3 hours'],['360','every 6 hours']].forEach(([v,l])=>{
@@ -6047,7 +6047,7 @@ function autoLoopCard(){
         if(r.ok)held.done('Stopped'); else held.fail(r.error||'Could not stop');
       }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
     };
-    ctl.append(el('span','tag ok',st.rotate?`rotating all accounts outside the operator shift · ${esc(String(st.everyMinutes||''))} min between accounts`:`running as ${esc(st.account||'')} · every ${esc(String(st.everyMinutes||''))} min`),stopBtn);
+    ctl.append(el('span','tag ok',st.rotate?`rotating all accounts, any hour · ${esc(String(st.everyMinutes||''))} min between turns`:`running as ${esc(st.account||'')} · every ${esc(String(st.everyMinutes||''))} min`),stopBtn);
   } else {
     const startBtn=el('button','mini');
     startBtn.textContent='Start the loop';

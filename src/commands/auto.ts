@@ -13,7 +13,8 @@
  * Every cycle asks `checkWindow` first, so an account's quiet hours and daily ceiling are
  * respected by the one caller most likely to violate them — the one with nobody watching.
  */
-import { loadDrafts, countThreads } from '../store.js';
+import { loadDrafts, countThreads, loadHistory } from '../store.js';
+import type { HistoryEntry } from '../types.js';
 import { selectedAccount, config, DATA } from '../config.js';
 import { checkWindow } from '../window.js';
 import { counters } from '../health.js';
@@ -152,6 +153,21 @@ async function cycle(): Promise<number> {
     }))
   ];
 
+  /**
+   * WARMUP-FIRST TURNS. The rotation (tools/product/server.mjs rotationStart) sets
+   * REDBOT_COLLECT_EVERY_MINUTES so a turn re-collects only when the shared corpus is older than
+   * that; everything after collection — scoring, drafting, the warmup step — runs either way.
+   * Unset, this is always due and the loop collects every cycle exactly as before.
+   */
+  const every = collectEveryMinutes();
+  const collect = every === null
+    ? { due: true, why: '' }
+    : collectionDue(lastCollectionAt(await loadHistory()), new Date(), every);
+  if (!collect.due) {
+    say.step(`Collection skipped — ${collect.why}`);
+    sources.length = 0;
+  }
+
   let failuresInARow = 0;
   let abandoned = 0;
   for (let i = 0; i < sources.length; i++) {
@@ -222,6 +238,7 @@ async function cycle(): Promise<number> {
 
   await record('auto.cycle', `unattended cycle finished`, {
     account: account?.handle ?? null, collected, drafted: written,
+    ...(collect.due ? {} : { collectSkipped: true }),
     warmup: warm.ran ? (warm.draftId ?? 'none') : 'off'
   });
   /* The message has to tell the truth about which install this is. It read "Nothing was
@@ -231,6 +248,42 @@ async function cycle(): Promise<number> {
     ? 'Cycle finished. Publishing is UNATTENDED on this install — see the publish.* history rows for what it decided.'
     : 'Cycle finished. Nothing was published — that still needs you.');
   return 0;
+}
+
+/**
+ * `REDBOT_COLLECT_EVERY_MINUTES`: collect only when the last collection is at least this old. A
+ * positive integer, or null — unset, empty, 0 or unreadable all mean "collect every cycle", which
+ * is the behaviour every loop had before the rotation needed a cheaper turn.
+ */
+export function collectEveryMinutes(env: Record<string, string | undefined> = process.env): number | null {
+  const raw = env.REDBOT_COLLECT_EVERY_MINUTES;
+  if (raw == null || raw.trim() === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Is a collection due, given when the last one happened? Null minutes = always. */
+export function collectionDue(lastAt: string | null, now: Date, everyMinutes: number | null): { due: boolean; why: string } {
+  if (everyMinutes === null) return { due: true, why: 'collecting every cycle' };
+  if (!lastAt) return { due: true, why: 'nothing collected yet' };
+  const ago = Math.floor((now.getTime() - new Date(lastAt).getTime()) / 60_000);
+  return ago >= everyMinutes
+    ? { due: true, why: `last collected ${ago} min ago (every ${everyMinutes} min)` }
+    : { due: false, why: `last collected ${ago} min ago, every ${everyMinutes} min` };
+}
+
+/**
+ * The newest collection, from ANY account: `read` (a subreddit) and `search` (a committed search)
+ * rows are the two collection writers, and the corpus they fill is shared by every account.
+ * `search.preview` is not a collection — it commits nothing (see the comment in cycle()).
+ */
+export function lastCollectionAt(history: HistoryEntry[]): string | null {
+  let best: string | null = null;
+  for (const e of history) {
+    if (e.kind !== 'read' && e.kind !== 'search') continue;
+    if (best === null || new Date(e.ts).getTime() > new Date(best).getTime()) best = e.ts;
+  }
+  return best;
 }
 
 /**
