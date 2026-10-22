@@ -25,6 +25,119 @@ import { loadAccounts, type AccountRecord } from './config.js';
 import { recordObservation } from './health.js';
 
 /**
+ * WHERE THE NUMBER COMES FROM. PRODUCTION 20-22 Oct (cardinal): 8 of ~12 runs printed every field
+ * null for jordangrowth and colegrowth — a fixed 2500 ms sleep then an innerText regex, so a late
+ * render or a different layout failed silently. Primary source is now Reddit's own about.json,
+ * fetched inside the signed-in page; the regex is the fallback and polls instead of sleeping.
+ */
+export interface KarmaFacts {
+  karma: string | number | null;
+  postKarma: string | number | null;
+  commentKarma: string | number | null;
+  cakeDay: string | null;
+  joined: string | null;
+}
+
+const EMPTY_FACTS: KarmaFacts = { karma: null, postKarma: null, commentKarma: null, cakeDay: null, joined: null };
+
+const KARMA_TEXT = /([\d,.]+k?)\s*\n?\s*karma/i;
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+export function parseAboutJson(status: number, body: unknown): { facts: KarmaFacts } | { error: string } {
+  if (status !== 200) return { error: `about.json: HTTP ${status}` };
+  const data = (body && typeof body === 'object' ? (body as { data?: unknown }).data : null) as
+    Record<string, unknown> | null | undefined;
+  if (!data || typeof data !== 'object') return { error: 'about.json: response was not a user object' };
+  const link = num(data.link_karma);
+  const comment = num(data.comment_karma);
+  const total = num(data.total_karma) ?? (link != null && comment != null ? link + comment : null);
+  // A suspended or shadow-banned account answers 200 with no karma fields — that is not karma 0.
+  if (total == null) return { error: 'about.json: no karma fields in the response' };
+  const created = num(data.created_utc);
+  return {
+    facts: {
+      karma: total,
+      postKarma: link,
+      commentKarma: comment,
+      cakeDay: null,
+      joined: created != null ? new Date(created * 1000).toISOString() : null
+    }
+  };
+}
+
+export function parseProfileText(text: string): KarmaFacts {
+  const grab = (re: RegExp) => {
+    const m = re.exec(text);
+    return m?.[1] ? m[1].trim() : null;
+  };
+  return {
+    karma: grab(KARMA_TEXT),
+    postKarma: grab(/([\d,.]+k?)\s*\n?\s*post karma/i),
+    commentKarma: grab(/([\d,.]+k?)\s*\n?\s*comment karma/i),
+    cakeDay: grab(/cake day\s*\n?\s*(.+)/i),
+    joined: grab(/(?:joined|redditor since)\s*\n?\s*(.+)/i),
+  };
+}
+
+/** The value recordObservation takes, or null. "1,234" → 1234; "1.2k" is not a count → null. */
+export function karmaNumber(v: string | number | null | undefined): number | null {
+  if (v == null) return null;
+  const n = typeof v === 'number' ? v : Number(v.replace(/[, ]/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Poll the page text until the karma text shows up, or the timeout passes; returns the last text. */
+export async function waitForKarmaText(
+  read: () => Promise<string>,
+  opts: { timeoutMs?: number; intervalMs?: number; sleep?: (ms: number) => Promise<void> } = {}
+): Promise<string> {
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+  const intervalMs = opts.intervalMs ?? 500;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let waited = 0;
+  let text = await read();
+  while (!KARMA_TEXT.test(text) && waited + intervalMs <= timeoutMs) {
+    await sleep(intervalMs);
+    waited += intervalMs;
+    text = await read();
+  }
+  return text;
+}
+
+export interface KarmaSources {
+  fetchAbout: () => Promise<{ status: number; body: unknown }>;
+  /** Navigates to the profile and returns its text once the karma text appears (or it gives up). */
+  readProfileText: () => Promise<string>;
+}
+
+export type KarmaResult =
+  | { ok: true; source: 'about.json' | 'profile-page'; facts: KarmaFacts; notes: string[] }
+  | { ok: false; reasons: string[] };
+
+const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+export async function collectKarma(src: KarmaSources): Promise<KarmaResult> {
+  const reasons: string[] = [];
+  try {
+    const { status, body } = await src.fetchAbout();
+    const r = parseAboutJson(status, body);
+    if ('facts' in r) return { ok: true, source: 'about.json', facts: r.facts, notes: [] };
+    reasons.push(r.error);
+  } catch (e) {
+    reasons.push(`about.json: ${why(e)}`);
+  }
+  try {
+    const facts = parseProfileText(await src.readProfileText());
+    if (karmaNumber(facts.karma) != null) return { ok: true, source: 'profile-page', facts, notes: reasons };
+    reasons.push('profile page: no karma text matched after waiting');
+  } catch (e) {
+    reasons.push(`profile page: ${why(e)}`);
+  }
+  return { ok: false, reasons };
+}
+
+/**
  * Measure and record. Returns a process exit code rather than calling `process.exit`, so a
  * caller inside the CLI can decide what to do — a command that kills the process from inside
  * a library function is a command that cannot be composed.
@@ -49,28 +162,37 @@ export async function probeKarma(endpoint?: string): Promise<number> {
       return 1;
     }
 
-    await s.page.goto(`https://www.reddit.com/user/${me.username}/`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 45_000,
+    const page = s.page;
+    const name = me.username;
+    const result = await collectKarma({
+      // Same origin as the signed-in page, so the session cookie goes with it.
+      fetchAbout: () => page.evaluate(async (u: string) => {
+        const res = await fetch(`/user/${encodeURIComponent(u)}/about.json?raw_json=1`, {
+          credentials: 'include', headers: { accept: 'application/json' }
+        });
+        let body: unknown = null;
+        try { body = await res.json(); } catch { body = null; }
+        return { status: res.status, body };
+      }, name),
+      readProfileText: async () => {
+        await page.goto(`https://www.reddit.com/user/${name}/`, {
+          waitUntil: 'domcontentloaded',
+          timeout: 45_000,
+        });
+        return waitForKarmaText(() => page.evaluate(() => document.body?.innerText ?? ''));
+      }
     });
-    await s.page.waitForTimeout(2500);
 
-    const facts = await s.page.evaluate(() => {
-      const text = document.body.innerText;
-      const grab = (re: RegExp) => {
-        const m = re.exec(text);
-        return m?.[1] ? m[1].trim() : null;
-      };
-      return {
-        karma: grab(/([\d,.]+k?)\s*\n?\s*karma/i),
-        postKarma: grab(/([\d,.]+k?)\s*\n?\s*post karma/i),
-        commentKarma: grab(/([\d,.]+k?)\s*\n?\s*comment karma/i),
-        cakeDay: grab(/cake day\s*\n?\s*(.+)/i),
-        joined: grab(/(?:joined|redditor since)\s*\n?\s*(.+)/i),
-      };
-    });
-
+    if (!result.ok) {
+      console.log(JSON.stringify({ username: me.username, ...EMPTY_FACTS }, null, 2));
+      for (const r of result.reasons) console.log(`  ${r}`);
+      console.log('karma could not be read from about.json or the profile page — nothing recorded');
+      return 1;
+    }
+    const facts = result.facts;
     console.log(JSON.stringify({ username: me.username, ...facts }, null, 2));
+    for (const n of result.notes) console.log(`  ${n}`);
+    console.log(`source: ${result.source}`);
 
     /**
      * PRODUCTION OBSERVATION 2026-07-23: this probe was run and reported karma 1, and the health
@@ -80,11 +202,11 @@ export async function probeKarma(endpoint?: string): Promise<number> {
      * A measurement that does not reach the log is not evidence. Recorded here, in the same
      * observation store the health machine reads, so the two cannot disagree again.
      */
-    const karma = facts.karma != null ? Number(facts.karma.replace(/[, ]/g, '')) : null;
-    if (karma != null && Number.isFinite(karma)) {
+    const karma = karmaNumber(facts.karma);
+    if (karma != null) {
       await recordObservation({
         account: me.username, kind: 'karma', vector: 'signed-in',
-        value: karma, note: 'measured by probe-karma from the profile page'
+        value: karma, note: `measured by probe-karma from ${result.source === 'about.json' ? 'about.json' : 'the profile page'}`
       });
       console.log(`recorded: karma ${karma} for ${me.username}`);
     } else {
