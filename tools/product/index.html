@@ -4765,8 +4765,8 @@ function accounts(){
   aheads.append(el('div','sub','who redbot would be posting as'));
   ahead.append(aheads);
   const addBtnTop=el('button','mini srcbtn','Add an account');
-  addBtnTop.title='four steps, about ten minutes';
-  addBtnTop.onclick=()=>openDialog('Add an account','four steps, about ten minutes',addAccount);
+  addBtnTop.title='type the username, press one button — you only sign in';
+  addBtnTop.onclick=()=>openDialog('Add an account','type the username, press one button',addAccount);
   ahead.append(addBtnTop);
   r.append(ahead);
   /* The account list sits directly under the header, before the notices and the cards. It was
@@ -4992,131 +4992,136 @@ function accounts(){
 }
 
 /**
- * Adding an account.
+ * Adding an account — one field, one button.
  *
- * redbot never launches a browser and never creates a profile — it attaches to a Chrome a
- * person started. So there is nothing here for a button to do, and pretending otherwise would
- * hide the one step that actually matters: signing in yourself, once, in a real window.
- * What this panel can do is hand over the exact commands with no clashing port or folder,
- * and the config to paste. It writes nothing.
+ * The person types the Reddit username and presses "Add account". Everything clerical runs on
+ * its own on the SERVER (POST /api/account/add-auto, see tools/product/add-account-flow.mjs):
+ * set it up, give it a voice, open its Chrome on the sign-in page, wait for the sign-in, check
+ * karma. This dialog only shows the checklist ticking and polls GET /api/account/add-auto.
+ *
+ * It replaced three buttons pressed in order ("Set it up", "Open the browser", "Check the
+ * account") — the operator's words: "too much controls on here — most manual work".
+ *
+ * Because the flow lives on the server, closing this dialog stops nothing. Reopening it picks up
+ * the newest flow that is still running or that failed, so "Try again" is always one click away.
+ *
+ * The ONE manual step stays manual on purpose: typing the password into a real Chrome window.
+ * redbot never sees it and stores no password anywhere.
  */
 function addAccount(root){
-  const n=S.newAccount;
-  if(!n){root.append(el('div','tiny','This build could not work out a free port and folder, so it cannot give you the commands.'));return}
-  /* No `.collect` header any more — the dialog's own title bar carries it. */
   const box=el('div');
   const b=el('div');
 
-  const field=(label,ph,val)=>{
+  const field=(parent,label,ph,val)=>{
     const w=el('div');w.style.marginBottom='.85rem';
     w.append(el('div','tiny',esc(label)));
     const i=el('input');
     i.placeholder=ph; if(val)i.value=val;
     i.setAttribute('aria-label',label);
     i.style.cssText='width:100%;max-width:420px;margin-top:.25rem;font:inherit;font-size:.86rem;padding:.55rem .75rem;border-radius:9px;border:1px solid var(--edge-2);background:var(--glass-2);color:var(--ink)';
-    w.append(i);b.append(w);return i;
+    w.append(i);parent.append(w);return i;
   };
-  const fHandle=field('Their Reddit username','wp-fixer');
-  const fRole  =field('What is this account for?','Support desk');
-  const fSpeaks=field('What do they talk about?','Error messages, plugin conflicts, getting unstuck');
-  /**
-   * Deliberately EMPTY, and deliberately optional.
-   *
-   * This field arrived pre-filled with "WordPress" and the server stored `['WordPress']` when it
-   * was cleared, so the answer was the build's either way and an operator adding an account for
-   * another room had to notice a default and delete it. Left empty the account is confined to
-   * the subreddits enabled under "Where redbot looks" — a list on a screen, which is where a
-   * decision like this belongs.
-   */
-  const fSubs  =field('Which subreddits? (optional, comma separated)','leave empty to use the sources you have enabled');
+  const fHandle=field(b,'Their Reddit username','wp-fixer');
 
-  /**
-   * No "which of YOUR Chrome profiles" picker.
-   *
-   * There was one, and it recorded an answer nothing ever read. Step 2 below opens a Chrome
-   * that redbot launches itself, with `--user-data-dir` pointing at this account's own folder
-   * under data/ — the Reddit session lives there and only there. Offering a list of your real
-   * profiles alongside that reads as "sign in with this one", which was never true.
-   */
-  const steps=el('div');b.append(steps);
-  const status=el('div','tiny');status.style.marginTop='.5rem';b.append(status);
-  let made=null;
+  /* Optional, and folded away: the server stores sane defaults for all three, so the one-click
+     path never needs them. Subreddits left empty means "the sources you have enabled". */
+  const more=el('details','fold');more.style.margin='0 0 .85rem';
+  more.append(el('summary','tiny','More (optional) — what it is for, what it talks about, which subreddits'));
+  const moreBody=el('div');moreBody.style.marginTop='.6rem';more.append(moreBody);
+  const fRole  =field(moreBody,'What is this account for?','Support desk');
+  const fSpeaks=field(moreBody,'What do they talk about?','Error messages, plugin conflicts, getting unstuck');
+  const fSubs  =field(moreBody,'Which subreddits? (optional, comma separated)','leave empty to use the sources you have enabled');
+  b.append(more);
 
-  const button=(text,onClick,disabled)=>{
-    const bt=el('button','mini lg act');bt.textContent=text;bt.disabled=!!disabled;
-    if(!disabled)bt.onclick=onClick;
-    return bt;
-  };
-  const post=(path,body)=>fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+  const go=el('button','mini lg act','Add account');
+  b.append(go);
 
-  function draw(){
-    steps.textContent='';
-    const mk=(title,why,ctl,done)=>{
-      const s=el('div','stepn');
-      const t=el('div','txt');
-      t.innerHTML=`<b>${esc(title)}</b>${done?' <span class="tag ok">done</span>':''}<div class="tiny" style="margin-top:.3rem">${esc(why)}</div>`;
-      const holder=el('div');holder.style.marginTop='.6rem';holder.append(ctl);t.append(holder);
-      s.append(t);steps.append(s);
-    };
+  const line=el('div','tiny');line.style.marginTop='.8rem';line.setAttribute('role','status');
+  const list=el('div');list.style.marginTop='.6rem';list.setAttribute('aria-label','Add account progress');
+  const after=el('div');after.style.marginTop='.6rem';
+  b.append(line,list,after);
 
-    mk('Set the account up','Picks a free port and its own browser folder, and writes it down. Nothing is asked of you but the name.',
-      button(made?'Set up ✓':'Set it up',async()=>{
-        status.textContent='Setting up…';
-        /* Walks the port range bind-testing each one, then writes two stores. */
-        const held=busy('Finding a free port and folder…');
-        try{
-          const r=await post('/api/account/create',{
-            handle:fHandle.value, role:fRole.value, speaks:fSpeaks.value,
-            subreddits:fSubs.value.split(',').map(s=>s.trim()).filter(Boolean)
-          });
-          if(!r.ok){status.innerHTML=`<span style="color:var(--ember)">${esc(r.error)}</span>`;held.fail(r.error);return}
-          made=r.account;
-          /* An adopted folder may already be signed in — a different fact from an empty one, and
-             the next step says "type the password", which would be wrong advice for it. */
-          status.textContent=r.adoptedProfileDir
-            ? `Ready. This username was removed before, so it got its old browser folder ${r.account.profileDir} back on port ${r.account.debugPort} — it may still be signed in.`
-            : `Ready. Its browser folder is ${r.account.profileDir}, on port ${r.account.debugPort}.`;
-          draw();
-          held.done('Account set up');
-        }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
-      },!!made),!!made);
+  const ICON={pending:'○',running:'…',done:'✓',warn:'!',failed:'✗'};
+  const TONE={pending:'var(--ink-3)',running:'var(--ink)',done:'var(--jade)',warn:'var(--amber)',failed:'var(--ember)'};
+  let current=null, timer=null, reloaded=false;
 
-    mk('Open their browser and sign in','A Chrome window opens on the Reddit sign-in page. Type the password there — redbot never sees it and stores no password anywhere. Leave the window open.',
-      button('Open the browser',async()=>{
-        status.textContent='Opening Chrome…';
-        const held=busy('Opening Chrome…');
-        try{
-          const r=await post('/api/account/open',{handle:made.handle});
-          status.innerHTML=r.ok?'Chrome is open. Sign in, then come back and press the last button.'
-                              :`<span style="color:var(--ember)">${esc(r.error)}</span>`;
-          if(r.ok)held.done('Chrome is open'); else held.fail(r.error);
-        }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
-      },!made),false);
+  const body=()=>({
+    handle:current||fHandle.value,
+    role:fRole.value||undefined, speaks:fSpeaks.value||undefined,
+    subreddits:fSubs.value.split(',').map(s=>s.trim()).filter(Boolean)
+  });
 
-    mk('Check it worked','Reads the karma off their profile and writes it down, so Today has a real number to plan against.',
-      button('Check the account',async()=>{
-        status.textContent='Checking…';
-        /* Sends `account`, not `cdp`. The server deliberately ignores a request-supplied CDP
-           endpoint (H5: a caller could otherwise point redbot at a debugger they control and
-           harvest every scraped thread), so this button used to hand over a field that was
-           discarded and no account at all — the child then fell back to the default debug port
-           and reported "not signed in" no matter which account you had just created. The
-           operator was hardcoded to 'jerome' here too; runAction bills the operator the console
-           has selected, so naming one in the body never did anything. */
-        /* Drives the real browser to read the profile page — the slowest step in the wizard. */
-        const held=busy('Reading their karma…');
-        try{
-          const r=await post('/api/run',{key:'check-karma',account:made.handle});
-          status.innerHTML=r.ok?'Done. Reloading…':`<span style="color:var(--ember)">${esc(r.error||'That did not work')}</span>`;
-          if(r.ok){held.update('Reloading…');await load();held.done('Account added');}
-          else held.fail(r.error||'That did not work');
-        }catch(e){held.fail(String(e&&e.message||e))}finally{held.done()}
-      },!made),false);
+  function paint(f){
+    list.textContent='';after.textContent='';
+    if(!f)return;
+    for(const s of f.steps||[]){
+      const row=el('div','add-step');row.dataset.step=s.key;row.dataset.state=s.state;
+      row.style.cssText='display:flex;gap:.6rem;align-items:baseline;padding:.25rem 0';
+      const ic=el('span');ic.textContent=ICON[s.state]||'○';ic.style.cssText=`width:1.1rem;text-align:center;font-weight:700;color:${TONE[s.state]||'inherit'}`;
+      ic.setAttribute('aria-label',s.state);
+      const t=el('div');
+      t.innerHTML=`<span${s.state==='pending'?' style="color:var(--ink-3)"':''}>${esc(s.label)}</span>`
+        +(s.detail?`<div class="tiny" style="margin-top:.15rem;color:${s.state==='failed'?'var(--ember)':'var(--ink-3)'}">${esc(s.detail)}</div>`:'');
+      row.append(ic,t);list.append(row);
+    }
+    const signing=(f.steps||[]).find(s=>s.key==='signin'&&s.state==='running');
+    if(f.status==='done'){
+      line.innerHTML=`<b style="color:var(--jade)">${esc(f.message||('Added — '+f.handle))}</b>`;
+    }else if(f.status==='failed'){
+      line.innerHTML=`<span style="color:var(--ember)">${esc(f.error||'That did not work')}</span>`;
+      const again=el('button','mini lg act','Try again');
+      again.onclick=()=>start(true);
+      after.append(again);
+    }else if(signing){
+      line.innerHTML=`<b>Sign in to Reddit in the Chrome window that just opened.</b> This finishes on its own once you are signed in as ${esc(f.handle)}.`;
+    }else{
+      line.textContent=`Adding ${f.handle}…`;
+    }
+    go.disabled=f.status==='running';
+    fHandle.disabled=f.status==='running';
   }
-  draw();
-  b.append(el('div','tiny','The only thing you do by hand is type the password into a real browser window. That one step stays manual on purpose — an account nobody signed into is not really yours.'));
 
+  async function poll(){
+    clearTimeout(timer);
+    /* The dialog was closed: stop asking. The flow carries on in the server regardless. */
+    if(!root.isConnected||!current)return;
+    let f=null;
+    try{
+      const r=await fetch('/api/account/add-auto?handle='+encodeURIComponent(current)).then(r=>r.json());
+      f=r.flow;
+    }catch(e){ line.textContent='Lost touch with redbot — retrying…'; }
+    if(f)paint(f);
+    if(f&&f.status==='done'&&!reloaded){reloaded=true;try{await load()}catch{}}
+    if(!f||f.status==='running')timer=setTimeout(poll,2000);
+  }
+
+  async function start(retry){
+    const h=(retry&&current)||fHandle.value.trim();
+    if(!h){line.innerHTML='<span style="color:var(--ember)">Type the Reddit username first.</span>';fHandle.focus();return}
+    current=h;reloaded=false;
+    go.disabled=true;
+    try{
+      const r=await fetch('/api/account/add-auto',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body())}).then(r=>r.json());
+      if(!r.ok&&!r.flow){line.innerHTML=`<span style="color:var(--ember)">${esc(r.error||'That did not work')}</span>`;go.disabled=false;return}
+      current=(r.flow&&r.flow.handle)||h;
+      paint(r.flow);
+    }catch(e){line.innerHTML=`<span style="color:var(--ember)">${esc(String(e&&e.message||e))}</span>`;go.disabled=false;return}
+    poll();
+  }
+  go.onclick=()=>start(false);
+  fHandle.addEventListener('keydown',e=>{if(e.key==='Enter'&&!go.disabled)start(false)});
+
+  b.append(el('div','tiny','The only thing you do by hand is sign in to Reddit in the Chrome window that opens. redbot never sees or stores the password — an account nobody signed into is not really yours.'));
   box.append(b);root.append(box);
+
+  /* Pick up a flow already under way (the dialog was closed while it waited for the sign-in). */
+  fetch('/api/account/add-auto').then(r=>r.json()).then(r=>{
+    if(current||!r||!Array.isArray(r.flows))return;
+    const f=r.flows.find(x=>x.status==='running')||r.flows.find(x=>x.status==='failed');
+    if(!f)return;
+    current=f.handle;fHandle.value=f.handle;paint(f);
+    if(f.status==='running')poll();
+  }).catch(()=>{});
 }
 
 /* ---------------- growing — the warm-up coach ----------------

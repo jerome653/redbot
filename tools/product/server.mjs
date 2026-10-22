@@ -56,6 +56,7 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
    decisions were unreachable without spawning Chrome, which is why nothing tested them and
    why the two halves of detection could both be green while nothing connected them. */
 import { startAlignedBrowser } from './browser-start.mjs';
+import { createAddAccountFlows, karmaFromOutput } from './add-account-flow.mjs';
 import { replyAccount, ensureBrowser } from './reply-browser.mjs';
 import { rotationTick, parseShift, DEFAULT_SHIFT } from './rotation.mjs';
 
@@ -2419,6 +2420,83 @@ async function launchChrome(handle, { background = false } = {}) {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * One-click "Add account" — POST /api/account/add-auto + GET status.
+ *
+ * The orchestration (order, resume, the wait, the words) is tools/product/add-account-flow.mjs
+ * and is tested there with every side effect stubbed. What lives HERE is only the wiring of each
+ * step to the thing the old three-button dialog already called, so the one button cannot grow a
+ * second idea of how an account is created, opened or measured:
+ *
+ *   create  → createAccount()            — the same as POST /api/account/create
+ *   persona → planFleetVoices for ONE     — the same rule as POST /api/personas/seed, never overwriting
+ *   open    → launchChrome()             — the same as POST /api/account/open
+ *   signin  → dist/browser.js signedInAs — cookie first, then /api/me.json; never opens a tab
+ *   karma   → runAction('check-karma')    — the same as the old "Check the account" button
+ *
+ * Held in this process, keyed by handle, so closing the dialog does not stop it.
+ * ------------------------------------------------------------------ */
+const findAccount = async (handle) => {
+  const { accounts } = await consoleAccounts();
+  return accounts.find((a) => String(a.handle).toLowerCase() === String(handle).toLowerCase()) || null;
+};
+
+/* Polls of the sign-in wait, per handle. Every sixth asks /api/me.json even without the session
+   cookie — the hedge in case Reddit renames it, at one request per ~30 s rather than per poll. */
+const signinPolls = new Map();
+
+const addFlows = createAddAccountFlows({
+  exists: async (handle) => !!(await findAccount(handle)),
+  create: (input) => {
+    /* Only what the person actually filled in. createConsoleAccount stores `role: 'Support'` for
+       an absent role and "wherever the enabled sources point" for absent subreddits — the right
+       defaults for a one-field form. */
+    const body = { handle: input.handle };
+    if (input.role) body.role = String(input.role);
+    if (input.speaks) body.speaks = String(input.speaks);
+    if (Array.isArray(input.subreddits) && input.subreddits.length) body.subreddits = input.subreddits;
+    return createAccount(body);
+  },
+  persona: async (handle) => {
+    if (!personasApi || !personaAllocApi) return { ok: false, error: 'the compiled build is missing' };
+    const a = await findAccount(handle);
+    if (!a) return { ok: false, error: `${handle} is not set up` };
+    const have = await personasApi.all();
+    if (have.some((p) => p.handle.toLowerCase() === a.handle.toLowerCase())) return { ok: true, note: 'already has a voice' };
+    const { plans, unallocated } = personaAllocApi.planFleetVoices(
+      [{ handle: a.handle, role: a.role ?? null, speaks: a.speaks ?? null, knows: a.knows ?? null, subreddits: a.subreddits ?? null }],
+      new Map(have.map((p) => [p.handle.toLowerCase(), p]))
+    );
+    if (unallocated.length || !plans.length) return { ok: false, error: 'every voice is already taken by another account' };
+    const saved = await personasApi.save(plans[0].handle, plans[0].patch);
+    return { ok: true, note: `voice ${personaAllocApi.voiceKey(saved)}${plans[0].bioMissing ? ', no bio yet' : ''}` };
+  },
+  open: async (handle) => {
+    const a = await findAccount(handle);
+    if (!a) return { ok: false, error: `${handle} is not set up.` };
+    return launchChrome(a.handle);
+  },
+  signedInAs: async (handle) => {
+    const a = await findAccount(handle);
+    if (!a || !a.debugPort) throw new Error(`${handle} has no browser port on record`);
+    const key = a.handle.toLowerCase();
+    const n = (signinPolls.get(key) || 0) + 1;
+    signinPolls.set(key, n);
+    const { signedInAs } = await import('../../dist/browser.js');
+    return signedInAs(`http://127.0.0.1:${a.debugPort}`, { askEvenWithoutCookie: n % 6 === 0 });
+  },
+  checkKarma: async (handle) => {
+    const a = await findAccount(handle);
+    if (!a) return { ok: false, error: `${handle} is not set up.` };
+    /* Another button's run holds the one slot. Wait it out briefly rather than fail a flow the
+       person has already done the hard part of — then say what was in the way. */
+    for (let i = 0; running && i < 24; i++) await new Promise((r) => setTimeout(r, 5000));
+    const r = await runAction('check-karma', { account: a.handle });
+    if (!r.ok) return { ok: false, error: r.error || 'the karma check did not work' };
+    return { ok: true, karma: karmaFromOutput(r.output) };
+  }
+});
+
 /* The real opener and port read for `ensureBrowser` (see runAction). Background, as boot opens
    them: a reply should not throw a window in front of the person who pressed Send. */
 openBrowserImpl = (handle) => launchChrome(handle, { background: true });
@@ -3524,6 +3602,19 @@ const server = createServer((req, res) => {
         return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
       /**
+       * One-click add: start (or resume, or rejoin) the whole flow and answer at once with where
+       * it is. The flow keeps running after this returns; GET /api/account/add-auto follows it.
+       */
+      if (url.pathname === '/api/account/add-auto') {
+        const r = addFlows.start({
+          handle: body.handle, role: body.role, speaks: body.speaks,
+          subreddits: Array.isArray(body.subreddits) ? body.subreddits.map(String).map((s) => s.trim()).filter(Boolean) : undefined
+        });
+        r.finished.catch(() => {});   // the flow records its own failure; never an unhandled rejection
+        if (!r.ok) return send(400, JSON.stringify({ ok: false, error: r.state.error, flow: r.state }));
+        return send(200, JSON.stringify({ ok: true, flow: r.state }));
+      }
+      /**
        * Editing an existing account — the descriptive half of it.
        *
        * The handle, the profile folder and the debug port are NOT taken from this request; see
@@ -4366,6 +4457,14 @@ const server = createServer((req, res) => {
      needs something to show other than a spinner. Never carries the credential. */
   if (url.pathname === '/api/account/exit') {
     return send(200, JSON.stringify(exitVetStatus()));
+  }
+
+  /* Where a one-click add is. `handle` names one; without it, every flow this process holds — so
+     a reopened dialog can pick up a run it did not start. */
+  if (url.pathname === '/api/account/add-auto') {
+    const h = url.searchParams.get('handle');
+    if (h) return send(200, JSON.stringify({ ok: true, flow: addFlows.get(h) }));
+    return send(200, JSON.stringify({ ok: true, flows: addFlows.all() }));
   }
 
   /**
