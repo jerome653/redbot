@@ -56,14 +56,18 @@ export function keyFile(userData) {
  * Returns `{ source, stored }` — never the key itself. Nothing here may return, log or throw a
  * value; `src/vault.ts` holds the same rule and every throw below names the problem only.
  */
-export function ensureVaultKey({ safeStorage, userData, envValue }) {
+export function ensureVaultKey({ safeStorage, userData, envValue, platform = process.platform }) {
   const file = keyFile(userData);
 
   /* 1. Already in the environment. A developer's shell, or a deliberate override. Adopt it into
         the store so the next launch does not depend on the shell — but never overwrite a
-        DIFFERENT key that is already stored, because that would orphan rows sealed under it. */
+        DIFFERENT key that is already stored, because that would orphan rows sealed under it.
+        NOT on Linux: there `isEncryptionAvailable` asks the desktop keyring over D-Bus, and where
+        nothing answers it blocks for D-Bus's 25 s default timeout. Measured on cardinal 21-22 Oct:
+        every desktop launch spent 25.0 s here, every launch, for a key already in hand from
+        vault.env (launch-redbot.sh) — the store was never written, so it never stopped asking. */
   if (process.env.REDBOT_VAULT_KEY) {
-    if (!existsSync(file) && available(safeStorage)) {
+    if (platform !== 'linux' && !existsSync(file) && available(safeStorage)) {
       try {
         write(file, safeStorage.encryptString(process.env.REDBOT_VAULT_KEY));
         return { source: 'environment', stored: true };

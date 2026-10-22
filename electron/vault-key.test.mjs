@@ -225,3 +225,27 @@ test('a pre-existing vault.key that is not ours is refused, not replaced', () =>
     () => ensureVaultKey({ safeStorage: fakeStore(), userData, envValue: () => null }),
     /cannot decrypt it/i);
 });
+
+describe('a key already in the environment on Linux', () => {
+  /* Measured on cardinal, boot.log 21-22 Oct: a desktop launch spent 25.0 s between "--- boot ---"
+     and "vault key environment" on every start (a service launch, with no session bus: 6 ms).
+     25 s is D-Bus's default call timeout — safeStorage asking a keyring that never answers. The key
+     was already in hand from vault.env, so that question bought nothing. */
+  test('does not ask the credential store at all', () => {
+    process.env.REDBOT_VAULT_KEY = 'a'.repeat(64);
+    let asked = 0;
+    const store = fakeStore();
+    const spy = { ...store, isEncryptionAvailable: () => { asked++; return true; } };
+    const r = ensureVaultKey({ safeStorage: spy, userData, envValue: () => null, platform: 'linux' });
+    assert.equal(r.source, 'environment');
+    assert.equal(r.stored, false);
+    assert.equal(asked, 0, 'the keyring was probed although the key came from the environment');
+    assert.equal(existsSync(keyFile(userData)), false);
+  });
+
+  test('on Windows the environment key is still adopted into the store', () => {
+    process.env.REDBOT_VAULT_KEY = 'a'.repeat(64);
+    const r = ensureVaultKey({ safeStorage: fakeStore(), userData, envValue: () => null, platform: 'win32' });
+    assert.equal(r.stored, true);
+  });
+});
