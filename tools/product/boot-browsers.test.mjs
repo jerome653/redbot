@@ -13,7 +13,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bootBrowserSelection, expectedOpen, DEFAULT_WANT, minimiseAtBoot } from './boot-browsers.mjs';
+import { bootBrowserSelection, expectedOpen, DEFAULT_WANT, minimiseAtBoot, ROTATION } from './boot-browsers.mjs';
 import { fleetProblems } from './fleet-posture.mjs';
 
 const HANDLES = ['Alice', 'bob', 'CAROL'];
@@ -134,4 +134,52 @@ test('boot leaves the loop account\'s browser un-minimised and minimises every o
   assert.equal(minimiseAtBoot('JordanGrowth', 'jordangrowth'), false, 'matched case-insensitively');
   assert.equal(minimiseAtBoot('ryangrowth12', 'jordangrowth'), true);
   assert.equal(minimiseAtBoot('ryangrowth12', null), true, 'no loop registered: every boot window is minimised, as before');
+});
+
+/* ------------------------------------------------------------------ *
+ * the rotation sentinel — MEASURED on cardinal 2026-10-22
+ *
+ * push-state.json carried `autoLoop.account: "*"`, the sentinel server.mjs reads as
+ * "rotate across every account". This module knew only literal handles, so it answered
+ * Set(["*"]) and the boot log said `opening 1 of 13 — * is the account the loop runs as`
+ * followed by all thirteen `not opened at boot`. Zero browsers. redbot-karma.service then
+ * failed at 11:00 UTC: `no account's browser is running (13 with a debug port)`.
+ * ------------------------------------------------------------------ */
+
+test('the rotation sentinel selects NOTHING, not an account named "*"', () => {
+  const fleet = ['Big_Variation_8580', 'jordangrowth', 'ryangrowth12'];
+  const { expected, why } = bootBrowserSelection({ handles: fleet, loopAccount: ROTATION });
+  assert.ok(expected instanceof Set, 'a rotation is a selection, not an absent one');
+  assert.equal(expected.size, 0,
+    'Set(["*"]) is what opened zero of thirteen while the log claimed "opening 1 of 13"');
+  assert.match(why, /rotation opens each account for its own turn/);
+  for (const h of fleet) assert.equal(expectedOpen(expected, h), false);
+});
+
+test('under the rotation a closed browser is NOT a fault — null here would be thirteen false alarms', () => {
+  const fleet = ['bob', 'alice', 'carol'];
+  const { expected } = bootBrowserSelection({ handles: fleet, loopAccount: ROTATION });
+  assert.notEqual(expected, null,
+    'null means every account is expected open — the cry-wolf case this module exists to stop');
+  assert.deepEqual(fleetProblems(fleet.map(shut), expected), []);
+});
+
+test('a squatted port or a missing folder is still a fault under the rotation', () => {
+  const { expected } = bootBrowserSelection({ handles: ['bob', 'alice'], loopAccount: ROTATION });
+  assert.deepEqual(fleetProblems([{ ...shut('alice'), state: 'foreign' }], expected),
+    ['alice: port 9222 is held by something else']);
+  assert.deepEqual(fleetProblems([{ ...shut('alice'), profileOnDisk: false }], expected),
+    ['alice: its browser folder is missing']);
+});
+
+test('"all" and an explicit list still win over the rotation sentinel', () => {
+  assert.equal(
+    bootBrowserSelection({ handles: ['bob'], want: 'all', loopAccount: ROTATION }).expected, null);
+  const named = bootBrowserSelection({ handles: ['bob', 'alice'], want: 'bob', loopAccount: ROTATION });
+  assert.deepEqual([...named.expected], ['bob']);
+});
+
+test('the rotation has no permanent window, so every boot window is minimised', () => {
+  assert.equal(minimiseAtBoot('jordangrowth', ROTATION), true);
+  assert.equal(minimiseAtBoot('*', ROTATION), true, 'there is no account named "*" to except');
 });
