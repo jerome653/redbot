@@ -78,10 +78,19 @@ register('data:text/javascript,' + encodeURIComponent(RESOLVE_HOOK), import.meta
  * actually explains what is wrong. Off the namespace, a missing export arrives as `undefined` and
  * the assertion gets to speak.
  */
+/* Importing main.mjs runs its instance claim. Run under systemd (INVOCATION_ID) that claim WAITS
+   instead of quitting, so the import must not inherit the runner's environment — a suite that hangs
+   on cardinal because it was started by a unit would be a test of the shell, not of the code. */
+const SERVICE_ENV = { INVOCATION_ID: process.env.INVOCATION_ID, REDBOT_SERVICE: process.env.REDBOT_SERVICE };
+delete process.env.INVOCATION_ID;
+delete process.env.REDBOT_SERVICE;
 const main = await import('./main.mjs');
+for (const [k, v] of Object.entries(SERVICE_ENV)) if (v !== undefined) process.env[k] = v;
 const {
   openBoundBrowsers, bootOpened, BOOT_OPEN_TIMEOUT_MS,
-  PORT_WAIT_MS, DETECT_GOTO_MS, DETECT_FETCH_MS, ALIGN_CONNECT_MS, BOOT_OPEN_HEADROOM_MS
+  PORT_WAIT_MS, DETECT_GOTO_MS, DETECT_FETCH_MS, ALIGN_CONNECT_MS, BOOT_OPEN_HEADROOM_MS,
+  claimInstance, wireInstance, isServiceRun, focusOnSecondInstance,
+  SERVICE_LOCK_RETRY_MS, WAITING_FOR_LOCK
 } = main;
 
 /**
@@ -430,4 +439,123 @@ test('a browser already `ours` is skipped without an open request', async () => 
     assert.deepEqual([...bootOpened], [], 'boot did not open it, so boot does not close it');
     assert.match(said, /erin.*already open/);
   } finally { await console_.stop(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * 3. Who gets the instance lock — and what a SERVICE does when it does not.
+ *
+ * Measured on cardinal, 21 Oct PDT: the operator closed the window at 17:45:41, systemd scheduled
+ * a restart for 20 s later, and at 17:46:00 the operator double-clicked the desktop icon. That
+ * copy took the lock. Every service start from 17:46:01 to 17:48:36 found the lock held, quit 0,
+ * and at 17:48:56 systemd gave up with `start-limit-hit`. From then on nothing restarted the loop
+ * once the hand-launched window closed. A service that loses the lock must WAIT for it.
+ * ------------------------------------------------------------------ */
+
+/** An app whose lock answers from a script, and a clock the test turns by hand. */
+function fakeLockApp(answers) {
+  const calls = { quit: 0, lock: [], on: [], whenReady: 0 };
+  const app = {
+    quit() { calls.quit++; },
+    requestSingleInstanceLock(data) { calls.lock.push(data); return answers.length > 1 ? answers.shift() : answers[0]; },
+    on(name) { calls.on.push(name); },
+    whenReady() { calls.whenReady++; return new Promise(() => {}); }
+  };
+  const timers = { fns: [], cleared: 0, ms: [] };
+  const clock = {
+    setInterval(fn, ms) { timers.fns.push(fn); timers.ms.push(ms); return timers.fns.length; },
+    clearInterval() { timers.cleared++; timers.fns.length = 0; },
+    tick() { for (const fn of [...timers.fns]) fn(); }
+  };
+  return { app, calls, timers, clock };
+}
+
+test('a service run is INVOCATION_ID (systemd) or REDBOT_SERVICE=1, nothing else', () => {
+  assert.equal(isServiceRun({ INVOCATION_ID: 'abc123' }), true);
+  assert.equal(isServiceRun({ REDBOT_SERVICE: '1' }), true);
+  assert.equal(isServiceRun({}), false);
+  assert.equal(isServiceRun({ REDBOT_SERVICE: '0' }), false);
+  assert.equal(isServiceRun({ INVOCATION_ID: '' }), false);
+});
+
+test('THE INCIDENT: under systemd a held lock is waited for, then boot runs — never quit', () => {
+  const { app, calls, timers, clock } = fakeLockApp([false, false, false, true]);
+  const said = [];
+  let won = 0;
+  const result = claimInstance({
+    app, env: { INVOCATION_ID: 'x' }, onWon: () => { won++; }, log: (l) => said.push(l), ...clock
+  });
+  assert.equal(result, 'waiting');
+  assert.equal(calls.quit, 0, 'a service that quits on a held lock is what burned the start limit');
+  assert.equal(won, 0, 'nothing may boot without the lock');
+  assert.equal(timers.ms[0], SERVICE_LOCK_RETRY_MS);
+  assert.equal(SERVICE_LOCK_RETRY_MS, 15_000);
+
+  clock.tick(); clock.tick();
+  assert.equal(won, 0, 'still held — still waiting');
+  clock.tick();
+  assert.equal(won, 1, 'the lock was obtained, so this copy boots');
+  assert.equal(calls.quit, 0);
+  assert.equal(timers.cleared, 1, 'retrying stops once the lock is ours');
+  clock.tick();
+  assert.equal(won, 1, 'and boot is wired exactly once');
+
+  assert.equal(said.length, 2, `the wait is said once, not every 15 s, then the takeover once: ${JSON.stringify(said)}`);
+  assert.match(said[0], /another redbot holds the instance lock — waiting; this service takes over when it closes/);
+  assert.match(said[1], /lock obtained — booting/);
+  for (const data of calls.lock) {
+    assert.deepEqual(data, WAITING_FOR_LOCK,
+      'every attempt tells the holder it is a waiting service, so the holder does not steal focus');
+  }
+});
+
+test('REDBOT_SERVICE=1 waits the same way', () => {
+  const { app, calls, clock } = fakeLockApp([false, true]);
+  let won = 0;
+  assert.equal(claimInstance({ app, env: { REDBOT_SERVICE: '1' }, onWon: () => { won++; }, log() {}, ...clock }), 'waiting');
+  clock.tick();
+  assert.equal(won, 1);
+  assert.equal(calls.quit, 0);
+});
+
+test('outside systemd a second launch still quits, as it always did', () => {
+  const { app, calls, timers, clock } = fakeLockApp([false]);
+  let won = 0;
+  assert.equal(claimInstance({ app, env: {}, onWon: () => { won++; }, log() {}, ...clock }), 'quit');
+  assert.equal(calls.quit, 1);
+  assert.equal(won, 0);
+  assert.equal(timers.fns.length, 0, 'a desktop launch never sits in the background waiting');
+});
+
+test('with the lock free, boot is wired at once, by service or by hand', () => {
+  for (const env of [{}, { INVOCATION_ID: 'x' }]) {
+    const { app, calls, timers, clock } = fakeLockApp([true]);
+    let won = 0;
+    assert.equal(claimInstance({ app, env, onWon: () => { won++; }, log() {}, ...clock }), 'won');
+    assert.equal(won, 1);
+    assert.equal(calls.quit, 0);
+    assert.equal(timers.fns.length, 0);
+  }
+});
+
+test('after a wait, the app wiring happens exactly once', () => {
+  const { app, calls, clock } = fakeLockApp([false, true]);
+  claimInstance({ app, env: { INVOCATION_ID: 'x' }, onWon: () => wireInstance(app), log() {}, ...clock });
+  assert.equal(calls.on.length, 0, 'nothing is wired while another copy owns the app');
+  assert.equal(calls.whenReady, 0);
+  clock.tick(); clock.tick();
+  const count = (n) => calls.on.filter((x) => x === n).length;
+  assert.equal(count('second-instance'), 1);
+  assert.equal(count('window-all-closed'), 1);
+  assert.equal(count('before-quit'), 1);
+  assert.equal(calls.whenReady, 1, 'whenReady -> boot exactly once');
+});
+
+test('the holder ignores a waiting service knocking, and still focuses for a person', () => {
+  const w = { min: true, restored: 0, focused: 0, isMinimized() { return this.min; }, restore() { this.restored++; }, focus() { this.focused++; } };
+  focusOnSecondInstance(w, WAITING_FOR_LOCK);
+  assert.equal(w.focused, 0, 'a service retry every 15 s must not pull the window to the front');
+  focusOnSecondInstance(w, undefined);
+  assert.equal(w.restored, 1);
+  assert.equal(w.focused, 1, 'a double-click on the icon still brings the window up');
+  focusOnSecondInstance(null, undefined); /* no window yet: nothing to do, nothing thrown */
 });

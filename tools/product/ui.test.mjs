@@ -3045,3 +3045,33 @@ test('the account editor no longer offers a Timezone box to type a guess into', 
               'a typed zone must not be submitted — the column is written from the measurement');
   } finally { await context.close(); }
 });
+
+/**
+ * The account list is at the TOP of the Accounts screen.
+ *
+ * It was appended after the card grid, so on a 13-account install the row naming every account was
+ * the last thing on the screen (operator report, 22 Oct 2026: "List of Accounts should be on top").
+ * Pinned by document order: the chip row must come before the first account card.
+ */
+test('the accounts screen lists the accounts above the cards', async () => {
+  const { context, page, errors } = await open({ state: makeState(NOW) });
+  try {
+    await tab(page, 'accounts');
+    const order = await page.evaluate(() => {
+      const root = document.querySelector('#v-accounts');
+      const lens = root.querySelector('.lens-row');
+      const card = root.querySelector('.cards .card');
+      const head = root.querySelector('h2.sec');
+      if (!lens || !card || !head) return { lens: !!lens, card: !!card, head: !!head };
+      const before = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+      return { lens: true, card: true, head: true, lensBeforeCard: before(lens, card), headBeforeLens: before(head, lens),
+        chips: [...lens.querySelectorAll('.lenschip')].map((b) => b.textContent) };
+    });
+    assert.ok(order.lens && order.card, `lens and cards must both render: ${JSON.stringify(order)}`);
+    assert.equal(order.headBeforeLens, true, 'the list sits under the Accounts header');
+    assert.equal(order.lensBeforeCard, true, 'the account list must come before the first card, not after the grid');
+    assert.equal(order.chips[0], 'All');
+    assert.deepEqual(errors, [], 'the accounts screen must render clean');
+    await shot(page, 'accounts-list-on-top');
+  } finally { await context.close(); }
+});

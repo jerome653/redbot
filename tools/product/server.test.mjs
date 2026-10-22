@@ -51,7 +51,7 @@ const CHILD_ENV = { ...process.env };
 const HANDLES = [
   'Striking_Mousse6841', 'Second_Account42', 'Fifth_Account77', 'Fresh_Clone_Acct',
   'PortClash_Acct', 'SoleAcct_Run', 'Ambiguous_AcctA', 'Ambiguous_AcctB', 'Noted_Acct', 'Edit_Me',
-  'Remove_Me', 'Port_Acct', 'Port_Other'
+  'Remove_Me', 'Port_Acct', 'Port_Other', 'DraftOwn_Acct', 'Selected_Acct'
 ];
 
 let child = null;
@@ -1131,6 +1131,76 @@ test('a browser action is refused while the loop holds that account’s Chrome',
     }
   } finally {
     await forgetAccount('SoleAcct_Run');
+  }
+});
+
+test('a reply runs as the DRAFT\'s account, never as the one the console has selected', async () => {
+  /**
+   * Production, cardinal, 20-21 Oct, four times: "this draft was written for ryangrowth12, but the
+   * browser is signed in as Big_Variation_8580". publish() ran as `body.account` — whatever the UI
+   * had selected — while the draft carries its own account, so the operator could not send a draft
+   * without first selecting the account it was written for.
+   *
+   * Observed through the loop guard, so nothing is ever spawned and nothing can reach Reddit: the
+   * loop runs as the draft's account, and the publish names a DIFFERENT account. Sent as the
+   * selected account, the guard has nothing to say and the send goes ahead; sent as the draft's
+   * account, it is refused for naming the loop's account — which only happens if the draft decided.
+   */
+  const draftId = 'draft_acct_test';
+  const threadId = 'dddacc000001';
+  const tokenPath = join(DATA, 'approvals', `${draftId}.json`);
+  const cleanup = async () => {
+    try { if (existsSync(tokenPath)) rmSync(tokenPath, { force: true }); } catch { /* best effort */ }
+    await pool.query('DELETE FROM drafts WHERE id = $1', [draftId]);
+    await pool.query('DELETE FROM threads WHERE id = $1', [threadId]);
+    await forgetAccount('DraftOwn_Acct');
+    await forgetAccount('Selected_Acct');
+  };
+  await cleanup();
+  try {
+    assert.equal((await create({ handle: 'DraftOwn_Acct' })).status, 200);
+    assert.equal((await create({ handle: 'Selected_Acct' })).status, 200);
+    await pool.query(
+      `INSERT INTO threads (id, permalink, title, subreddit, comment_count, collected_at, source)
+       VALUES ($1,'/r/x/comments/dddacc000001/t','t','x',0, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'read')`,
+      [threadId]);
+    await pool.query(
+      `INSERT INTO drafts (id, thread_id, permalink, title, body, has_disclosure, created_at, model, status, account)
+       VALUES ($1,$2,'/r/x/comments/dddacc000001/t','t','body', false, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'test', 'pending', 'DraftOwn_Acct')`,
+      [draftId, threadId]);
+    // Two accounts, so `soleAccountHandle` is null and nothing but the draft can name one.
+    await (await fetch(`http://127.0.0.1:${PORT}/api/state`)).json();
+
+    const started = await fetch(`http://127.0.0.1:${PORT}/api/auto/start`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: 'DraftOwn_Acct', everyMinutes: 15 })
+    }).then((x) => x.json());
+    assert.equal(started.ok, true, `the loop did not start: ${JSON.stringify(started)}`);
+
+    try {
+      const send = (account) => fetch(`http://127.0.0.1:${PORT}/api/publish`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ draftId, confirm: 'SEND', reason: 'draft-account test', ...(account ? { account } : {}) })
+      }).then((x) => x.json());
+
+      const other = await send('Selected_Acct');
+      assert.equal(other.ok, false, `must not send: ${JSON.stringify(other)}`);
+      assert.match(String(other.error), /unattended loop is already running as DraftOwn_Acct/,
+                   'the send must have been resolved to the DRAFT\'s account, not the selected one');
+      assert.ok(!other.output, 'no child may have been spawned');
+      assert.equal(existsSync(tokenPath), false, 'and no approval token left behind');
+
+      const none = await send(null);
+      assert.equal(none.ok, false);
+      assert.match(String(none.error), /running as DraftOwn_Acct/,
+                   'with no account selected the draft still names one — not "which account?"');
+    } finally {
+      await fetch(`http://127.0.0.1:${PORT}/api/auto/stop`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+      });
+    }
+  } finally {
+    await cleanup();
   }
 });
 

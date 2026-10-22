@@ -45,6 +45,23 @@ test('the port is read from the endpoint, with a sane default', () => {
   assert.equal(endpointPort('not a url'), '9222');
 });
 
+test('on Linux it points at the console and a Linux command, never a Windows path', () => {
+  // Seen verbatim in the cardinal (Linux) console 21-22 Oct: a PowerShell `& "C:\Program
+  // Files\..."` command the operator could not run on that machine.
+  const msg = new NoBrowserError('http://127.0.0.1:9224', 'linux').message;
+  // (The --user-data-dir value is config's own path — a Windows temp dir when this runs on dev.)
+  assert.doesNotMatch(msg, /Program Files|chrome\.exe|& "|`\n/);
+  assert.match(msg, /Accounts -> Open Chrome/);
+  assert.match(msg, /google-chrome --remote-debugging-port=9224\b/);
+  assert.match(msg, /--user-data-dir=/);
+});
+
+test('on Windows the PowerShell command stays', () => {
+  const msg = new NoBrowserError('http://127.0.0.1:9223', 'win32').message;
+  assert.match(msg, /chrome\.exe/);
+  assert.match(msg, /--remote-debugging-port=9223\b/);
+});
+
 test('it does not tell the operator to run a command that is not on their PATH', () => {
   // `redbot` is a bin entry, which only exists after `npm link` / a global install. A message
   // that assumes it sends someone to "command not found" at the exact moment they are stuck.

@@ -57,6 +57,8 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
    why the two halves of detection could both be green while nothing connected them. */
 import { startAlignedBrowser } from './browser-start.mjs';
 import { createAddAccountFlows, karmaFromOutput } from './add-account-flow.mjs';
+import { replyAccount, ensureBrowser } from './reply-browser.mjs';
+import { rotationTick, parseShift, DEFAULT_SHIFT } from './rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -1168,6 +1170,19 @@ let runningSince = 0;
  * account, not just the action name.
  */
 let runningAccount = null;
+/**
+ * True while a browser-driving run holds the slot but is still opening its account's Chrome.
+ *
+ * There is no child yet, so `reconcileRun` would otherwise read the slot as a run that died and
+ * free it under the open — letting a second action start against the same Chrome.
+ */
+let runningOpening = false;
+/**
+ * Opening an account's Chrome on demand before a browser-driving action, and the port read that
+ * decides whether it is needed. Injectable in the same way as `portStatusImpl` — null until the
+ * compiled modules load, then bound below `launchChrome`. See ./reply-browser.mjs.
+ */
+let openBrowserImpl = null, browserStateImpl = null;
 
 /**
  * The one account to drive when a request does not name one — or null when that is ambiguous.
@@ -1439,6 +1454,15 @@ function reconcileRun() {
   const child = runningChild;
   const exited = !child || child.exitCode !== null || child.signalCode !== null;
 
+  /* No child yet because the run is still opening its account's Chrome — alive, not dead. */
+  if (runningOpening) {
+    return {
+      ok: true, running: true, cleared: false, key, label, account: runningAccount, pid: null,
+      ms: runningSince ? Date.now() - runningSince : null,
+      stoppable: false, command: runLog.command || null
+    };
+  }
+
   if (!exited && pidAlive(child.pid)) {
     return {
       ok: true, running: true, cleared: false,
@@ -1465,6 +1489,12 @@ function reconcileRun() {
  * them BEFORE it writes an approval token. Kept as one function rather than two copies: a
  * pre-flight that drifts from the real gate is worse than no pre-flight, because it says yes
  * to something that is then refused.
+ *
+ * The one refusal it cannot ask in advance is runAction's on-demand Chrome open failing — knowing
+ * that means opening the browser. That refusal comes back as `ok:false` with no child, so the
+ * approval-token cleanup in publish() removes the token exactly as for every other refusal.
+ * Callers pass the account a reply will REALLY run as (the draft's — see replyAccount), never
+ * the raw request, or the two would answer for different accounts.
  */
 function whyReplyCannotStart(requestedAccount) {
   const spec = ACTIONS['__reply'];
@@ -1580,6 +1610,51 @@ function runAction(key, opts) {
     env.REDBOT_RUN_LOG = 'console';
 
     runLogStart(key, `redbot ${args.join(' ')}`);
+    /* Said in the run log, because that is where an operator looks for why a reply went out as an
+       account other than the one they had selected. Internal actions only: /api/run passes its
+       request body through as `opts`, and a caller must not be able to write lines into a log. */
+    if (key.startsWith('__') && opts && opts.note) runLogAppend(`${opts.note}${NEWLINE}`);
+
+    /**
+     * OPEN THE ACCOUNT'S CHROME FIRST, if nothing is running on its port.
+     *
+     * Boot opens only the loop account's browser; every other account's used to open by hand
+     * (Accounts -> Open Chrome), so a reply, karma check, read or search as any of them died on
+     * "No debuggable Chrome at http://127.0.0.1:9226" — five times on cardinal, 20-21 Oct.
+     *
+     * The slot is already claimed, so nothing else can start against this Chrome while it opens,
+     * and `runningOpening` stops `reconcileRun` reading a run with no child yet as a dead one. A
+     * failed open releases the slot and is a refusal in launchChrome's own words: no child, so the
+     * caller's cleanup (publish's approval token) runs exactly as for any other refusal.
+     */
+    /* A spawn that throws must still free the slot and answer, or every button stays wedged. */
+    const run = () => spawnRun(args, env, started).then(resolve, (e) => {
+      running = null; runningAccount = null; runningChild = null; runningSince = 0;
+      runLogAppend(`failed to start: ${e && e.message || e}${NEWLINE}`);
+      runLogFinish(-1).then(() => resolve({ ok: false, error: String(e && e.message || e) }));
+    });
+    if (!spec.needsBrowser || !account || !openBrowserImpl) return run();
+    const slot = runLog.id;
+    runningOpening = true;
+    ensureBrowser(account, {
+      status: browserStateImpl, open: openBrowserImpl,
+      log: (line) => runLogAppend(`${line}${NEWLINE}`)
+    }).then((r) => {
+      runningOpening = false;
+      if (running !== key || runLog.id !== slot) {
+        return resolve({ ok: false, error: `"${spec.label}" was cleared while ${account}'s Chrome was opening` });
+      }
+      if (r.ok) return run();
+      runLogAppend(`${r.error}${NEWLINE}`);
+      running = null; runningAccount = null; runningSince = 0;
+      runLogFinish(-1).then(() => resolve({ ok: false, error: r.error, command: `redbot ${args.join(' ')}` }));
+    });
+  });
+}
+
+/** The spawn half of runAction, once the slot is claimed and the account's browser is open. */
+function spawnRun(args, env, started) {
+  return new Promise((resolve) => {
     const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), ...args], {
       cwd: SPAWN_CWD, env, stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -2422,6 +2497,17 @@ const addFlows = createAddAccountFlows({
   }
 });
 
+/* The real opener and port read for `ensureBrowser` (see runAction). Background, as boot opens
+   them: a reply should not throw a window in front of the person who pressed Send. */
+openBrowserImpl = (handle) => launchChrome(handle, { background: true });
+browserStateImpl = async (handle) => {
+  const { accounts } = await consoleAccounts();
+  const a = accounts.find((x) => x.handle === handle);
+  if (!a) return 'unknown';
+  const [live] = await portStatusImpl([a]);
+  return live ? live.state : 'unknown';
+};
+
 /**
  * Wait for the browser we just spawned to answer, then align it and send it to Reddit.
  *
@@ -2647,8 +2733,9 @@ function spawnCli(args, timeoutMs = 5 * 60 * 1000) {
   });
 }
 
-function autoStart({ account, everyMinutes }) {
+function autoStart({ account, everyMinutes, rotate }) {
   if (autoProc) return { ok: false, error: 'The unattended loop is already running.' };
+  if (rotate === true || account === '*') return rotationStart({ everyMinutes });
   if (!account) return { ok: false, error: 'Choose which account it should run as.' };
   /* The mirror of the check in runAction: whichever starts second is the one that must refuse,
      or the guard only holds in one direction and the collision comes back by starting the
@@ -2699,7 +2786,7 @@ function autoStart({ account, everyMinutes }) {
 
 function autoStop() {
   if (!autoProc) return { ok: false, error: 'The loop is not running.' };
-  try { autoProc.child.kill(); } catch { /* already gone */ }
+  try { if (autoProc.child) autoProc.child.kill(); } catch { /* already gone */ }
   autoProc = null;
   /* A STOP MUST SURVIVE A RESTART AS FIRMLY AS A START. Forgetting the record here is what
      stops `resumeAutoLoop` resurrecting a loop somebody deliberately switched off — a resume
@@ -2739,15 +2826,74 @@ function resumeAutoLoop() {
   try { saved = pushStateApi ? pushStateApi.readPushState().autoLoop ?? null : null; }
   catch { return; }                                   // an unreadable state file resumes nothing
   if (!saved) return;
-  const r = autoStart({ account: saved.account, everyMinutes: saved.everyMinutes });
+  const r = autoStart({ account: saved.account, everyMinutes: saved.everyMinutes, rotate: saved.rotate === true });
   console.log(r.ok
     ? `[auto] resumed after restart: ${saved.account}, every ${saved.everyMinutes} min`
     : `[auto] could not resume ${saved.account}: ${r.error}`);
 }
 
+/* ------------------------------------------------------------------ *
+ * The off-shift rotation — every account, one at a time, while the operator is off shift.
+ * The decisions live in ./rotation.mjs; this is the wiring to Chrome and the CLI.
+ * ------------------------------------------------------------------ */
+function rotationStart({ everyMinutes }) {
+  const shiftText = process.env.REDBOT_OPERATOR_SHIFT || DEFAULT_SHIFT;
+  const shift = parseShift(shiftText);
+  if (!shift) return { ok: false, error: `REDBOT_OPERATOR_SHIFT="${shiftText}" is not "HH-HH@Zone" (for example 07-16@Asia/Manila).` };
+  /* The gap between one account's cycle ending and the next one starting. */
+  const gap = Math.max(5, Number(everyMinutes) || 10);
+  autoLog = [];
+  const keep = (d) => {
+    autoLog.push(String(d).replace(/\[[0-9;]*m/g, ''));
+    if (autoLog.length > 400) autoLog = autoLog.slice(-400);
+  };
+  const me = { child: null, account: '*', rotate: true, every: gap, startedAt: new Date().toISOString() };
+  autoProc = me;
+  const readLast = () => { try { return pushStateApi ? pushStateApi.readPushState().rotationLast ?? null : null; } catch { return null; } };
+  let last = readLast();
+  const findAccount = async (h) => (await consoleAccounts()).accounts.find((x) => x.handle === h);
+  const deps = {
+    now: () => new Date(),
+    shift,
+    handles: async () => (await consoleAccounts()).accounts.map((a) => a.handle),
+    last: () => last,
+    setLast: (h) => {
+      last = h;
+      try { if (pushStateApi) pushStateApi.writePushState({ ...pushStateApi.readPushState(), rotationLast: h }); } catch { /* in memory still advances */ }
+    },
+    browserState: async (h) => { const a = await findAccount(h); if (!a) return 'unknown'; const [st] = await portStatusImpl([a]); return st ? st.state : 'unknown'; },
+    openBrowser: (h) => launchChrome(h, { background: true }),
+    closeBrowser: async (h) => { const a = await findAccount(h); if (a) await stopBrowserImpl(a); },
+    runCycle: (h) => new Promise((resolve) => {
+      const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), 'auto', '--once'], {
+        cwd: SPAWN_CWD,
+        env: { ...process.env, REDBOT_ACCOUNT: h, REDBOT_LLM: selectedProvider, ...(selectedOperator ? { REDBOT_OPERATOR: selectedOperator } : {}) },
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      me.child = child;
+      child.stdout.on('data', keep);
+      child.stderr.on('data', keep);
+      child.on('error', (e) => { keep(`\n[${h}: cycle failed to start: ${e.message}]\n`); me.child = null; resolve(1); });
+      child.on('close', (code) => { me.child = null; resolve(code ?? 1); });
+    }),
+    log: (line) => keep(`[rotation ${new Date().toISOString()}] ${line}\n`)
+  };
+  (async () => {
+    while (autoProc === me) {
+      try { await rotationTick(deps); }
+      catch (e) { deps.log(`tick failed: ${e && e.message ? e.message : e}`); }
+      if (autoProc !== me) break;
+      await new Promise((r) => setTimeout(r, gap * 60_000));
+    }
+  })();
+  rememberAutoLoop({ account: '*', rotate: true, everyMinutes: gap });
+  return { ok: true, ...autoStatus() };
+}
+
 function autoStatus() {
   return {
     running: !!autoProc,
+    rotate: !!(autoProc && autoProc.rotate),
     account: autoProc ? autoProc.account : null,
     everyMinutes: autoProc ? autoProc.every : null,
     startedAt: autoProc ? autoProc.startedAt : null,
@@ -2839,9 +2985,18 @@ async function publish(body) {
    * check was failing for every draft and refusing every publish with "no draft on record".
    */
   const { drafts } = await domain();
-  if (!drafts.some((d) => d.id === draftId)) {
+  const draft = drafts.find((d) => d.id === draftId);
+  if (!draft) {
     return { ok: false, error: `no draft "${draftId}" on record` };
   }
+  /**
+   * AS THE DRAFT'S ACCOUNT. A draft records which account it was written for; the console's
+   * selection is only a fallback for a draft that does not. Sending as the selected account was
+   * refused four times on cardinal (20-21 Oct) by the identity gate in src/gates.ts — which stays,
+   * as defence in depth, but is no longer the only thing between a draft and the wrong account.
+   */
+  const as = replyAccount({ draft, requested: body.account, sole: soleAccountHandle });
+  if (as.overrode) console.log(`[publish] ${draftId}: ${as.note}`);
   /* fail closed: anything other than the exact word is a refusal, never an approval */
   if (confirm !== 'SEND') return Promise.resolve({ ok: false, error: 'not confirmed — type SEND exactly' });
 
@@ -2857,7 +3012,7 @@ async function publish(body) {
    * Checked first, and cleaned up after, because those are two different failures: this closes
    * the ones knowable in advance, and the cleanup below closes the race in between.
    */
-  const blocked = whyReplyCannotStart(body.account);
+  const blocked = whyReplyCannotStart(as.account);
   if (blocked) return Promise.resolve({ ok: false, error: blocked });
 
   /* The decision is recorded first, and separately. If the send then fails, the fact that a
@@ -2892,7 +3047,7 @@ async function publish(body) {
       ...(overrule.length ? { overrule } : {})
     }, null, 2), 'utf8');
 
-  return runAction('__reply', { draftId, account: body.account })
+  return runAction('__reply', { draftId, account: as.account, note: as.note })
     .then((r) => {
       /**
        * The run never started, so the authorisation must not outlive the attempt.
