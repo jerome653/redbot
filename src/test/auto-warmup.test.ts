@@ -95,7 +95,8 @@ test('a warmup that throws does not fail the cycle', async () => {
 
 test('the cycle calls the warmup step, after the contribution draft, not instead of it', () => {
   const src = readFileSync(new URL('../../src/commands/auto.ts', import.meta.url), 'utf8');
-  const body = src.slice(src.indexOf('async function cycle()'), src.indexOf('export interface FactCheckDeps'));
+  /* The cycle's drafting half moved into `work()` when the observe step was put in front of it. */
+  const body = src.slice(src.indexOf('async function work('), src.indexOf('export interface FactCheckDeps'));
   const draftAt = body.indexOf('await draft()');
   const warmAt = body.indexOf('await warmupStep(');
   assert.ok(draftAt > 0, 'the contribution draft is still written');
