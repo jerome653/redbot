@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseShift, onShift, nextHandle, orderByNeed, rotationTick, holdRegistry, DEFAULT_SHIFT } from './rotation.mjs';
+import {
+  parseShift, onShift, nextHandle, orderByNeed, rotationTick, holdRegistry, DEFAULT_SHIFT,
+  parseWindows, inWindows, DEFAULT_AUTO_WINDOWS
+} from './rotation.mjs';
 
 const shift = parseShift(DEFAULT_SHIFT);
-// 2026-10-22 10:00 Manila = 02:00Z (on shift); 20:00 Manila = 12:00Z (off shift).
+// 2026-10-22 10:00 Manila = 02:00Z (on shift); 20:00 Manila = 12:00Z (off shift, inside an auto window).
 const ON = new Date('2026-10-22T02:00:00Z');
 const OFF = new Date('2026-10-22T12:00:00Z');
 
@@ -43,9 +46,53 @@ test('parseShift reads HH-HH@Zone and refuses anything else', () => {
 test('onShift uses the shift zone, not the machine clock, and the end hour is exclusive', () => {
   assert.equal(onShift(shift, ON), true);
   assert.equal(onShift(shift, OFF), false);
-  assert.equal(onShift(shift, new Date('2026-10-22T23:00:00Z')), true);   // 07:00 Manila
-  assert.equal(onShift(shift, new Date('2026-10-22T08:00:00Z')), false);  // 16:00 Manila
+  assert.equal(onShift(shift, new Date('2026-10-22T22:00:00Z')), true);   // 06:00 Manila
+  assert.equal(onShift(shift, new Date('2026-10-22T09:00:00Z')), false);  // 17:00 Manila
   assert.equal(onShift(parseShift('22-06@UTC'), new Date('2026-10-22T03:00:00Z')), true);
+});
+
+test('the default shift is Clark\'s, 06:00 to 17:00 Manila', () => {
+  assert.deepEqual(shift, { from: 6, to: 17, zone: 'Asia/Manila' });
+});
+
+test('parseWindows reads "HH-HH,HH-HH@Zone" and refuses anything unreadable', () => {
+  assert.deepEqual(parseWindows(DEFAULT_AUTO_WINDOWS), [
+    { from: 18, to: 24, zone: 'Asia/Manila' }, { from: 1, to: 5, zone: 'Asia/Manila' }
+  ]);
+  assert.deepEqual(parseWindows('22-06@UTC'), [{ from: 22, to: 6, zone: 'UTC' }]);
+  assert.equal(parseWindows('18-24,1-5'), null);
+  assert.equal(parseWindows('18-24,xx@Asia/Manila'), null);
+  assert.equal(parseWindows('18-24,@Asia/Manila'), null);
+  assert.equal(parseWindows(''), null);
+});
+
+test('inWindows: 18:00-24:00 and 01:00-05:00 Manila, end hours exclusive', () => {
+  const w = parseWindows(DEFAULT_AUTO_WINDOWS);
+  const at = (manilaHour) => new Date(Date.UTC(2026, 9, 22, manilaHour - 8));
+  for (const h of [18, 20, 23, 25, 27, 28]) assert.equal(inWindows(w, at(h)), true, `${h % 24}:00 Manila`);
+  for (const h of [17, 24, 29, 30, 30 + 4, 30 + 10]) assert.equal(inWindows(w, at(h)), false, `${h % 24}:00 Manila`);
+});
+
+test('outside the auto windows the tick rests: no needs read, no Chrome', async () => {
+  const lines = [];
+  const d = deps({ windows: parseWindows(DEFAULT_AUTO_WINDOWS), now: () => ON, log: (l) => lines.push(l),
+    needs: async () => { d.calls.push(['needs']); return [due('a')]; } });
+  const r = await rotationTick(d);
+  assert.equal(r.ran, false);
+  assert.equal(r.why, 'off-window');
+  assert.deepEqual(d.calls, []);
+  assert.match(lines.join('\n'), /outside the auto windows/i);
+});
+
+test('inside the auto windows the tick works as before', async () => {
+  const d = deps({ windows: parseWindows(DEFAULT_AUTO_WINDOWS), now: () => OFF });
+  assert.equal((await rotationTick(d)).ran, true);
+});
+
+test('unreadable auto windows refuse to rotate', async () => {
+  const d = deps({ windows: null });
+  assert.equal((await rotationTick(d)).why, 'bad-windows');
+  assert.deepEqual(d.calls, []);
 });
 
 test('nextHandle walks the list and wraps', () => {

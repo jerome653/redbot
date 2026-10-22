@@ -6,8 +6,9 @@
  * `src/commands/auto.ts` works only `selectedAccount()`. The other 11 accounts drafted nothing,
  * warmed nothing and published nothing, so their karma could not move.
  *
- * It runs at EVERY hour (Jerome, 2026-10-22: "the auto should complete daily task to do if Clark is
- * not able to do it"). The first version rested for the whole operator shift (Clark, 07:00-16:00
+ * It runs only inside the auto windows, DEFAULT_AUTO_WINDOWS below (Jerome, 2026-10-23: run auto
+ * when Clark is not around). From 2026-10-22 it ran at every hour (Jerome, 2026-10-22: "the auto
+ * should complete daily task to do if Clark is not able to do it"). The first version rested for the whole operator shift (Clark, 07:00-16:00
  * Manila; REDBOT_OPERATOR_SHIFT), and the off-shift hours overlap every account's quiet hours
  * (0-8 America/Los_Angeles = 15:00-23:00 Manila), so only ~8 h a day were usable and a 30-45 min
  * cycle per turn gave each account under one turn a night. Simulated: 2.3 comments/day across 13
@@ -20,8 +21,16 @@
  * open, as before. A Chrome this opened is closed again after the turn.
  */
 
-/** Default shift: 07:00 to 16:00 in Manila. */
-export const DEFAULT_SHIFT = '07-16@Asia/Manila';
+/** Default shift: Clark, 06:00 to 17:00 in Manila. */
+export const DEFAULT_SHIFT = '06-17@Asia/Manila';
+
+/**
+ * When the rotation may run at all (Jerome, 2026-10-23: "run auto when Clark is not around ...
+ * auto can run from 1am to 5am and 6pm to 12 midnight"). REDBOT_AUTO_WINDOWS overrides it. The hour
+ * either side of the shift stays empty so a turn never runs into Clark's day. Each account's own
+ * quiet hours (src/window.ts) still apply inside these windows.
+ */
+export const DEFAULT_AUTO_WINDOWS = '18-24,01-05@Asia/Manila';
 
 /**
  * Parse "HH-HH@Zone" (end exclusive). Returns null for anything else; an unreadable shift must
@@ -46,6 +55,27 @@ export function hourIn(zone, now) {
 export function onShift(shift, now) {
   const h = hourIn(shift.zone, now);
   return shift.from < shift.to ? h >= shift.from && h < shift.to : h >= shift.from || h < shift.to;
+}
+
+/**
+ * Parse "HH-HH,HH-HH@Zone" into shift-shaped ranges. Null when any range is unreadable, so a typo
+ * refuses to rotate rather than silently running at every hour.
+ */
+export function parseWindows(text) {
+  const m = /^\s*([^@]+)@(\S+)\s*$/.exec(String(text ?? ''));
+  if (!m) return null;
+  const out = [];
+  for (const range of m[1].split(',')) {
+    const w = parseShift(`${range.trim()}@${m[2]}`);
+    if (!w) return null;
+    out.push(w);
+  }
+  return out;
+}
+
+/** Is `now` inside any of the windows? */
+export function inWindows(windows, now) {
+  return windows.some((w) => onShift(w, now));
 }
 
 /** The handle after `last` in `handles`, wrapping; the first when `last` is unknown. */
@@ -112,6 +142,15 @@ export async function rotationTick(deps) {
   if (!deps.shift) {
     deps.log('Not rotating: REDBOT_OPERATOR_SHIFT is not "HH-HH@Zone".');
     return { ran: false, why: 'bad-shift' };
+  }
+  /* `windows` absent = no window gate (tests of the shift logic); null = unreadable, refuse. */
+  if (deps.windows === null) {
+    deps.log('Not rotating: REDBOT_AUTO_WINDOWS is not "HH-HH,HH-HH@Zone".');
+    return { ran: false, why: 'bad-windows' };
+  }
+  if (deps.windows && !inWindows(deps.windows, now)) {
+    deps.log('Outside the auto windows — resting, no Chrome opened.');
+    return { ran: false, why: 'off-window' };
   }
   const operatorOn = onShift(deps.shift, now);
   const needs = await deps.needs(now);
