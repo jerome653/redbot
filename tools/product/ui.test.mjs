@@ -2168,33 +2168,73 @@ test('the operator picker chooses who pays, and can only choose a registered one
   } finally { await context.close(); }
 });
 
-test('the add-account wizard walks create then open then check', async () => {
+/**
+ * One field, one button. The dialog used to be three buttons pressed in order (create, open,
+ * check karma); the server now runs all of it (POST /api/account/add-auto) and the dialog only
+ * polls and ticks. So what is asserted here is: ONE request carries the username, the dialog
+ * makes none of the old three calls itself, the checklist reflects the server, and a failure
+ * offers a single "Try again" that posts again for the same account.
+ */
+test('Add account is one field and one button; the checklist ticks itself and Try again resumes', async () => {
   const { context, page, calls } = await open();
   try {
+    const steps = (states, detail = {}) => ['create', 'persona', 'open', 'signin', 'karma'].map((key, i) => ({
+      key, label: { create: 'Set the account up', persona: 'Give it a voice', open: 'Open its Chrome on the Reddit sign-in page',
+                    signin: 'Sign in to Reddit in the Chrome window that just opened', karma: 'Check its karma' }[key],
+      state: states[i], detail: detail[key] ?? null
+    }));
+    let posts = 0, gets = 0;
+    await page.route('**/api/account/add-auto**', async (route) => {
+      const req = route.request();
+      const reply = (b) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(b) });
+      if (req.method() === 'POST') {
+        posts++;
+        calls.push({ path: '/api/account/add-auto', body: JSON.parse(req.postData() || '{}') });
+        return reply({ ok: true, flow: { handle: 'New_Acct', status: 'running', steps: steps(['running', 'pending', 'pending', 'pending', 'pending']) } });
+      }
+      if (!new URL(req.url()).searchParams.get('handle')) return reply({ ok: true, flows: [] });
+      gets++;
+      /* First run: waits for the sign-in, then fails it. Second run (after Try again): finishes. */
+      if (posts === 1 && gets === 1) {
+        return reply({ ok: true, flow: { handle: 'New_Acct', status: 'running', steps: steps(['done', 'done', 'done', 'running', 'pending'], { signin: 'waiting for you to sign in…' }) } });
+      }
+      if (posts === 1) {
+        return reply({ ok: true, flow: { handle: 'New_Acct', status: 'failed', failedStep: 'signin',
+          error: 'That Chrome window is signed in as someone_else, not New_Acct.',
+          steps: steps(['done', 'done', 'done', 'failed', 'pending'], { signin: 'That Chrome window is signed in as someone_else, not New_Acct.' }) } });
+      }
+      return reply({ ok: true, flow: { handle: 'New_Acct', status: 'done', karma: 5, message: 'Added — New_Acct, karma 5',
+        steps: steps(['done', 'done', 'done', 'done', 'done']) } });
+    });
+
     await tab(page, 'accounts');
     await openAddAccount(page);
+    const inputs = await page.locator('#dialogBody input:visible').count();
+    assert.equal(inputs, 1, 'only the username is on show — the rest is folded under "More"');
+
     await page.fill('input[aria-label="Their Reddit username"]', 'New_Acct');
-    await page.click('text=Set it up');
-    /* The wizard runs inside the dialog now, so its progress renders there. */
+    await page.locator('#dialogBody button', { hasText: 'Add account' }).click();
     await page.waitForFunction(
-      () => /Ready\./.test(document.querySelector('#dialogBody')?.textContent || ''),
+      () => /Sign in to Reddit in the Chrome window that just opened/.test(document.querySelector('#dialogBody')?.textContent || ''),
       null, { timeout: 6000 });
+    await page.waitForFunction(
+      () => /signed in as someone_else/.test(document.querySelector('#dialogBody')?.textContent || ''),
+      null, { timeout: 8000 });
+    assert.equal(await page.locator('#dialogBody .add-step[data-step="signin"]').getAttribute('data-state'), 'failed');
+    assert.equal(await page.locator('#dialogBody .add-step[data-step="create"]').getAttribute('data-state'), 'done');
 
-    const created = hit(calls, '/api/account/create');
-    assert.equal(created.length, 1);
-    assert.equal(created[0].body.handle, 'New_Acct');
+    await page.locator('#dialogBody button', { hasText: 'Try again' }).click();
+    await page.waitForFunction(
+      () => /Added — New_Acct, karma 5/.test(document.querySelector('#dialogBody')?.textContent || ''),
+      null, { timeout: 8000 });
 
-    await page.click('text=Open the browser');
-    await untilHit(calls, '/api/account/open');
-    assert.equal(hit(calls, '/api/account/open').length, 1, 'step 2 must open that account\'s Chrome');
-
-    await page.click('text=Check the account');
-    await until(() => hit(calls, '/api/run').some((c) => c.body.key === 'check-karma'),
-                'the karma probe');
-    const probe = hit(calls, '/api/run').filter((c) => c.body.key === 'check-karma');
-    assert.ok(probe.length >= 1, 'step 3 must probe karma');
-    assert.equal(probe[0].body.account, 'New_Acct',
-      'and name the account — omitting it drove the default debug port, which was the wrong browser');
+    const added = hit(calls, '/api/account/add-auto');
+    assert.equal(added.length, 2, 'one press, one Try again');
+    assert.equal(added[0].body.handle, 'New_Acct');
+    assert.equal(added[1].body.handle, 'New_Acct', 'Try again resumes the same account');
+    assert.equal(hit(calls, '/api/account/create').length, 0, 'the dialog no longer drives the steps itself');
+    assert.equal(hit(calls, '/api/account/open').length, 0);
+    assert.equal(hit(calls, '/api/run').filter((c) => c.body.key === 'check-karma').length, 0);
   } finally { await context.close(); }
 });
 

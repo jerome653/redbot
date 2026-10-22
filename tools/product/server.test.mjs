@@ -2723,3 +2723,25 @@ test('runAction answers after the run log is flushed, not before', () => {
   assert.match(src, /const flushed = runLogFinish\(code\);/, 'the close handler keeps it');
   assert.match(src, /flushed\.then\(\(\) => resolve\(\{/, 'and answers the run only after it settles');
 });
+
+/**
+ * One-click add: the two routes exist and answer in the shapes the dialog reads. Deliberately
+ * NOT a full run here — a real start creates an account and opens a Chrome; the flow itself is
+ * covered with every side effect stubbed in add-account-flow.test.mjs.
+ */
+test('one-click add: GET lists flows, a blank username is refused with a sentence', async () => {
+  const list = await getJson('/api/account/add-auto');
+  assert.equal(list.ok, true);
+  assert.ok(Array.isArray(list.flows), 'without a handle it lists every flow');
+  const one = await getJson('/api/account/add-auto?handle=nobody_here_123');
+  assert.equal(one.ok, true);
+  assert.equal(one.flow, null, 'an unknown handle has no flow, and that is not an error');
+
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/account/add-auto`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ handle: '  ' })
+  });
+  assert.equal(r.status, 400);
+  const body = await r.json();
+  assert.equal(body.ok, false);
+  assert.match(body.error, /Type the Reddit username first/);
+});

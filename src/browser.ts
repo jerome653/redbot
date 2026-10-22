@@ -327,6 +327,73 @@ export async function whoAmI(page: Page): Promise<Identity> {
   return { loggedIn: false, username: null, via: 'shreddit-app not found — page may not have rendered' };
 }
 
+/**
+ * Who a browser is signed in as — WITHOUT opening a tab or moving the one somebody is typing in.
+ *
+ * whoAmI() needs a page sitting on Reddit, so it attaches its own tab and navigates it. That is
+ * right for a run and wrong for the one-click "Add account" wait, which asks every few seconds
+ * while a person is typing their password into the sign-in tab: a fresh tab every five seconds
+ * would steal focus, and navigating theirs would throw their typing away.
+ *
+ * So this reads in two tiers:
+ *   1. the `reddit_session` cookie, from the context's own cookie jar over CDP — no request to
+ *      Reddit at all. No cookie, not signed in; that is the answer on almost every poll.
+ *   2. once the cookie is there (or when `askEvenWithoutCookie` is set, the hedge in case Reddit
+ *      ever renames it), `/api/me.json` — the source whoAmI() already trusts over the DOM —
+ *      fetched from inside a tab that is already on reddit.com, with that tab's own cookies.
+ *      It never navigates the tab. With no Reddit tab open it uses the context's request API,
+ *      which carries the same cookie jar.
+ *
+ * Throws only when the browser cannot be reached — that is the case worth telling a person
+ * about ("is the window still open?"). A page mid-navigation is a "not yet", not an error.
+ */
+export async function signedInAs(
+  endpoint: string,
+  opts: { askEvenWithoutCookie?: boolean } = {}
+): Promise<Identity> {
+  if (!(await isBrowserUp(endpoint))) throw new NoBrowserError(endpoint);
+  const browser = await chromium.connectOverCDP(endpoint, { noDefaults: true } as never);
+  try {
+    const context = browser.contexts()[0];
+    if (!context) throw new Error('Attached, but the browser reported no context. Is the window still open?');
+
+    const cookies = await context.cookies('https://www.reddit.com').catch(() => []);
+    const hasSession = cookies.some((c) => c.name === 'reddit_session' && !!c.value);
+    if (!hasSession && !opts.askEvenWithoutCookie) {
+      return { loggedIn: false, username: null, via: 'no reddit_session cookie' };
+    }
+
+    let name: string | null = null;
+    let via = '/api/me.json';
+    const tab = context.pages().find((p) => {
+      try { return /(^|\.)reddit\.com$/i.test(new URL(p.url()).hostname); } catch { return false; }
+    });
+    if (tab) {
+      name = await tab.evaluate(async () => {
+        try {
+          const r = await fetch('/api/me.json', { credentials: 'include' });
+          if (!r.ok) return null;
+          const j = await r.json() as { data?: { name?: string } };
+          return j?.data?.name ?? null;
+        } catch { return null; }
+      }).catch(() => null);       // the tab is navigating (the sign-in just submitted) — ask again next poll
+      via = 'reddit_session cookie + /api/me.json (from the open Reddit tab)';
+    } else {
+      try {
+        const r = await context.request.get('https://www.reddit.com/api/me.json');
+        if (r.ok()) {
+          const j = await r.json() as { data?: { name?: string } };
+          name = j?.data?.name ?? null;
+        }
+      } catch { /* not yet */ }
+      via = 'reddit_session cookie + /api/me.json (context request)';
+    }
+    return { loggedIn: hasSession || !!name, username: name, via };
+  } finally {
+    await browser.close().catch(() => {});   // detach only — never closes the person's Chrome
+  }
+}
+
 /** Convenience wrapper. Prefer whoAmI() when the username matters. */
 export async function isLoggedIn(page: Page): Promise<boolean> {
   return (await whoAmI(page)).loggedIn;
