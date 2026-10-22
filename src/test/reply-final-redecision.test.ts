@@ -67,7 +67,8 @@ mock.module(mod('../health.js'), {
     ...(await import('../health.js')),
     health: async () => ({
       state: 'Healthy', mayPublish: true, reasons: [], resumeAt: null,
-      counters: { karma: script.karma[Math.min(calls.health++, 1)] }
+      /* [0] is the account-health check before the page (reply.ts, #58), [1] the first decision, [2] the final one. */
+      counters: { karma: script.karma[Math.min(calls.health++, 2)] }
     })
   }
 });
@@ -150,9 +151,9 @@ const status = async (id: string) => (await loadDrafts()).find((d) => d.id === i
 test('control: nothing changed by the final check, so the reply is submitted once', async () => {
   await seed('d_rfr_clean', 'c30000000001');
   script.gates = [gates(), gates()];
-  script.karma = [50, 50];
+  script.karma = [50, 50, 50];
   assert.equal(await run('d_rfr_clean'), 0);
-  assert.deepEqual(calls, { gates: 2, health: 2, view: 1, publish: 1 });
+  assert.deepEqual(calls, { gates: 2, health: 3, view: 1, publish: 1 });
   assert.equal(await status('d_rfr_clean'), 'published');
   assert.equal((await rows('d_rfr_clean', 'publish.refused')).length, 0);
   assert.equal((await rows('d_rfr_clean', 'publish.ok')).length, 1);
@@ -161,10 +162,10 @@ test('control: nothing changed by the final check, so the reply is submitted onc
 test('an advisory that appears during the read refuses at the final check, and nothing is submitted', async () => {
   await seed('d_rfr_locked', 'c30000000002');
   script.gates = [gates(), gates([{ gate: 'locked', reason: 'thread is locked' }])];
-  script.karma = [50, 50];
+  script.karma = [50, 50, 50];
   assert.equal(await run('d_rfr_locked'), 1);
   /* It passed the first decision and read the thread: the refusal is the final check's. */
-  assert.deepEqual(calls, { gates: 2, health: 2, view: 1, publish: 0 });
+  assert.deepEqual(calls, { gates: 2, health: 3, view: 1, publish: 0 });
   const refused = await rows('d_rfr_locked', 'publish.refused');
   assert.equal(refused.length, 1);
   assert.equal(refused[0]!.data?.stage, 'final');
@@ -176,9 +177,9 @@ test('an advisory that appears during the read refuses at the final check, and n
 test('karma re-read below the floor at the final check refuses, and nothing is submitted', async () => {
   await seed('d_rfr_karma', 'c30000000003');
   script.gates = [gates(), gates()];
-  script.karma = [50, 1];
+  script.karma = [50, 50, 1];
   assert.equal(await run('d_rfr_karma'), 1);
-  assert.deepEqual(calls, { gates: 2, health: 2, view: 1, publish: 0 });
+  assert.deepEqual(calls, { gates: 2, health: 3, view: 1, publish: 0 });
   const refused = await rows('d_rfr_karma', 'publish.refused');
   assert.equal(refused.length, 1);
   assert.equal(refused[0]!.data?.stage, 'final');
@@ -190,9 +191,9 @@ test('a hard gate that fails at the final check refuses before the re-decision, 
   await seed('d_rfr_hard', 'c30000000005');
   const hard: GateResult = { ...gates(), allow: false, blocks: [{ gate: 'identity', reason: 'signed in as someone else' }] };
   script.gates = [gates(), hard];
-  script.karma = [50, 50];
+  script.karma = [50, 50, 50];
   assert.equal(await run('d_rfr_hard'), 1);
-  assert.deepEqual(calls, { gates: 2, health: 2, view: 1, publish: 0 });
+  assert.deepEqual(calls, { gates: 2, health: 3, view: 1, publish: 0 });
   const blocked = await rows('d_rfr_hard', 'gate.block');
   assert.equal(blocked.length, 1);
   assert.equal(blocked[0]!.data?.stage, 'final');
@@ -204,9 +205,9 @@ test('a hard gate that fails at the final check refuses before the re-decision, 
 test('the first decision refuses before the read, and the final check is never reached', async () => {
   await seed('d_rfr_first', 'c30000000004');
   script.gates = [gates(), gates()];
-  script.karma = [1, 50];
+  script.karma = [50, 1, 50];
   assert.equal(await run('d_rfr_first'), 1);
-  assert.deepEqual(calls, { gates: 1, health: 1, view: 0, publish: 0 });
+  assert.deepEqual(calls, { gates: 1, health: 2, view: 0, publish: 0 });
   const refused = await rows('d_rfr_first', 'publish.refused');
   assert.equal(refused.length, 1);
   assert.equal(refused[0]!.data?.stage, 'unattended');
