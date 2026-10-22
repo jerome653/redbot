@@ -1,16 +1,23 @@
 /**
- * The off-shift rotation: every account gets its daily work while the operator is not on shift.
+ * The rotation: every account gets its daily work, at any hour, without fighting the operator.
  *
  * Measured on cardinal 2026-10-22: in the 30 days to that morning only jordangrowth and ryangrowth12
  * ran a single unattended cycle — the loop is started as ONE account (`autoStart({ account })`) and
  * `src/commands/auto.ts` works only `selectedAccount()`. The other 11 accounts drafted nothing,
  * warmed nothing and published nothing, so their karma could not move.
  *
- * The operator works the accounts by hand during the shift (Clark, 07:00-16:00 Manila; set with
- * REDBOT_OPERATOR_SHIFT). Outside it this takes the accounts one at a time, round robin: open the
- * account's own Chrome if it is not running, run ONE `redbot auto --once` as that account (which
- * carries the warmup step for a stage-1 account), close the Chrome it opened, move to the next.
- * A Chrome that was already running is left running — it is not ours to close.
+ * It runs at EVERY hour (Jerome, 2026-10-22: "the auto should complete daily task to do if Clark is
+ * not able to do it"). The first version rested for the whole operator shift (Clark, 07:00-16:00
+ * Manila; REDBOT_OPERATOR_SHIFT), and the off-shift hours overlap every account's quiet hours
+ * (0-8 America/Los_Angeles = 15:00-23:00 Manila), so only ~8 h a day were usable and a 30-45 min
+ * cycle per turn gave each account under one turn a night. Simulated: 2.3 comments/day across 13
+ * accounts, the stage-1 target met on 0% of days.
+ *
+ * So each tick now picks the account that most NEEDS work (src/rotation-need.ts decides "due": not
+ * in its quiet hours, under its daily target, past its spacing), least-served today first, ties by
+ * round robin. Nothing due means nothing opens. During the shift an account whose Chrome is
+ * already running is the operator's and is left alone; off shift a running Chrome is used and left
+ * open, as before. A Chrome this opened is closed again after the turn.
  */
 
 /** Default shift: 07:00 to 16:00 in Manila. */
@@ -41,6 +48,16 @@ export function onShift(shift, now) {
   return shift.from < shift.to ? h >= shift.from && h < shift.to : h >= shift.from || h < shift.to;
 }
 
+/**
+ * Is the loop driving this account's Chrome right now? A single-account loop holds its account the
+ * whole time; the rotation holds only the account of the turn in progress (`turnAccount`), so a
+ * console button on that account waits for the turn and every other account stays free. The
+ * rotation now runs during the operator's shift too, which is what made this matter.
+ */
+export function loopHolds(proc, account) {
+  return !!proc && (proc.account === account || (proc.turnAccount != null && proc.turnAccount === account));
+}
+
 /** The handle after `last` in `handles`, wrapping; the first when `last` is unknown. */
 export function nextHandle(handles, last) {
   if (!handles.length) return null;
@@ -49,11 +66,36 @@ export function nextHandle(handles, last) {
 }
 
 /**
+ * The due accounts in the order they should be worked: fewest publishes today first, ties broken
+ * by the round robin that starts after `last`. Not-due accounts are dropped here, so nothing
+ * downstream can open a Chrome for an account in its quiet hours or done for the day.
+ *
+ * needs: [{ handle, due, rule, why, servedToday, target }] in the fleet's order.
+ */
+export function orderByNeed(needs, last) {
+  const n = needs.length;
+  const li = needs.findIndex((x) => x.handle === last);
+  const rr = (i) => (i - li - 1 + n) % n;   // li = -1 (unknown) starts at the first account
+  return needs
+    .map((x, i) => ({ x, pos: rr(i) }))
+    .filter(({ x }) => x.due)
+    .sort((a, b) => a.x.servedToday - b.x.servedToday || a.pos - b.pos)
+    .map(({ x }) => x);
+}
+
+/** "3 quiet-hours, 2 done-for-today" — one line for a tick that found nothing to do. */
+function tally(needs) {
+  const by = {};
+  for (const x of needs) by[x.rule] = (by[x.rule] || 0) + 1;
+  return Object.entries(by).map(([k, v]) => `${v} ${k}`).join(', ');
+}
+
+/**
  * One tick. Returns what it did, for the loop log and for tests.
  *
- * deps: now() · shift · handles() -> string[] · last() / setLast(h) · browserState(h) -> 'free' |
- * 'running' | 'foreign' | 'unknown' · openBrowser(h) -> { ok, error? } · runCycle(h) -> exit code ·
- * closeBrowser(h) · log(line)
+ * deps: now() · shift · needs(now) -> need rows (src/rotation-need.ts fleetNeeds) · last() /
+ * setLast(h) · browserState(h) -> 'free' | 'running' | 'foreign' | 'unknown' · openBrowser(h) ->
+ * { ok, error? } · runCycle(h) -> exit code · closeBrowser(h) · log(line)
  */
 export async function rotationTick(deps) {
   const now = deps.now();
@@ -61,40 +103,51 @@ export async function rotationTick(deps) {
     deps.log('Not rotating: REDBOT_OPERATOR_SHIFT is not "HH-HH@Zone".');
     return { ran: false, why: 'bad-shift' };
   }
-  if (onShift(deps.shift, now)) {
-    deps.log(`Operator's shift (${deps.shift.from}:00-${deps.shift.to}:00 ${deps.shift.zone}) — the accounts are theirs; resting.`);
-    return { ran: false, why: 'on-shift' };
-  }
-  const handles = await deps.handles();
-  const handle = nextHandle(handles, deps.last());
-  if (!handle) {
+  const operatorOn = onShift(deps.shift, now);
+  const needs = await deps.needs(now);
+  if (!needs.length) {
     deps.log('No accounts to rotate through.');
     return { ran: false, why: 'no-accounts' };
   }
-  /* Recorded BEFORE the cycle, so an account whose cycle crashes is not retried forever and the
-     rest of the list still gets its turn. */
-  deps.setLast(handle);
+  const queue = orderByNeed(needs, deps.last());
+  if (!queue.length) {
+    /* Decided from the history table alone: no port probe, no Chrome. */
+    deps.log(`Nothing due (${tally(needs)}) — no Chrome opened.`);
+    return { ran: false, why: 'nothing-due' };
+  }
 
-  const state = await deps.browserState(handle);
-  let opened = false;
-  if (state === 'free') {
-    const r = await deps.openBrowser(handle);
-    if (!r || !r.ok) {
-      deps.log(`${handle}: Chrome would not open (${(r && r.error) || 'no reason given'}) — skipped this turn.`);
-      return { ran: false, why: 'open-failed', handle };
+  for (const need of queue) {
+    const handle = need.handle;
+    const state = await deps.browserState(handle);
+    if (state === 'running' && operatorOn) {
+      deps.log(`${handle}: its Chrome is open during the operator's shift — theirs, left alone.`);
+      continue;
     }
-    opened = true;
-  } else if (state !== 'running') {
-    deps.log(`${handle}: its debug port is ${state}, not this account's Chrome — skipped this turn.`);
-    return { ran: false, why: `port-${state}`, handle };
-  }
+    if (state !== 'free' && state !== 'running') {
+      deps.log(`${handle}: its debug port is ${state}, not this account's Chrome — skipped this turn.`);
+      continue;
+    }
+    /* Recorded BEFORE the cycle, so an account whose cycle crashes does not win every tie after. */
+    deps.setLast(handle);
+    let opened = false;
+    if (state === 'free') {
+      const r = await deps.openBrowser(handle);
+      if (!r || !r.ok) {
+        deps.log(`${handle}: Chrome would not open (${(r && r.error) || 'no reason given'}) — skipped this turn.`);
+        continue;
+      }
+      opened = true;
+    }
 
-  deps.log(`${handle}: running one cycle.`);
-  let code = 1;
-  try { code = await deps.runCycle(handle); }
-  finally {
-    if (opened) { try { await deps.closeBrowser(handle); } catch { /* the next open checks the port again */ } }
+    deps.log(`${handle}: ${need.servedToday} of ${need.target} today — running one cycle.`);
+    let code = 1;
+    try { code = await deps.runCycle(handle); }
+    finally {
+      if (opened) { try { await deps.closeBrowser(handle); } catch { /* the next open checks the port again */ } }
+    }
+    deps.log(`${handle}: cycle ended, exit ${code}.`);
+    return { ran: true, handle, code, opened };
   }
-  deps.log(`${handle}: cycle ended, exit ${code}.`);
-  return { ran: true, handle, code, opened };
+  deps.log(`${queue.length} account(s) due, none available this tick.`);
+  return { ran: false, why: 'none-available' };
 }

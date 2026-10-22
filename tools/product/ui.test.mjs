@@ -2363,7 +2363,11 @@ test('the unattended loop starts with an account and an interval, and never publ
     assert.match(txt, /never publishes/, 'the loop must state its own limit');
     assert.match(txt, /Approving and sending stays yours/);
 
-    /* The default is the off-shift rotation over every account (tools/product/rotation.mjs). */
+    /* The default is the rotation over every account (tools/product/rotation.mjs), at any hour —
+       it no longer rests through the operator's shift, so the label must not say it does. */
+    assert.match(txt, /All accounts, any hour/, 'the rotation option must say it runs at any hour');
+    assert.doesNotMatch(txt, /outside the operator shift/, 'the old off-shift-only label is gone');
+    assert.match(txt, /skips any account whose Chrome is open during the operator.s shift/);
     await page.click('text=Start the loop');
     await untilHit(calls, '/api/auto/start');
     const started = hit(calls, '/api/auto/start');

@@ -58,7 +58,7 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 import { startAlignedBrowser } from './browser-start.mjs';
 import { createAddAccountFlows, karmaFromOutput } from './add-account-flow.mjs';
 import { replyAccount, ensureBrowser } from './reply-browser.mjs';
-import { rotationTick, parseShift, DEFAULT_SHIFT } from './rotation.mjs';
+import { rotationTick, parseShift, DEFAULT_SHIFT, loopHolds as loopHoldsImpl } from './rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -1506,7 +1506,7 @@ function whyReplyCannotStart(requestedAccount) {
         ? `Configured: ${knownAccountHandles.join(', ')}.`
         : 'No accounts are configured yet — add one on the Accounts screen.');
   }
-  if (autoProc && autoProc.account === account) {
+  if (loopHolds(account)) {
     return `The unattended loop is already running as ${account}. Stop it first — two processes on one Chrome read each other's pages.`;
   }
   return null;
@@ -1551,7 +1551,7 @@ function runAction(key, opts) {
      * could never block a person from pressing a button. This keeps that, and only refuses the
      * case that actually collides.
      */
-    if (spec.needsBrowser && autoProc && autoProc.account === account) {
+    if (spec.needsBrowser && loopHolds(account)) {
       return resolve({
         ok: false,
         status: 409,
@@ -2704,6 +2704,9 @@ async function exitRemove(body) {
 let autoProc = null;
 let autoLog = [];
 
+/* Whether the loop (either kind) is driving this account's Chrome — see rotation.mjs loopHolds. */
+const loopHolds = (account) => loopHoldsImpl(autoProc, account);
+
 /**
  * Run a CLI verb and hand back what it said.
  *
@@ -2833,8 +2836,10 @@ function resumeAutoLoop() {
 }
 
 /* ------------------------------------------------------------------ *
- * The off-shift rotation — every account, one at a time, while the operator is off shift.
- * The decisions live in ./rotation.mjs; this is the wiring to Chrome and the CLI.
+ * The rotation — every account, one at a time, at any hour, each tick working the account that
+ * most needs it (never an account whose Chrome the operator has open during the shift).
+ * The decisions live in ./rotation.mjs and src/rotation-need.ts; this is the wiring to Chrome and
+ * the CLI.
  * ------------------------------------------------------------------ */
 function rotationStart({ everyMinutes }) {
   const shiftText = process.env.REDBOT_OPERATOR_SHIFT || DEFAULT_SHIFT;
@@ -2855,26 +2860,39 @@ function rotationStart({ everyMinutes }) {
   const deps = {
     now: () => new Date(),
     shift,
-    handles: async () => (await consoleAccounts()).accounts.map((a) => a.handle),
+    /* Read from the history table only — a tick with nothing due opens no Chrome. */
+    needs: async (now) => (await import('../../dist/rotation-need.js')).fleetNeeds(now),
     last: () => last,
     setLast: (h) => {
       last = h;
       try { if (pushStateApi) pushStateApi.writePushState({ ...pushStateApi.readPushState(), rotationLast: h }); } catch { /* in memory still advances */ }
     },
-    browserState: async (h) => { const a = await findAccount(h); if (!a) return 'unknown'; const [st] = await portStatusImpl([a]); return st ? st.state : 'unknown'; },
+    browserState: async (h) => {
+      /* A button is driving this account's Chrome — not ours to share this turn. */
+      if (running && runningAccount === h) return 'busy';
+      const a = await findAccount(h); if (!a) return 'unknown'; const [st] = await portStatusImpl([a]); return st ? st.state : 'unknown';
+    },
     openBrowser: (h) => launchChrome(h, { background: true }),
     closeBrowser: async (h) => { const a = await findAccount(h); if (a) await stopBrowserImpl(a); },
     runCycle: (h) => new Promise((resolve) => {
       const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), 'auto', '--once'], {
         cwd: SPAWN_CWD,
-        env: { ...process.env, REDBOT_ACCOUNT: h, REDBOT_LLM: selectedProvider, ...(selectedOperator ? { REDBOT_OPERATOR: selectedOperator } : {}) },
+        /* Warmup-first turns: re-collect only when the shared corpus is older than this (default
+           180 min, src/commands/auto.ts collectEveryMinutes). Set ONLY here, so the single-account
+           loop keeps collecting every cycle. */
+        env: {
+          ...process.env, REDBOT_ACCOUNT: h, REDBOT_LLM: selectedProvider,
+          REDBOT_COLLECT_EVERY_MINUTES: process.env.REDBOT_COLLECT_EVERY_MINUTES || '180',
+          ...(selectedOperator ? { REDBOT_OPERATOR: selectedOperator } : {})
+        },
         stdio: ['ignore', 'pipe', 'pipe']
       });
       me.child = child;
+      me.turnAccount = h;
       child.stdout.on('data', keep);
       child.stderr.on('data', keep);
-      child.on('error', (e) => { keep(`\n[${h}: cycle failed to start: ${e.message}]\n`); me.child = null; resolve(1); });
-      child.on('close', (code) => { me.child = null; resolve(code ?? 1); });
+      child.on('error', (e) => { keep(`\n[${h}: cycle failed to start: ${e.message}]\n`); me.child = null; me.turnAccount = null; resolve(1); });
+      child.on('close', (code) => { me.child = null; me.turnAccount = null; resolve(code ?? 1); });
     }),
     log: (line) => keep(`[rotation ${new Date().toISOString()}] ${line}\n`)
   };
