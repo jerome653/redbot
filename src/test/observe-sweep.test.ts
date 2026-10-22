@@ -138,9 +138,12 @@ test('a Chrome signed in as another account records nothing and says why', async
 /* Last on purpose: once observed, nothing is due, so the tests above would have nothing to sweep. */
 test('a page that rendered our comment IS observed: the sweep records it and it stops being due', async () => {
   chrome.renders = true;
+  const shortRows = async () => (await loadHistory()).filter((h) => h.kind === 'error' && / due comment\(s\) observed/.test(h.summary)).length;
+  const shortBefore = await shortRows();
   const r = await quietly(() => observeDue({ account: 'sweep_account', now: NOW }));
   assert.equal(r.due, 3);
   assert.equal(r.observed, 3, 'every rendered page is observed');
+  assert.equal(await shortRows(), shortBefore, 'a complete sweep writes no under-observed row');
   const seen = (await loadObservations()).filter((o) => o.kind === 'reply-visible-signed-in');
   for (const id of ['a5ee00000001', 'a5ee00000002', 'a5ee00000003']) {
     assert.ok(seen.some((o) => (o.permalink ?? '').includes(id)), `${id} has a visible-signed-in observation`);

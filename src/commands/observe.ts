@@ -393,7 +393,7 @@ export async function observeDue(opts: { account: string; now?: Date; cap?: numb
   });
   if (!due.length) return { due: 0, observed: 0, stopped: null };
   say.step(`Observing ${due.length} published comment(s) for ${opts.account} before this turn…`);
-  const r = await observeTargets(due.map((d) => d.draft), { expectAccount: opts.account });
+  const r = await observeTargets(due.map((d) => d.draft), { expectAccount: opts.account, now: opts.now });
   /* A skipped comment (unreadable page, a load that threw, the wrong account) records no
      observation, so a sweep that skips everything would look exactly like one with nothing due.
      Say it in history: a run of these rows is the sign the brake has gone blind again. */
@@ -407,7 +407,7 @@ export async function observeDue(opts: { account: string; now?: Date; cap?: numb
 
 async function observeTargets(
   targets: Draft[],
-  opts: { forced?: Checkpoint; expectAccount?: string }
+  opts: { forced?: Checkpoint; expectAccount?: string; now?: Date }
 ): Promise<Omit<ObserveDueResult, 'due'>> {
   const forced = opts.forced;
   let observed = 0;
@@ -427,7 +427,7 @@ async function observeTargets(
       const threadRec = threads.find((t) => t.id === draft.threadId);
       const url = observeUrl(draft);
       const publishedAt = draft.decidedAt ?? draft.createdAt;
-      const elapsedMinutes = Math.round((Date.now() - Date.parse(publishedAt)) / 60_000);
+      const elapsedMinutes = Math.round(((opts.now?.getTime() ?? Date.now()) - Date.parse(publishedAt)) / 60_000);
       const checkpoint = forced ?? checkpointFor(elapsedMinutes);
 
       say.step(`${draft.id} — ${checkpoint} (${elapsedMinutes} min after publishing)`);
