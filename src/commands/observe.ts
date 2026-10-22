@@ -28,7 +28,7 @@ import { attach, isBrowserUp, whoAmI, isBlocked, isRateLimited, NoBrowserError }
 import { loadDrafts, loadThreads } from '../store.js';
 import { appendInteraction, INTERACTION_SCHEMA_VERSION } from '../interactions.js';
 import { currentAgeHours } from '../select.js';
-import { recordObservation, type Checkpoint } from '../health.js';
+import { recordObservation, loadObservations, type Checkpoint, type Observation } from '../health.js';
 import { record, say, setAccount } from '../log.js';
 import { config } from '../config.js';
 import type { Draft } from '../types.js';
@@ -328,6 +328,81 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
     return 1;
   }
 
+  const r = await observeTargets(targets, { forced: forced as Checkpoint | undefined });
+  return r.stopped === 'ratelimit' || r.stopped === 'blocked' ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
+
+/** Observations older than this are not re-checked unattended: the last checkpoint is 7d. */
+export const OBSERVE_WINDOW_MS = 8 * 24 * 60 * 60_000;
+/** At most this many comments per unattended turn, so observing never crowds out the turn. */
+export const OBSERVE_CAP = 3;
+
+export interface DueObservation { draft: Draft; checkpoint: Checkpoint; elapsedMinutes: number; url: string }
+
+/**
+ * Which of ONE account's published comments are due a look right now.
+ *
+ * ONE account, because the signed-in vector reads whatever Chrome is attached and `observe()` files
+ * the result under whoever that Chrome is signed in as — so account A's browser observing B's
+ * comment records B's removal against A, and B goes on posting. Due means: published by this
+ * account, inside the 8-day window, and the checkpoint it has reached (checkpointFor) has no
+ * observation recorded yet for its permalink. Newest first — the newest comment is the one a
+ * moderator is most likely to be looking at — and capped.
+ */
+export function dueForObservation(
+  drafts: Draft[],
+  observations: Array<Pick<Observation, 'permalink' | 'checkpoint'>>,
+  opts: { account: string; now: Date; cap?: number }
+): DueObservation[] {
+  const who = opts.account.toLowerCase();
+  const seen = new Set(observations.map((o) => `${o.permalink ?? ''}\n${o.checkpoint ?? ''}`));
+  const out: Array<DueObservation & { at: number }> = [];
+  for (const draft of drafts) {
+    if (draft.status !== 'published' || (draft.account ?? '').toLowerCase() !== who) continue;
+    const at = Date.parse(draft.decidedAt ?? draft.createdAt);
+    const age = opts.now.getTime() - at;
+    if (!Number.isFinite(at) || age < 0 || age > OBSERVE_WINDOW_MS) continue;
+    const elapsedMinutes = Math.round(age / 60_000);
+    const checkpoint = checkpointFor(elapsedMinutes);
+    const url = observeUrl(draft);
+    if (seen.has(`${url}\n${checkpoint}`)) continue;
+    out.push({ draft, checkpoint, elapsedMinutes, url, at });
+  }
+  return out
+    .sort((a, b) => b.at - a.at)
+    .slice(0, opts.cap ?? OBSERVE_CAP)
+    .map(({ at: _at, ...due }) => due);
+}
+
+export interface ObserveDueResult {
+  due: number;
+  observed: number;
+  /** Why the sweep ended early. `ratelimit` and `blocked` mean Reddit is pushing back: stop the turn. */
+  stopped: 'ratelimit' | 'blocked' | 'wrong-account' | null;
+}
+
+/**
+ * The unattended observe: one account, only what is due, capped. The caller has checked the
+ * browser is up. The CLI `redbot observe [id]` is unchanged and still observes everything.
+ */
+export async function observeDue(opts: { account: string; now?: Date; cap?: number }): Promise<ObserveDueResult> {
+  const due = dueForObservation(await loadDrafts(), await loadObservations(), {
+    account: opts.account, now: opts.now ?? new Date(), cap: opts.cap
+  });
+  if (!due.length) return { due: 0, observed: 0, stopped: null };
+  say.step(`Observing ${due.length} published comment(s) for ${opts.account} before this turn…`);
+  const r = await observeTargets(due.map((d) => d.draft), { expectAccount: opts.account });
+  return { due: due.length, ...r };
+}
+
+async function observeTargets(
+  targets: Draft[],
+  opts: { forced?: Checkpoint; expectAccount?: string }
+): Promise<Omit<ObserveDueResult, 'due'>> {
+  const forced = opts.forced;
+  let observed = 0;
   const s = await attach();
   const out = await openSignedOut(s.browser);
   const threads = await loadThreads();
@@ -338,7 +413,7 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
       const url = observeUrl(draft);
       const publishedAt = draft.decidedAt ?? draft.createdAt;
       const elapsedMinutes = Math.round((Date.now() - Date.parse(publishedAt)) / 60_000);
-      const checkpoint = (forced as Checkpoint) ?? checkpointFor(elapsedMinutes);
+      const checkpoint = forced ?? checkpointFor(elapsedMinutes);
 
       say.step(`${draft.id} — ${checkpoint} (${elapsedMinutes} min after publishing)`);
       say.step(`  ${url}`);
@@ -348,16 +423,21 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
       if (await isRateLimited(s.page)) {
         await record('ratelimit', `429 during observe of ${draft.id}`);
         say.fail('  rate-limited — stopping so the account is not pushed further');
-        return 1;
+        return { observed, stopped: 'ratelimit' };
       }
       const blocked = await isBlocked(s.page);
       if (blocked) {
         await record('login.fail', `block page during observe of ${draft.id}`);
         say.fail('  Reddit served a block page — cannot observe right now');
-        return 1;
+        return { observed, stopped: 'blocked' };
       }
 
       const me = await whoAmI(s.page);
+      /* Never file one account's comment under another: the signed-in vector is whoever this Chrome is. */
+      if (opts.expectAccount && (me.username ?? '').toLowerCase() !== opts.expectAccount.toLowerCase()) {
+        say.warn(`  this Chrome is signed in as ${me.username ?? '(nobody)'}, not ${opts.expectAccount} — nothing recorded`);
+        return { observed, stopped: 'wrong-account' };
+      }
       setAccount(me.username);
       await s.page.waitForTimeout(2000);
       const inView = await lookFor(s.page, draft);
@@ -530,10 +610,11 @@ export async function observe(draftIdArg?: string, opts?: { checkpoint?: string 
       } catch (e) {
         say.warn(`interaction rows not written: ${e instanceof Error ? e.message : String(e)}`);
       }
+      observed++;
     }
 
     say.ok(`Recorded. Next checkpoints: ${CHECKPOINTS.join(' → ')}. Observations in data/observations.jsonl`);
-    return 0;
+    return { observed, stopped: null };
   } finally {
     if (out) await out.close();
     await s.close();
