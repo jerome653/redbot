@@ -56,6 +56,7 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
    decisions were unreachable without spawning Chrome, which is why nothing tested them and
    why the two halves of detection could both be green while nothing connected them. */
 import { startAlignedBrowser } from './browser-start.mjs';
+import { replyAccount, ensureBrowser } from './reply-browser.mjs';
 import { rotationTick, parseShift, DEFAULT_SHIFT } from './rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1168,6 +1169,19 @@ let runningSince = 0;
  * account, not just the action name.
  */
 let runningAccount = null;
+/**
+ * True while a browser-driving run holds the slot but is still opening its account's Chrome.
+ *
+ * There is no child yet, so `reconcileRun` would otherwise read the slot as a run that died and
+ * free it under the open — letting a second action start against the same Chrome.
+ */
+let runningOpening = false;
+/**
+ * Opening an account's Chrome on demand before a browser-driving action, and the port read that
+ * decides whether it is needed. Injectable in the same way as `portStatusImpl` — null until the
+ * compiled modules load, then bound below `launchChrome`. See ./reply-browser.mjs.
+ */
+let openBrowserImpl = null, browserStateImpl = null;
 
 /**
  * The one account to drive when a request does not name one — or null when that is ambiguous.
@@ -1439,6 +1453,15 @@ function reconcileRun() {
   const child = runningChild;
   const exited = !child || child.exitCode !== null || child.signalCode !== null;
 
+  /* No child yet because the run is still opening its account's Chrome — alive, not dead. */
+  if (runningOpening) {
+    return {
+      ok: true, running: true, cleared: false, key, label, account: runningAccount, pid: null,
+      ms: runningSince ? Date.now() - runningSince : null,
+      stoppable: false, command: runLog.command || null
+    };
+  }
+
   if (!exited && pidAlive(child.pid)) {
     return {
       ok: true, running: true, cleared: false,
@@ -1465,6 +1488,12 @@ function reconcileRun() {
  * them BEFORE it writes an approval token. Kept as one function rather than two copies: a
  * pre-flight that drifts from the real gate is worse than no pre-flight, because it says yes
  * to something that is then refused.
+ *
+ * The one refusal it cannot ask in advance is runAction's on-demand Chrome open failing — knowing
+ * that means opening the browser. That refusal comes back as `ok:false` with no child, so the
+ * approval-token cleanup in publish() removes the token exactly as for every other refusal.
+ * Callers pass the account a reply will REALLY run as (the draft's — see replyAccount), never
+ * the raw request, or the two would answer for different accounts.
  */
 function whyReplyCannotStart(requestedAccount) {
   const spec = ACTIONS['__reply'];
@@ -1580,6 +1609,51 @@ function runAction(key, opts) {
     env.REDBOT_RUN_LOG = 'console';
 
     runLogStart(key, `redbot ${args.join(' ')}`);
+    /* Said in the run log, because that is where an operator looks for why a reply went out as an
+       account other than the one they had selected. Internal actions only: /api/run passes its
+       request body through as `opts`, and a caller must not be able to write lines into a log. */
+    if (key.startsWith('__') && opts && opts.note) runLogAppend(`${opts.note}${NEWLINE}`);
+
+    /**
+     * OPEN THE ACCOUNT'S CHROME FIRST, if nothing is running on its port.
+     *
+     * Boot opens only the loop account's browser; every other account's used to open by hand
+     * (Accounts -> Open Chrome), so a reply, karma check, read or search as any of them died on
+     * "No debuggable Chrome at http://127.0.0.1:9226" — five times on cardinal, 20-21 Oct.
+     *
+     * The slot is already claimed, so nothing else can start against this Chrome while it opens,
+     * and `runningOpening` stops `reconcileRun` reading a run with no child yet as a dead one. A
+     * failed open releases the slot and is a refusal in launchChrome's own words: no child, so the
+     * caller's cleanup (publish's approval token) runs exactly as for any other refusal.
+     */
+    /* A spawn that throws must still free the slot and answer, or every button stays wedged. */
+    const run = () => spawnRun(args, env, started).then(resolve, (e) => {
+      running = null; runningAccount = null; runningChild = null; runningSince = 0;
+      runLogAppend(`failed to start: ${e && e.message || e}${NEWLINE}`);
+      runLogFinish(-1).then(() => resolve({ ok: false, error: String(e && e.message || e) }));
+    });
+    if (!spec.needsBrowser || !account || !openBrowserImpl) return run();
+    const slot = runLog.id;
+    runningOpening = true;
+    ensureBrowser(account, {
+      status: browserStateImpl, open: openBrowserImpl,
+      log: (line) => runLogAppend(`${line}${NEWLINE}`)
+    }).then((r) => {
+      runningOpening = false;
+      if (running !== key || runLog.id !== slot) {
+        return resolve({ ok: false, error: `"${spec.label}" was cleared while ${account}'s Chrome was opening` });
+      }
+      if (r.ok) return run();
+      runLogAppend(`${r.error}${NEWLINE}`);
+      running = null; runningAccount = null; runningSince = 0;
+      runLogFinish(-1).then(() => resolve({ ok: false, error: r.error, command: `redbot ${args.join(' ')}` }));
+    });
+  });
+}
+
+/** The spawn half of runAction, once the slot is claimed and the account's browser is open. */
+function spawnRun(args, env, started) {
+  return new Promise((resolve) => {
     const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), ...args], {
       cwd: SPAWN_CWD, env, stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -2345,6 +2419,17 @@ async function launchChrome(handle, { background = false } = {}) {
   }
 }
 
+/* The real opener and port read for `ensureBrowser` (see runAction). Background, as boot opens
+   them: a reply should not throw a window in front of the person who pressed Send. */
+openBrowserImpl = (handle) => launchChrome(handle, { background: true });
+browserStateImpl = async (handle) => {
+  const { accounts } = await consoleAccounts();
+  const a = accounts.find((x) => x.handle === handle);
+  if (!a) return 'unknown';
+  const [live] = await portStatusImpl([a]);
+  return live ? live.state : 'unknown';
+};
+
 /**
  * Wait for the browser we just spawned to answer, then align it and send it to Reddit.
  *
@@ -2822,9 +2907,18 @@ async function publish(body) {
    * check was failing for every draft and refusing every publish with "no draft on record".
    */
   const { drafts } = await domain();
-  if (!drafts.some((d) => d.id === draftId)) {
+  const draft = drafts.find((d) => d.id === draftId);
+  if (!draft) {
     return { ok: false, error: `no draft "${draftId}" on record` };
   }
+  /**
+   * AS THE DRAFT'S ACCOUNT. A draft records which account it was written for; the console's
+   * selection is only a fallback for a draft that does not. Sending as the selected account was
+   * refused four times on cardinal (20-21 Oct) by the identity gate in src/gates.ts — which stays,
+   * as defence in depth, but is no longer the only thing between a draft and the wrong account.
+   */
+  const as = replyAccount({ draft, requested: body.account, sole: soleAccountHandle });
+  if (as.overrode) console.log(`[publish] ${draftId}: ${as.note}`);
   /* fail closed: anything other than the exact word is a refusal, never an approval */
   if (confirm !== 'SEND') return Promise.resolve({ ok: false, error: 'not confirmed — type SEND exactly' });
 
@@ -2840,7 +2934,7 @@ async function publish(body) {
    * Checked first, and cleaned up after, because those are two different failures: this closes
    * the ones knowable in advance, and the cleanup below closes the race in between.
    */
-  const blocked = whyReplyCannotStart(body.account);
+  const blocked = whyReplyCannotStart(as.account);
   if (blocked) return Promise.resolve({ ok: false, error: blocked });
 
   /* The decision is recorded first, and separately. If the send then fails, the fact that a
@@ -2875,7 +2969,7 @@ async function publish(body) {
       ...(overrule.length ? { overrule } : {})
     }, null, 2), 'utf8');
 
-  return runAction('__reply', { draftId, account: body.account })
+  return runAction('__reply', { draftId, account: as.account, note: as.note })
     .then((r) => {
       /**
        * The run never started, so the authorisation must not outlive the attempt.
