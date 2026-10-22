@@ -2872,6 +2872,8 @@ function rotationStart({ everyMinutes }) {
       if (running && runningAccount === h) return 'busy';
       const a = await findAccount(h); if (!a) return 'unknown'; const [st] = await portStatusImpl([a]); return st ? st.state : 'unknown';
     },
+    hold: (h) => { me.turnAccount = h; },
+    release: (h) => { if (me.turnAccount === h) me.turnAccount = null; },
     openBrowser: (h) => launchChrome(h, { background: true }),
     closeBrowser: async (h) => { const a = await findAccount(h); if (a) await stopBrowserImpl(a); },
     runCycle: (h) => new Promise((resolve) => {
@@ -2888,11 +2890,10 @@ function rotationStart({ everyMinutes }) {
         stdio: ['ignore', 'pipe', 'pipe']
       });
       me.child = child;
-      me.turnAccount = h;
       child.stdout.on('data', keep);
       child.stderr.on('data', keep);
-      child.on('error', (e) => { keep(`\n[${h}: cycle failed to start: ${e.message}]\n`); me.child = null; me.turnAccount = null; resolve(1); });
-      child.on('close', (code) => { me.child = null; me.turnAccount = null; resolve(code ?? 1); });
+      child.on('error', (e) => { keep(`\n[${h}: cycle failed to start: ${e.message}]\n`); me.child = null; resolve(1); });
+      child.on('close', (code) => { me.child = null; resolve(code ?? 1); });
     }),
     log: (line) => keep(`[rotation ${new Date().toISOString()}] ${line}\n`)
   };

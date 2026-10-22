@@ -116,9 +116,20 @@ export async function rotationTick(deps) {
     return { ran: false, why: 'nothing-due' };
   }
 
+  /* The account is HELD from before its browser is looked at until after the Chrome this opened is
+     closed, so a console button can never drive the same Chrome during the open or the close —
+     not only during the cycle. Optional in deps: a caller with no buttons has nothing to hold. */
+  const hold = deps.hold || (() => {});
+  const release = deps.release || (() => {});
   for (const need of queue) {
     const handle = need.handle;
+    hold(handle);
+    try {
     const state = await deps.browserState(handle);
+    if (state === 'busy') {
+      deps.log(`${handle}: a console action is using its Chrome — skipped this turn.`);
+      continue;
+    }
     if (state === 'running' && operatorOn) {
       deps.log(`${handle}: its Chrome is open during the operator's shift — theirs, left alone.`);
       continue;
@@ -147,6 +158,7 @@ export async function rotationTick(deps) {
     }
     deps.log(`${handle}: cycle ended, exit ${code}.`);
     return { ran: true, handle, code, opened };
+    } finally { release(handle); }
   }
   deps.log(`${queue.length} account(s) due, none available this tick.`);
   return { ran: false, why: 'none-available' };
