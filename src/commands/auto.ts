@@ -36,6 +36,7 @@ import { stripRefutedEnabled } from '../refuted-strip.js';
 import { recheckWithoutRefuted } from '../refuted-recheck.js';
 import { record, say } from '../log.js';
 import { dailyDatabaseBackup, type DailyDatabaseBackup } from '../backup.js';
+import { offWindowReason } from '../auto-windows.js';
 /**
  * Sources come from sources through src/sources.ts, which is also where "the file is
  * absent" stopped meaning the same thing as "the file is corrupt".
@@ -533,6 +534,15 @@ export async function auto(opts?: { once?: boolean; everyMinutes?: number }): Pr
   say.step(`Running every ${minutes} minutes. Ctrl+C to stop.`);
   // Deliberately sequential and unbounded: one cycle at a time, forever, until stopped.
   for (;;) {
+    /* The rotation gates its own ticks (tools/product/rotation.mjs) and runs `--once`; this gates
+       the single-account loop, which would otherwise run straight through the operator's shift. */
+    const resting = offWindowReason(new Date());
+    if (resting) {
+      say.step(resting);
+      say.step(`Sleeping ${minutes} minutes…`);
+      await sleep(minutes * 60_000);
+      continue;
+    }
     await backupBeforeCycle();
     try {
       await cycle();
