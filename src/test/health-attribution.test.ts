@@ -123,3 +123,15 @@ describe('an event that names no account is not charged to every account', () =>
     assert.doesNotMatch(r, /history\.jsonl/);
   });
 });
+
+test('a removal filed under Reddit\'s spelling of the name still reaches the configured handle', async () => {
+  const NOW = new Date('2026-10-22T12:00:00.000Z');
+  const ts = new Date(NOW.getTime() - 60 * 60_000).toISOString();
+  const observations = [
+    { ts, account: 'Big_Variation_8580', kind: 'reply-marked-removed', vector: 'signed-in', value: true },
+    { ts, account: 'Big_Variation_8580', kind: 'reply-marked-removed', vector: 'signed-in', value: true }
+  ] as never[];
+  const c = await counters('big_variation_8580', NOW, { history: [], observations }, undefined, 2);
+  assert.equal(c.removalsObserved30d, 2, 'Reddit usernames are case-insensitive; the stop must not miss a recased name');
+  assert.equal(assess(c, NOW).mayPublish, false);
+});
