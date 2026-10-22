@@ -58,7 +58,7 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 import { startAlignedBrowser } from './browser-start.mjs';
 import { createAddAccountFlows, karmaFromOutput } from './add-account-flow.mjs';
 import { replyAccount, ensureBrowser } from './reply-browser.mjs';
-import { rotationTick, parseShift, holdRegistry, DEFAULT_SHIFT } from './rotation.mjs';
+import { rotationTick, parseShift, parseWindows, holdRegistry, DEFAULT_SHIFT, DEFAULT_AUTO_WINDOWS } from './rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -2840,15 +2840,18 @@ function resumeAutoLoop() {
 }
 
 /* ------------------------------------------------------------------ *
- * The rotation — every account, one at a time, at any hour, each tick working the account that
- * most needs it (never an account whose Chrome the operator has open during the shift).
+ * The rotation — every account, one at a time, inside the auto windows (REDBOT_AUTO_WINDOWS),
+ * each tick working the account that most needs it (never an account whose Chrome the operator has open during the shift).
  * The decisions live in ./rotation.mjs and src/rotation-need.ts; this is the wiring to Chrome and
  * the CLI.
  * ------------------------------------------------------------------ */
 function rotationStart({ everyMinutes }) {
   const shiftText = process.env.REDBOT_OPERATOR_SHIFT || DEFAULT_SHIFT;
   const shift = parseShift(shiftText);
-  if (!shift) return { ok: false, error: `REDBOT_OPERATOR_SHIFT="${shiftText}" is not "HH-HH@Zone" (for example 07-16@Asia/Manila).` };
+  if (!shift) return { ok: false, error: `REDBOT_OPERATOR_SHIFT="${shiftText}" is not "HH-HH@Zone" (for example 06-17@Asia/Manila).` };
+  const windowsText = process.env.REDBOT_AUTO_WINDOWS || DEFAULT_AUTO_WINDOWS;
+  const windows = parseWindows(windowsText);
+  if (!windows) return { ok: false, error: `REDBOT_AUTO_WINDOWS="${windowsText}" is not "HH-HH,HH-HH@Zone" (for example 18-24,01-05@Asia/Manila).` };
   /* The gap between one account's cycle ending and the next one starting. */
   const gap = Math.max(5, Number(everyMinutes) || 10);
   autoLog = [];
@@ -2864,6 +2867,7 @@ function rotationStart({ everyMinutes }) {
   const deps = {
     now: () => new Date(),
     shift,
+    windows,
     /* Read from the history table only — a tick with nothing due opens no Chrome. */
     needs: async (now) => (await import('../../dist/rotation-need.js')).fleetNeeds(now),
     last: () => last,
