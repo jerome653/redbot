@@ -2363,11 +2363,28 @@ test('the unattended loop starts with an account and an interval, and never publ
     assert.match(txt, /never publishes/, 'the loop must state its own limit');
     assert.match(txt, /Approving and sending stays yours/);
 
+    /* The default is the off-shift rotation over every account (tools/product/rotation.mjs). */
+    await page.click('text=Start the loop');
+    await untilHit(calls, '/api/auto/start');
+    const started = hit(calls, '/api/auto/start');
+    assert.equal(started.length, 1);
+    assert.equal(started[0].body.rotate, true, 'the default must rotate every account');
+    assert.equal(started[0].body.everyMinutes, 10);
+  } finally { await context.close(); }
+});
+
+test('the unattended loop can still be started for one chosen account and interval', async () => {
+  const { context, page, calls } = await open();
+  try {
+    await openLoop(page);
+    await page.locator('#v-setup details.fold').filter({ hasText: 'Run it on its own' }).first()
+      .locator('select.sel').first().selectOption('docs-architect');
     await page.click('text=Start the loop');
     await untilHit(calls, '/api/auto/start');
     const started = hit(calls, '/api/auto/start');
     assert.equal(started.length, 1);
     assert.equal(started[0].body.account, 'docs-architect');
+    assert.equal(started[0].body.rotate, undefined);
     assert.equal(started[0].body.everyMinutes, 60, 'the default interval must be carried');
   } finally { await context.close(); }
 });
