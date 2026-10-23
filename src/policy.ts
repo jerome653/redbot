@@ -314,10 +314,3 @@ export function limitsByProvenance(): Record<Provenance, PolicyKey[]> {
   }
   return out;
 }
-
-/** Every limit that is still a placeholder. The readiness report lists these as unknowns. */
-export function provisionalLimits(): Array<{ key: PolicyKey; limit: Limit }> {
-  return (Object.keys(policy) as PolicyKey[])
-    .filter((k) => policy[k].provenance === 'provisional')
-    .map((key) => ({ key, limit: policy[key] }));
-}

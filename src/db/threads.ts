@@ -151,11 +151,3 @@ export async function countThreads(db: Db): Promise<number> {
   return Number(r.rows[0]?.n ?? 0);
 }
 
-/** Which of these thread ids already exist — used to report drafts that would dangle. */
-export async function existingThreadIds(db: Db, ids: string[]): Promise<Set<string>> {
-  if (!ids.length) return new Set();
-  const r = await db.query<{ id: string }>(
-    'SELECT id FROM threads WHERE id IN (SELECT j.value FROM json_each($1) j)', [JSON.stringify(ids)]
-  );
-  return new Set(r.rows.map((x) => x.id));
-}

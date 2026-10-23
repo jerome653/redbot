@@ -155,7 +155,3 @@ export async function loadDraftsByIds(db: Db, ids: string[]): Promise<Draft[]> {
   return r.rows.map(toDraft);
 }
 
-export async function countDrafts(db: Db): Promise<number> {
-  const r = await db.query<{ n: number }>('SELECT count(*) AS n FROM drafts');
-  return Number(r.rows[0]?.n ?? 0);
-}

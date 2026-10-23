@@ -84,7 +84,3 @@ export async function strippedFrom(db: Db, draftId: string): Promise<string | nu
   return r.rows[0]?.src ?? null;
 }
 
-export async function countHistory(db: Db): Promise<number> {
-  const r = await db.query<{ n: number }>('SELECT count(*) AS n FROM history');
-  return Number(r.rows[0]?.n ?? 0);
-}

@@ -17,17 +17,12 @@
  * Thresholds live in src/policy.ts with their provenance. Most are `declared` — chosen, not
  * measured — because this account has published nothing yet.
  */
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { DATA, ensureData } from './config.js';
 import { policy } from './policy.js';
 import { loadHistory } from './store.js';
 import { getPool } from './db.js';
 import { insertObservation, selectObservations } from './db/logs.js';
 import { countAccounts } from './db/accounts.js';
 import type { HistoryEntry } from './types.js';
-
-export const observationsPath = join(DATA, 'observations.jsonl');
 
 /**
  * An observed fact. `kind` names what was seen, never what it implies.

@@ -25,14 +25,9 @@
  *      supportive, neutral or moderation-related is a judgement. The same rule that governs the
  *      Ground Truth Corpus applies here: a model may not fill its own answer key.
  */
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { DATA, ensureData } from './config.js';
 
 import { getPool } from './db.js';
 import { insertInteraction, selectInteractions } from './db/logs.js';
-
-export const interactionsPath = join(DATA, 'interactions.jsonl');
 
 /** Bump only for a breaking change, and migrate rather than reinterpret old rows. */
 export const INTERACTION_SCHEMA_VERSION = '1.0';

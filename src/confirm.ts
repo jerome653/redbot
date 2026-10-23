@@ -37,9 +37,6 @@
  * signed-out or second-account read settles that. `visibility` is carried separately for
  * exactly that reason, and defaults to `unknown` rather than to `true`.
  */
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { DATA } from './config.js';
 
 /**
  * How an observation was obtained. The distinction is the whole point of the module: a reading
@@ -85,11 +82,6 @@ export interface ConfirmationRecord extends Evidence {
 
 import { getPool } from './db.js';
 import { insertConfirmation, selectConfirmations } from './db/logs.js';
-
-export const confirmationsPath = (): string => {
-  mkdirSync(DATA, { recursive: true });
-  return join(DATA, 'confirmations.jsonl');
-};
 
 /** Append-only. A confirmation is an observation, and observations are never rewritten. */
 export async function recordConfirmation(rec: ConfirmationRecord): Promise<void> {

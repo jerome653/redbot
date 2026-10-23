@@ -407,11 +407,6 @@ export async function signedInAs(
   }
 }
 
-/** Convenience wrapper. Prefer whoAmI() when the username matters. */
-export async function isLoggedIn(page: Page): Promise<boolean> {
-  return (await whoAmI(page)).loggedIn;
-}
-
 /** True when Reddit served a bot-block or challenge page instead of content. */
 export async function isBlocked(page: Page): Promise<boolean> {
   const text = (await page.locator('body').innerText().catch(() => '')).slice(0, 300);

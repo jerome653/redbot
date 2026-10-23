@@ -78,7 +78,3 @@ export function machineId(): string {
   return id;
 }
 
-/** Drop the cache so the next read re-resolves. For tests, and after the file is rewritten. */
-export function forgetMachineId(): void {
-  cached = null;
-}

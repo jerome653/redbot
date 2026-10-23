@@ -255,7 +255,9 @@ Two things changed shape rather than just location:
 `stealAbandonedClaim` to recover a worker killed between taking the lock and writing its
 `running` row. It is now one statement — `UPDATE … WHERE state IN ('pending','scheduled')`
 — so the claim and the state change are the same write and that window cannot open.
-`releaseClaim` survives as a documented no-op: the state *is* the claim.
+`releaseClaim` survived for a while as a documented no-op and was removed once a grep showed
+no call site had ever been written against it: the state *is* the claim, so there is nothing
+to release and nothing to call.
 
 **`trace()` stays synchronous.** It is called from dozens of sync call sites and its
 contract is that telemetry never takes the run down. The write is fire-and-forget and

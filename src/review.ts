@@ -16,9 +16,8 @@
  * The snapshot of gates and metrics is taken at decision time, so a later change to a
  * threshold cannot silently rewrite the history of what a person was looking at.
  */
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DATA, ensureData } from './config.js';
+import { DATA } from './config.js';
 import type { QualityMetrics } from './quality.js';
 
 import { getPool } from './db.js';
@@ -152,8 +151,6 @@ export const REGRET_ANSWERS = {
 
 export type RegretAnswer = keyof typeof REGRET_ANSWERS;
 export type IssueCategory = keyof typeof ISSUE_CATEGORIES;
-
-export const regretPath = join(DATA, 'regret.jsonl');
 
 export interface RegretRecord {
   ts: string;

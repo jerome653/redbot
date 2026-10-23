@@ -160,16 +160,6 @@ export function forgetAccounts(): void {
 }
 
 /**
- * The recorded selection, for callers that need it without the AccountRecord.
- *
- * Exported so the console can show what is currently selected without repeating the precedence
- * rule that `selectedAccount()` implements.
- */
-export function selectedHandle(): string | null {
-  return process.env.REDBOT_ACCOUNT ?? selectedCache;
-}
-
-/**
  * Who redbot may post as.
  *
  * The database wins when it has rows; `data/accounts.json` is the seed you import from and
