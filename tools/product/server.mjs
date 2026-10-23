@@ -50,6 +50,7 @@ import { spawn } from 'node:child_process';
 import { exitPosture } from './exit-posture.mjs';
 import { fleetProblems } from './fleet-posture.mjs';
 import { bootBrowserSelection } from './boot-browsers.mjs';
+import { measureKarma } from './karma-measure.mjs';
 import { engineProblems } from './engine-posture.mjs';
 import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 /* The order a browser start follows. Out here for the reason the module's header gives: the
@@ -3520,6 +3521,60 @@ const server = createServer((req, res) => {
       if (url.pathname === '/api/auto/stop') {
         const r = autoStop();
         return send(r.ok ? 200 : 400, JSON.stringify(r));
+      }
+      /**
+       * Measure karma, opening a browser for it when the rotation has left none open.
+       *
+       * IN HERE, NOT IN THE CLI, and that is the whole point. `rotationHolds` is a closure in
+       * this module; a CLI could only ask about it over HTTP and would act on an answer that had
+       * already expired. redbot-karma.service calls this instead of running `probe-karma --open`,
+       * which measured "every account whose browser is running" and found none between turns:
+       * 22 Oct 04:00 PDT, "no account's browser is running (13 with a debug port)", exit 1.
+       *
+       * The probe runs as a CHILD, like rotationTick's own runCycle: probe-karma reaches
+       * attach() and therefore Playwright, and the console has no other reason to load it into
+       * the Electron main process. REDBOT_ACCOUNT is how the CLI resolves a port (config.ts) -
+       * REDBOT_CDP is deliberately never set from a request.
+       */
+      if (url.pathname === '/api/karma/measure') {
+        /* Resolved once, from the same loader every other console route reads, so this cannot
+           grow its own idea of what an account is. measureKarma calls accounts() once. */
+        const { accounts: karmaAccts } = await consoleAccounts();
+        const findAcct = async (h) => karmaAccts.find((x) => x.handle === h);
+        const lines = [];
+        const r = await measureKarma({
+          accounts: () => karmaAccts,
+          browserState: async (h) => {
+            const a = await findAcct(h);
+            if (!a) return 'unknown';
+            const [st] = await portStatusImpl([a]);
+            return st ? st.state : 'unknown';
+          },
+          openBrowser: (h) => launchChrome(h, { background: true }),
+          closeBrowser: async (h) => { const a = await findAcct(h); if (a) await stopBrowserImpl(a); },
+          probe: (_endpoint, handle) => new Promise((resolve) => {
+            const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), 'probe-karma'], {
+              cwd: SPAWN_CWD,
+              env: {
+                ...process.env,
+                REDBOT_ACCOUNT: handle,
+                ...(selectedOperator ? { REDBOT_OPERATOR: selectedOperator } : {})
+              },
+              stdio: ['ignore', 'pipe', 'pipe']
+            });
+            const keepLine = (d) => { for (const l of String(d).replace(/\[[0-9;]*m/g, '').split('\n')) if (l.trim()) lines.push(l); };
+            child.stdout.on('data', keepLine);
+            child.stderr.on('data', keepLine);
+            child.on('error', (e) => { lines.push(`${handle}: probe failed to start: ${e.message}`); resolve(1); });
+            child.on('close', (code) => resolve(code ?? 1));
+          }),
+          busy: (h) => !!(running && ACTIONS[running] && ACTIONS[running].needsBrowser && runningAccount === h),
+          rotationLive: () => rotationHolds.live,
+          hold: rotationHolds.hold,
+          release: rotationHolds.release,
+          log: (line) => lines.push(line)
+        }, body && body.handle ? String(body.handle) : undefined);
+        return send(r.ok ? 200 : 400, JSON.stringify({ ...r, output: lines }));
       }
       if (url.pathname === '/api/operator/select') {
         const name = typeof body.name === 'string' ? body.name : null;
