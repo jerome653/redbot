@@ -72,7 +72,15 @@ export async function requestKarma({
   }
   /* The route's own exit code, not the HTTP status: a 400 carrying `code: 1` and a readable
      reason is the measurement failing, which is what this unit exists to report. */
-  return Number.isInteger(payload.code) ? payload.code : (res.ok ? 0 : 1);
+  if (Number.isInteger(payload.code)) return payload.code;
+
+  /* NO `code` MEANS THIS WAS NOT THE ROUTE ANSWERING. Measured 23 Oct 00:31 UTC: a console
+     started before this route existed returned `404 {"error":"not found"}`, and the unit failed
+     with FOUR systemd lines and not one word about why - the operator's whole account of the
+     failure was "status=1/FAILURE". An exit code with no sentence beside it is a dead end, so
+     print what came back before returning it. */
+  log(`the console answered ${res.status} and no measurement: ${JSON.stringify(payload).slice(0, 300)}`);
+  return res.ok ? 0 : 1;
 }
 
 /* Run only as the unit's entry, never on import by the test beside it. */
