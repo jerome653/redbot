@@ -104,3 +104,26 @@ test('a payload with no code falls back to the HTTP status', async () => {
   assert.equal(await requestKarma({ base: 'http://x', fetchImpl: ok({}, 200), log: silent }), 0);
   assert.equal(await requestKarma({ base: 'http://x', fetchImpl: ok({}, 500), log: silent }), 1);
 });
+
+test('THE 404: an answer that is not the route says so, in words, before exiting 1', async () => {
+  const lines = [];
+  const code = await requestKarma({
+    base: 'http://127.0.0.1:40547',
+    fetchImpl: ok({ error: 'not found' }, 404),
+    log: (l) => lines.push(l)
+  });
+  assert.equal(code, 1);
+  const out = lines.join('\n');
+  assert.match(out, /404/, 'measured 23 Oct 00:31 UTC against a console older than this route');
+  assert.match(out, /not found/, 'systemd printed "status=1/FAILURE" and nothing else');
+});
+
+test('a body too large to be a verdict is cut, not pasted whole into the journal', async () => {
+  const lines = [];
+  await requestKarma({
+    base: 'http://x',
+    fetchImpl: ok({ error: 'x'.repeat(5000) }, 500),
+    log: (l) => lines.push(l)
+  });
+  assert.ok(lines.join('').length < 400, `one line, not a page: got ${lines.join('').length}`);
+});
