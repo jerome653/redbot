@@ -9,8 +9,6 @@
  *
  * `REDBOT_ACCOUNT` / `REDBOT_CDP` select which browser profile is read.
  *
- *   redbot probe-karma --open     every account whose browser is running (the daily timer)
- *
  * WHY THIS IS A FUNCTION AND NOT A TOP-LEVEL SCRIPT.
  * It used to run on import: `const s = await attach()` at module scope. That made it
  * impossible to wire into src/cli.ts — importing it there would have attached a browser on
@@ -21,7 +19,6 @@
  * account wizard could never work. The work is the same either way; only the entry moved.
  */
 import { attach, isBrowserUp, whoAmI } from './browser.js';
-import { loadAccounts, type AccountRecord } from './config.js';
 import { recordObservation } from './health.js';
 
 /**
@@ -230,69 +227,6 @@ export async function probeKarma(endpoint?: string): Promise<number> {
   } finally {
     await s.close();
   }
-}
-
-/**
- * `redbot probe-karma --open` — measure every account whose browser is running right now.
- *
- * WHY THE TIMER NEEDS THIS. redbot-karma.service pinned REDBOT_ACCOUNT=ryangrowth12, and since
- * f9bb63b boot opens only the loop account's Chrome (electron/main.mjs, REDBOT_BOOT_BROWSERS).
- * Measured 2026-10-17 04:00 PDT: "No debuggable Chrome at http://127.0.0.1:9222" — the probe asked
- * for a browser nothing starts any more, recorded nothing, and `SuccessExitStatus=0 1` reported
- * the run as a success. Pinning a different handle breaks again the day the loop moves.
- *
- * So the timer asks the machine instead of naming an account: every configured account with a
- * debug port whose browser answers is measured, through the same probeKarma a single account
- * uses. An account whose browser is closed is skipped, not failed — closing it was a choice.
- *
- * Exit 1 when no browser answers at all, or when any measured account fails: either way a data
- * point the operator expects is missing, and the unit has to say so.
- */
-export interface OpenProbeDeps {
-  accounts: () => AccountRecord[];
-  isUp: (endpoint: string) => Promise<boolean>;
-  probe: (endpoint: string) => Promise<number>;
-  log: (line: string) => void;
-}
-
-const openProbeDeps: OpenProbeDeps = {
-  accounts: loadAccounts,
-  isUp: (endpoint) => isBrowserUp(endpoint),
-  probe: (endpoint) => probeKarma(endpoint),
-  log: (line) => console.log(line)
-};
-
-export async function probeKarmaOpen(deps: OpenProbeDeps = openProbeDeps): Promise<number> {
-  const withPort = deps.accounts().filter((a) => typeof a.debugPort === 'number' && a.debugPort > 0);
-  const open: Array<{ handle: string; endpoint: string }> = [];
-  for (const a of withPort) {
-    const endpoint = `http://127.0.0.1:${a.debugPort}`;
-    if (await deps.isUp(endpoint)) open.push({ handle: a.handle, endpoint });
-  }
-  if (!open.length) {
-    deps.log(`no account's browser is running (${withPort.length} with a debug port) — nothing measured`);
-    return 1;
-  }
-
-  deps.log(`measuring ${open.length} of ${withPort.length}: ${open.map((o) => o.handle).join(', ')}`);
-  const failed: string[] = [];
-  for (const o of open) {
-    deps.log(`— ${o.handle} (${o.endpoint})`);
-    let code: number;
-    try {
-      code = await deps.probe(o.endpoint);
-    } catch (e) {
-      // One account's failure must not cost the others their measurement.
-      deps.log(`  ${e instanceof Error ? e.message : String(e)}`);
-      code = 1;
-    }
-    if (code !== 0) failed.push(o.handle);
-  }
-  if (failed.length) {
-    deps.log(`not measured: ${failed.join(', ')}`);
-    return 1;
-  }
-  return 0;
 }
 
 /**

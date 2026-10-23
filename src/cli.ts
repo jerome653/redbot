@@ -13,7 +13,7 @@ import { accounts } from './commands/accounts.js';
 import { personas } from './commands/personas.js';
 import { reset } from './commands/reset.js';
 import { sources } from './commands/sources.js';
-import { probeKarma, probeKarmaOpen } from './probe-karma.js';
+import { probeKarma } from './probe-karma.js';
 import { primeAccounts, selectedAccount } from './config.js';
 import { read } from './commands/read.js';
 import { search } from './commands/search.js';
@@ -129,7 +129,6 @@ redbot — Reddit engagement assistant
 
   Diagnosis
     redbot probe-karma           measure the signed-in account's karma, and record it
-    redbot probe-karma --open    the same, for every account whose browser is running
     redbot provision             what this install creates for itself, and where
     redbot doctor                is the INSTALL sound? build, auth, data, secrets, staleness
     redbot insights              where the pipeline is losing candidates, and which stage to fix
@@ -317,9 +316,7 @@ async function main(): Promise<number> {
      * The product console's "Check it worked" button spawns `dist/cli.js probe-karma`.
      * Without this case it answered "Unknown command" and step 3 of the wizard was dead.
      */
-    /* `--open` is what redbot-karma.timer runs: it measures whichever browsers are up instead of
-       one pinned account (src/probe-karma.ts, probeKarmaOpen). */
-    case 'probe-karma': return flags.has('--open') ? probeKarmaOpen() : probeKarma();
+    case 'probe-karma': return probeKarma();
     case 'accounts': return accounts(positional[0], positional[1]);
     /* Who each account writes as. `personas` with no subcommand prints the roster and the
        fleet-level collision check; `seed` is the only one that writes. */

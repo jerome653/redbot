@@ -4,7 +4,8 @@
  * ---------------------------------------------------------------------------
  * WHY THIS EXISTS.
  *
- * `probe-karma --open` measures "every account whose browser is running", and under the
+ * `probe-karma --open` measured "every account whose browser is running" (removed once nothing
+ * called it), and under the
  * single-account loop that was always at least one: boot opened the loop account's Chrome and
  * it stayed open. Under the rotation nothing stays open - `rotationTick` calls `openBrowser(h)`
  * for a turn and `closeBrowser(h)` after it - so between turns there is nothing to measure.
