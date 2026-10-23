@@ -110,10 +110,6 @@ export function accountDir(account: string): string {
   return dir;
 }
 
-export function jobsPath(account: string): string {
-  return join(accountDir(account), 'jobs.jsonl');
-}
-
 /**
  * Current state of every job, in creation order.
  *
@@ -241,17 +237,6 @@ export async function cancelJob(account: string, id: string, why = 'cancelled by
  */
 export async function claimJob(account: string, id: string, now: Date = new Date()): Promise<Job | null> {
   return claimJobRow(getPool(), account, id, now);
-}
-
-/**
- * Kept as a no-op so callers that released a claim still read correctly.
- *
- * There is no separate claim to drop any more — leaving `running` IS releasing it,
- * because the state is the claim. Removing the call sites instead would have scattered
- * this explanation across the scheduler.
- */
-export function releaseClaim(_account: string, _id: string): void {
-  /* the row state is the claim; nothing to release */
 }
 
 /**

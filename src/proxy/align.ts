@@ -357,11 +357,6 @@ export interface AlignedBrowser {
 
 const aligned = new Map<string, AlignedBrowser>();
 
-/** The alignment held for this account, if any. */
-export function alignmentFor(handle: string): AlignedBrowser | null {
-  return aligned.get(handle.toLowerCase()) ?? null;
-}
-
 export function alignmentStates(): { handle: string; timezone: string; pagesAligned: number }[] {
   return [...aligned.values()].map((a) => ({
     handle: a.handle, timezone: a.timezone, pagesAligned: a.pagesAligned

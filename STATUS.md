@@ -155,7 +155,7 @@ field in the analyze prompt is therefore not a nicety — it is the rule of the 
 ```
 src/cli.ts                    command dispatch
 src/config.ts                 paths, models, pacing, disclosure line
-src/browser.ts                attach over CDP · isLoggedIn · isBlocked
+src/browser.ts                attach over CDP · whoAmI · isBlocked
 src/store.ts                  atomic JSON + append-only history
 src/llm.ts                    Anthropic client + JSON extraction
 src/prompts.ts                analyze + draft prompts

@@ -4,8 +4,6 @@ import type { HistoryKind, HistoryEntry } from './types.js';
 /** The account the current run is acting as. Set once per run, stamped on every entry. */
 let currentAccount: string | null = null;
 export function setAccount(name: string | null): void { currentAccount = name; }
-export function getAccount(): string | null { return currentAccount; }
-
 const KNOWN = ['account', 'subreddit', 'threadUrl', 'permalink', 'status'] as const;
 
 /**

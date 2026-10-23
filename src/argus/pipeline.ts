@@ -16,9 +16,7 @@
  * The model contributes structure. Every decision is made by code. That inversion is the
  * response to HRC-001, where a fluent model output was trusted end to end.
  */
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { DATA, ensureData, config } from '../config.js';
+import { config } from '../config.js';
 import { trace, timed } from '../trace.js';
 import { say } from '../log.js';
 import { detectResolution } from './resolution.js';
@@ -32,8 +30,6 @@ import type { Draft, Thread } from '../types.js';
 
 import { getPool } from '../db.js';
 import { insertCertification, selectCertifications } from '../db/certifications.js';
-
-export const certificationsPath = join(DATA, 'certifications.jsonl');
 
 export async function recordCertification(c: Certification): Promise<void> {
   await insertCertification(c);
