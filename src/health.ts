@@ -29,6 +29,8 @@ import type { HistoryEntry } from './types.js';
  */
 export type ObservationKind =
   | 'karma'
+  | 'comment-karma'
+  | 'post-karma'
   | 'account-created'
   | 'reply-visible-signed-in'
   | 'reply-visible-signed-out'

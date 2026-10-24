@@ -110,3 +110,26 @@ test('collectKarma: both fail → not ok, and each source says why', async () =>
   assert.match(all, /about\.json.*Failed to fetch/);
   assert.match(all, /profile page.*no karma text/i);
 });
+
+import { extraKarmaObservations } from "../probe-karma.js";
+
+test("extraKarmaObservations records comment and post karma when both are numeric (about.json)", () => {
+  const out = extraKarmaObservations({ karma: 5, postKarma: 2, commentKarma: 3, cakeDay: null, joined: null });
+  assert.deepEqual(out, [{ kind: "comment-karma", value: 3 }, { kind: "post-karma", value: 2 }]);
+});
+
+test("extraKarmaObservations parses profile-page strings the same way the total is parsed", () => {
+  const out = extraKarmaObservations({ karma: "1,234", postKarma: "1,000", commentKarma: "234", cakeDay: null, joined: null });
+  assert.deepEqual(out, [{ kind: "comment-karma", value: 234 }, { kind: "post-karma", value: 1000 }]);
+});
+
+test("extraKarmaObservations skips a figure that is absent or unparseable", () => {
+  assert.deepEqual(
+    extraKarmaObservations({ karma: 5, postKarma: null, commentKarma: 3, cakeDay: null, joined: null }),
+    [{ kind: "comment-karma", value: 3 }]
+  );
+  assert.deepEqual(
+    extraKarmaObservations({ karma: 5, postKarma: "1.2k", commentKarma: null, cakeDay: null, joined: null }),
+    []
+  );
+});
