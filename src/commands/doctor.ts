@@ -14,9 +14,11 @@
  */
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT, DATA, config, claudeConfigDir, OperatorAuthError } from '../config.js';
+import { ROOT, DATA, config, claudeConfigDir, OperatorAuthError, loadAccounts } from '../config.js';
 import { isBrowserUp } from '../browser.js';
 import { policy, limitsByProvenance } from '../policy.js';
+import { KARMA_FLOOR_SUBS } from '../autopublish.js';
+import { assessFleetWarming } from '../fleet-warming.js';
 import { loadDrafts, loadThreads, loadGaps, loadAssessments } from '../store.js';
 import { loadObservations } from '../health.js';
 import { loadReviews, loadRegrets } from '../review.js';
@@ -412,6 +414,17 @@ export async function doctor(): Promise<number> {
   /* ---- observation debt ---- */
   const published = drafts.filter((d) => d.status === 'published');
   const observations = await loadObservations();
+
+  /* ---- fleet warming-readiness: the alarm that was missing (see src/fleet-warming.ts) ---- */
+  {
+    const fw = assessFleetWarming({
+      accounts: loadAccounts(),
+      observations,
+      floorSubs: KARMA_FLOOR_SUBS,
+      cautionKarmaBelow: policy.cautionKarmaBelow.value,
+    });
+    add('fleet warming', fw.status, fw.detail);
+  }
   if (published.length) {
     const due = published.filter((d) => {
       const hours = (Date.now() - Date.parse(d.decidedAt ?? d.createdAt)) / 3_600_000;
