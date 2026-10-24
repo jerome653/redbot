@@ -84,6 +84,24 @@ export function karmaNumber(v: string | number | null | undefined): number | nul
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * The karma-breakdown observations to record beside the total. The total (kind 'karma') is
+ * recorded separately and is what gates probe success; these are the comment- and post-karma
+ * figures parsed from the same read, each stored only when it was actually present and numeric.
+ * For warming the comment figure is the one that matters, so dropping it (as the probe used to)
+ * discards the signal that says whether comments are earning karma even while the total is flat.
+ */
+export function extraKarmaObservations(
+  facts: KarmaFacts
+): Array<{ kind: 'comment-karma' | 'post-karma'; value: number }> {
+  const out: Array<{ kind: 'comment-karma' | 'post-karma'; value: number }> = [];
+  const comment = karmaNumber(facts.commentKarma);
+  if (comment != null) out.push({ kind: 'comment-karma', value: comment });
+  const post = karmaNumber(facts.postKarma);
+  if (post != null) out.push({ kind: 'post-karma', value: post });
+  return out;
+}
+
 /** Poll the page text until the karma text shows up, or the timeout passes; returns the last text. */
 export async function waitForKarmaText(
   read: () => Promise<string>,
@@ -206,6 +224,14 @@ export async function probeKarma(endpoint?: string): Promise<number> {
         value: karma, note: `measured by probe-karma from ${result.source === 'about.json' ? 'about.json' : 'the profile page'}`
       });
       console.log(`recorded: karma ${karma} for ${me.username}`);
+      for (const extra of extraKarmaObservations(facts)) {
+        await recordObservation({
+          account: me.username, kind: extra.kind, vector: 'signed-in',
+          value: extra.value,
+          note: `measured by probe-karma from ${result.source === 'about.json' ? 'about.json' : 'the profile page'}`
+        });
+        console.log(`recorded: ${extra.kind} ${extra.value} for ${me.username}`);
+      }
     } else {
       console.log('karma could not be parsed from the profile page — nothing recorded');
       // Nothing was measured, so nothing was recorded. Reporting success here is how a
