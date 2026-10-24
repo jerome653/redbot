@@ -18,6 +18,7 @@
  * measured — because this account has published nothing yet.
  */
 import { policy } from './policy.js';
+import { effectiveMaxRepliesPerDay } from './weekend.js';
 import { loadHistory } from './store.js';
 import { getPool } from './db.js';
 import { insertObservation, selectObservations } from './db/logs.js';
@@ -392,9 +393,9 @@ export function assess(c: HealthCounters, now: Date = new Date()): HealthVerdict
       cooldown.push({ why: `a removal was observed at ${c.lastRemovalAt}; a person should look at why before posting again`, until });
     }
   }
-  if (c.repliesToday >= policy.maxRepliesPerDay.value) {
+  if (c.repliesToday >= effectiveMaxRepliesPerDay(now)) {
     cooldown.push({
-      why: `${c.repliesToday} replies today, daily ceiling is ${policy.maxRepliesPerDay.value} (${policy.maxRepliesPerDay.why})`,
+      why: `${c.repliesToday} replies today, daily ceiling is ${effectiveMaxRepliesPerDay(now)} (${policy.maxRepliesPerDay.why})`,
       until: null
     });
   }
@@ -424,7 +425,7 @@ export function assess(c: HealthCounters, now: Date = new Date()): HealthVerdict
       `(observation only — this does not establish why)`
     );
   }
-  if (c.repliesToday === policy.maxRepliesPerDay.value - 1) {
+  if (effectiveMaxRepliesPerDay(now) > 1 && c.repliesToday === effectiveMaxRepliesPerDay(now) - 1) {
     caution.push(`${c.repliesToday} replies today — one below the daily ceiling`);
   }
   /**

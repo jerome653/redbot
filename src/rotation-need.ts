@@ -24,8 +24,8 @@ import { policy } from './policy.js';
 /** Publishes a day the rotation works an account up to. Never above the account's ceiling. */
 export const ROTATION_DAILY_TARGET = 2;
 
-export function dailyTargetFor(account: AccountRecord): number {
-  return Math.min(ROTATION_DAILY_TARGET, dailyCeilingFor(account));
+export function dailyTargetFor(account: AccountRecord, now: Date = new Date()): number {
+  return Math.min(ROTATION_DAILY_TARGET, dailyCeilingFor(account, now));
 }
 
 export interface AccountNeed {
@@ -44,7 +44,7 @@ export function accountNeed(
   c: { repliesToday: number; lastReplyAt: string | null },
   now: Date
 ): AccountNeed {
-  const base = { handle: account.handle, servedToday: c.repliesToday, target: dailyTargetFor(account) };
+  const base = { handle: account.handle, servedToday: c.repliesToday, target: dailyTargetFor(account, now) };
   const v = checkWindow({ account, repliesToday: c.repliesToday, now });
   if (!v.allowed) return { ...base, due: false, rule: v.rule ?? 'window', why: v.detail };
   if (c.repliesToday >= base.target) {

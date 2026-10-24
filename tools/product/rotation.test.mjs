@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseShift, onShift, nextHandle, orderByNeed, rotationTick, holdRegistry, DEFAULT_SHIFT,
-  parseWindows, inWindows, DEFAULT_AUTO_WINDOWS
+  parseWindows, inWindows, DEFAULT_AUTO_WINDOWS, DEFAULT_AUTO_WINDOWS_WEEKEND, isWeekend
 } from './rotation.mjs';
 
 const shift = parseShift(DEFAULT_SHIFT);
@@ -290,4 +290,32 @@ test('server.mjs wires the guard: button checks ask loopHolds, Start waits for a
   assert.match(src, /hold: rotationHolds\.hold,/);
   assert.match(src, /release: rotationHolds\.release,/);
   assert.match(src, /alive: \(\) => autoProc === me/);
+});
+
+/* ---- weekends: Clark is away, the window opens to a full 24h (the LIVE service path) ---- */
+
+const SAT_1000 = new Date('2026-10-24T02:00:00Z'); // Saturday 10:00 Manila
+const MON_1000 = new Date('2026-10-26T02:00:00Z'); // Monday 10:00 Manila
+
+test('isWeekend is Sat/Sun in Asia/Manila and fails closed to false on a bad zone', () => {
+  assert.equal(isWeekend(SAT_1000), true);
+  assert.equal(isWeekend(MON_1000), false);
+  assert.equal(isWeekend(SAT_1000, 'Nowhere/Nothing'), false);
+});
+
+test('inWindows: the weekend default 00-24 covers every hour of the day', () => {
+  const we = parseWindows(DEFAULT_AUTO_WINDOWS_WEEKEND);
+  const at = (manilaHour) => new Date(Date.UTC(2026, 9, 24, manilaHour - 8));
+  for (const h of [0, 1, 5, 10, 17, 23]) assert.equal(inWindows(we, at(h)), true, `Sat ${h}:00 Manila`);
+});
+
+test('on a weekend the rotation runs at 10:00 (full-24h window); on a weekday 10:00 it rests', async () => {
+  const wd = parseWindows(DEFAULT_AUTO_WINDOWS);
+  const we = parseWindows(DEFAULT_AUTO_WINDOWS_WEEKEND);
+  const sat = deps({ windows: wd, weekendWindows: we, now: () => SAT_1000 });
+  assert.equal((await rotationTick(sat)).ran, true, 'Saturday 10:00 runs');
+  const mon = deps({ windows: wd, weekendWindows: we, now: () => MON_1000 });
+  const r = await rotationTick(mon);
+  assert.equal(r.ran, false, 'Monday 10:00 rests');
+  assert.equal(r.why, 'off-window');
 });

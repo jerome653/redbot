@@ -36,6 +36,7 @@
  * else has said; warming's job is to be ordinary.
  */
 import { policy } from './policy.js';
+import { effectiveMaxRepliesPerDay } from './weekend.js';
 import { config } from './config.js';
 import { assessClaims } from './claims.js';
 import { withoutDisclosureLines } from './disclosure.js';
@@ -233,6 +234,8 @@ export function checkWarmingComment(body: string): WarmingVerdict {
  * ------------------------------------------------------------------ */
 
 export interface PaceInput {
+  /** The instant the pace is judged at; defaults to now. Injected so a test can fix the weekend. */
+  now?: Date;
   /** Warming comments already published by this account today. */
   publishedToday: number;
   /** Minutes since the last warming comment, or null if there has never been one. */
@@ -250,7 +253,7 @@ export function checkWarmingPace(input: PaceInput): WarmingVerdict {
   const issues: WarmingIssue[] = [];
   const warnings: string[] = [];
 
-  const ceiling = policy.maxRepliesPerDay.value;
+  const ceiling = effectiveMaxRepliesPerDay(input.now ?? new Date());
   if (input.publishedToday >= ceiling) {
     issues.push({
       rule: 'daily-ceiling',

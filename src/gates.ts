@@ -306,7 +306,8 @@ export function evaluateGates(input: GateInput): GateResult {
     const pace = checkWarmingPace({
       publishedToday: input.health.counters.repliesToday,
       minutesSinceLast,
-      karma: input.health.counters.karma
+      karma: input.health.counters.karma,
+      now
     });
     for (const i of pace.issues) blocks.push({ gate: `warming:${i.rule}`, reason: i.detail });
     for (const w of pace.warnings) warnings.push(`warming — ${w}`);

@@ -97,7 +97,7 @@ test('a claim-heavy warming comment warns without blocking', () => {
 test('the daily ceiling holds', () => {
   /* At the ceiling, whatever the ceiling is. A literal 3 here stopped exercising the rule the day
      the ceiling became 10 — `publishedToday: 3` was simply under it. */
-  const r = checkWarmingPace({ publishedToday: policy.maxRepliesPerDay.value, minutesSinceLast: 600, karma: 1 });
+  const r = checkWarmingPace({ publishedToday: policy.maxRepliesPerDay.value, minutesSinceLast: 600, karma: 1, now: new Date('2026-07-27T12:00:00Z') });
   assert.equal(r.ok, false);
   assert.ok(r.issues.some((i) => i.rule === 'daily-ceiling'));
 });
@@ -105,7 +105,7 @@ test('the daily ceiling holds', () => {
 test('one below the ceiling is allowed — the boundary is pinned from both sides', () => {
   /* Without this, raising the ceiling could hide a rule that had stopped firing at all. */
   const r = checkWarmingPace({
-    publishedToday: policy.maxRepliesPerDay.value - 1, minutesSinceLast: 600, karma: 1
+    publishedToday: policy.maxRepliesPerDay.value - 1, minutesSinceLast: 600, karma: 1, now: new Date('2026-07-27T12:00:00Z')
   });
   assert.ok(!r.issues.some((i) => i.rule === 'daily-ceiling'), JSON.stringify(r.issues));
 });

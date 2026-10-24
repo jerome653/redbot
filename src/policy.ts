@@ -134,12 +134,21 @@ export const policy = {
    * `cautionKarmaBelow` (10), and ryangrowth12 has karma 1. Ten comments a day from a karma-1
    * account is a new-account ban risk that the 3 was there to avoid. Jerome has reaffirmed no
    * limits several times against that warning, so it ships. Reverting is this one literal: every
-   * enforcer reads it, so putting 3 back restores the old behaviour with no other change.
+   * enforcer reads it, so changing this weekday cap changes every enforcer, which now reads the weekend-adjusted value via src/weekend.ts.
    * ---------------------------------------------------------------------------
    */
+  /**
+   * The WEEKDAY per-account reply cap. On weekends it is multiplied by weekendReplyMultiplier
+   * — see src/weekend.ts effectiveMaxRepliesPerDay, which every ceiling enforcer (window.ts
+   * dailyCeilingFor, warming.ts pace, health.ts assess) now reads instead of this value directly.
+   */
   maxRepliesPerDay: L(
-    3, 'replies/day', 'declared',
-    'operator instruction 2026-10-16 — "dont add too many"; back to the ACCOUNT-WARMING Stage 1 figure the 09-28 raise overrode'
+    1, 'replies/day (weekday)', 'declared',
+    'operator instruction 2026-10-24 — weekday cap of 1; weekends run at 1 x weekendReplyMultiplier (5), because Clark is away all weekend and auto does more then'
+  ),
+  weekendReplyMultiplier: L(
+    5, 'x weekday cap', 'declared',
+    'operator decision 2026-10-24 — Clark is away Sat/Sun, so each account may send 5x its weekday cap on weekends (effective weekend cap 5); tunable here, read via src/weekend.ts effectiveMaxRepliesPerDay'
   ),
   minMinutesBetweenReplies: L(
     45, 'minutes', 'provisional',
