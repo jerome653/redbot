@@ -7,6 +7,7 @@
 import { health } from '../health.js';
 import { computeMetrics, formatRate } from '../metrics.js';
 import { policy, limitsByProvenance, type PolicyKey } from '../policy.js';
+import { effectiveMaxRepliesPerDay } from '../weekend.js';
 import { rankCandidates } from '../select.js';
 import { loadReviews, summarizeReviews } from '../review.js';
 import { generateAll } from '../reports.js';
@@ -28,7 +29,7 @@ export async function healthCmd(account?: string): Promise<number> {
   say.info('');
   say.step(`Reads today    : ${c.readsToday}`);
   say.step(`Searches today : ${c.searchesToday}`);
-  say.step(`Replies today  : ${c.repliesToday} / ${policy.maxRepliesPerDay.value}`);
+  say.step(`Replies today  : ${c.repliesToday} / ${effectiveMaxRepliesPerDay(new Date())}`);
   say.step(`Avg session    : ${c.avgSessionMs == null ? 'no data' : Math.round(c.avgSessionMs / 1000) + 's'}`);
   say.step(`Avg dwell      : ${c.avgDwellMs == null ? 'no data' : Math.round(c.avgDwellMs / 1000) + 's'}`);
   say.step(`429s (24h)     : ${c.rateLimitHits24h}`);
