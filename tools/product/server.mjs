@@ -59,7 +59,7 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 import { startAlignedBrowser } from './browser-start.mjs';
 import { createAddAccountFlows, karmaFromOutput } from './add-account-flow.mjs';
 import { replyAccount, ensureBrowser } from './reply-browser.mjs';
-import { rotationTick, parseShift, parseWindows, holdRegistry, DEFAULT_SHIFT, DEFAULT_AUTO_WINDOWS } from './rotation.mjs';
+import { rotationTick, parseShift, parseWindows, holdRegistry, DEFAULT_SHIFT, DEFAULT_AUTO_WINDOWS, DEFAULT_AUTO_WINDOWS_WEEKEND } from './rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -2853,6 +2853,10 @@ function rotationStart({ everyMinutes }) {
   const windowsText = process.env.REDBOT_AUTO_WINDOWS || DEFAULT_AUTO_WINDOWS;
   const windows = parseWindows(windowsText);
   if (!windows) return { ok: false, error: `REDBOT_AUTO_WINDOWS="${windowsText}" is not "HH-HH,HH-HH@Zone" (for example 18-24,01-05@Asia/Manila).` };
+  /* Weekends (Sat/Sun Asia/Manila) open to a full 24h; the tick picks these when isWeekend(now). */
+  const weekendWindowsText = process.env.REDBOT_AUTO_WINDOWS_WEEKEND || DEFAULT_AUTO_WINDOWS_WEEKEND;
+  const weekendWindows = parseWindows(weekendWindowsText);
+  if (!weekendWindows) return { ok: false, error: `REDBOT_AUTO_WINDOWS_WEEKEND="${weekendWindowsText}" is not "HH-HH,HH-HH@Zone" (for example 00-24@Asia/Manila).` };
   /* The gap between one account's cycle ending and the next one starting. */
   const gap = Math.max(5, Number(everyMinutes) || 10);
   autoLog = [];
@@ -2869,6 +2873,7 @@ function rotationStart({ everyMinutes }) {
     now: () => new Date(),
     shift,
     windows,
+    weekendWindows,
     /* Read from the history table only — a tick with nothing due opens no Chrome. */
     needs: async (now) => (await import('../../dist/rotation-need.js')).fleetNeeds(now),
     last: () => last,

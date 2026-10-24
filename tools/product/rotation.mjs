@@ -33,6 +33,13 @@ export const DEFAULT_SHIFT = '06-17@Asia/Manila';
 export const DEFAULT_AUTO_WINDOWS = '18-24,01-05@Asia/Manila';
 
 /**
+ * Weekends (Saturday/Sunday Asia/Manila) open the window to a full 24h — Clark is away all weekend.
+ * REDBOT_AUTO_WINDOWS_WEEKEND overrides it. src/auto-windows.ts pins the same weekend default, and
+ * src/test/auto-windows.test.ts asserts the two files agree.
+ */
+export const DEFAULT_AUTO_WINDOWS_WEEKEND = '00-24@Asia/Manila';
+
+/**
  * Parse "HH-HH@Zone" (end exclusive). Returns null for anything else; an unreadable shift must
  * not silently become "never on shift", so the caller treats null as a refusal to rotate.
  */
@@ -76,6 +83,20 @@ export function parseWindows(text) {
 /** Is `now` inside any of the windows? */
 export function inWindows(windows, now) {
   return windows.some((w) => onShift(w, now));
+}
+
+/**
+ * Saturday or Sunday in `zone` (Asia/Manila by default) — Clark is away all weekend. Fails closed
+ * to false (treat as a weekday, the safer/lower-volume answer) on an unreadable zone. This mirrors
+ * src/weekend.ts isWeekend; the .mjs cannot import the TS, so the check is replicated inline.
+ */
+export function isWeekend(now, zone = 'Asia/Manila') {
+  try {
+    const day = new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'short' }).format(now);
+    return day === 'Sat' || day === 'Sun';
+  } catch {
+    return false;
+  }
 }
 
 /** The handle after `last` in `handles`, wrapping; the first when `last` is unknown. */
@@ -143,12 +164,14 @@ export async function rotationTick(deps) {
     deps.log('Not rotating: REDBOT_OPERATOR_SHIFT is not "HH-HH@Zone".');
     return { ran: false, why: 'bad-shift' };
   }
-  /* `windows` absent = no window gate (tests of the shift logic); null = unreadable, refuse. */
-  if (deps.windows === null) {
-    deps.log('Not rotating: REDBOT_AUTO_WINDOWS is not "HH-HH,HH-HH@Zone".');
+  /* `windows` absent = no window gate (tests of the shift logic); null = unreadable, refuse. On a
+   * weekend the full-24h weekendWindows apply when the caller wired them (server.mjs does). */
+  const activeWindows = isWeekend(now) && deps.weekendWindows !== undefined ? deps.weekendWindows : deps.windows;
+  if (activeWindows === null) {
+    deps.log('Not rotating: REDBOT_AUTO_WINDOWS/REDBOT_AUTO_WINDOWS_WEEKEND is not "HH-HH,HH-HH@Zone".');
     return { ran: false, why: 'bad-windows' };
   }
-  if (deps.windows && !inWindows(deps.windows, now)) {
+  if (activeWindows && !inWindows(activeWindows, now)) {
     deps.log('Outside the auto windows — resting, no Chrome opened.');
     return { ran: false, why: 'off-window' };
   }

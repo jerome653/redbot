@@ -17,6 +17,7 @@
  */
 import type { AccountRecord } from './config.js';
 import { policy } from './policy.js';
+import { effectiveMaxRepliesPerDay } from './weekend.js';
 
 export interface WindowVerdict {
   allowed: boolean;
@@ -61,9 +62,10 @@ export function inQuietRange(hour: number, from: number, to: number): boolean {
  * the global maximum stays a hard cap so a typo in a config file cannot license a spree. Exported
  * so the rotation (src/rotation-need.ts) reads the SAME ceiling this function enforces.
  */
-export function dailyCeilingFor(account: AccountRecord): number {
-  const configured = Number.isInteger(account.dailyCeiling) ? account.dailyCeiling! : policy.maxRepliesPerDay.value;
-  return Math.min(configured, policy.maxRepliesPerDay.value);
+export function dailyCeilingFor(account: AccountRecord, now: Date = new Date()): number {
+  const cap = effectiveMaxRepliesPerDay(now);
+  const configured = Number.isInteger(account.dailyCeiling) ? account.dailyCeiling! : cap;
+  return Math.min(configured, cap);
 }
 
 export interface WindowInput {
@@ -129,7 +131,7 @@ export function checkWindow(input: WindowInput): WindowVerdict {
    * The ceiling. The account's own number wins where it is set, but never upward — the
    * global maximum stays a hard cap so a typo in a config file cannot license a spree.
    */
-  const ceiling = dailyCeilingFor(account);
+  const ceiling = dailyCeilingFor(account, now);
   if (repliesToday >= ceiling) {
     return {
       allowed: false, rule: 'daily-ceiling',

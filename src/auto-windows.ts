@@ -7,7 +7,16 @@
  * dist/ and cannot import the console's .mjs. src/test/auto-windows.test.ts pins the two defaults
  * together. Each account's own quiet hours (src/window.ts) still apply inside these windows.
  */
+import { isWeekend } from './weekend.js';
+
 export const DEFAULT_AUTO_WINDOWS = '18-24,01-05@Asia/Manila';
+
+/**
+ * Weekends (Saturday/Sunday in Asia/Manila) open the window to a full 24h — Clark is away all
+ * weekend, so auto carries the fleet alone. REDBOT_AUTO_WINDOWS_WEEKEND overrides it. The weekday
+ * window above is unchanged. tools/product/rotation.mjs pins the same weekend default.
+ */
+export const DEFAULT_AUTO_WINDOWS_WEEKEND = '00-24@Asia/Manila';
 
 interface Range { from: number; to: number }
 
@@ -37,7 +46,9 @@ function hourIn(zone: string, now: Date): number {
  * a reason too, so a typo can never turn into "run at every hour".
  */
 export function offWindowReason(now: Date, env: Record<string, string | undefined> = process.env): string | null {
-  const text = env.REDBOT_AUTO_WINDOWS || DEFAULT_AUTO_WINDOWS;
+  const text = isWeekend(now)
+    ? (env.REDBOT_AUTO_WINDOWS_WEEKEND || DEFAULT_AUTO_WINDOWS_WEEKEND)
+    : (env.REDBOT_AUTO_WINDOWS || DEFAULT_AUTO_WINDOWS);
   const w = parse(text);
   if (!w) return `REDBOT_AUTO_WINDOWS="${text}" is not "HH-HH,HH-HH@Zone" — not running.`;
   const h = hourIn(w.zone, now);

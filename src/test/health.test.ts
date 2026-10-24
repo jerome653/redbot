@@ -110,7 +110,13 @@ test('the daily reply ceiling forces a Cooldown that no clock lifts', async () =
 });
 
 test('replies are spaced — a Cooldown right after one, with a resume time', async () => {
-  const v = await state([h('publish.ok', 10)]);
+  // On a WEEKEND the cap is 5, so a single reply is below the daily ceiling and the only cooldown
+  // is the spacing one — which is what this pins. (On a weekday the cap is 1, where one reply also
+  // trips the ceiling; that no-clock case is the ceiling test above.)
+  const WEEKEND = new Date('2026-07-25T04:00:00Z'); // Saturday 12:00 Manila
+  const recent = new Date(WEEKEND.getTime() - 10 * 60_000).toISOString();
+  const history: HistoryEntry[] = [{ ts: recent, kind: 'publish.ok', account: ACC, summary: 'publish 10m ago' }];
+  const v = assess(await counters(ACC, WEEKEND, { history, observations: SETTLED }), WEEKEND);
   assert.equal(v.state, 'Cooldown');
   assert.equal(v.mayPublish, false);
   assert.ok(v.resumeAt, 'spacing cooldown should say when it lifts');

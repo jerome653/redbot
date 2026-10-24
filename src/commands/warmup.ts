@@ -147,7 +147,8 @@ export async function warmupDraft(opts?: { dry?: boolean }): Promise<WarmupResul
   const pace = checkWarmingPace({
     publishedToday: c.repliesToday,
     minutesSinceLast: await minutesSinceLastPublish(account.handle),
-    karma: c.karma
+    karma: c.karma,
+    now: new Date()
   });
 
   say.step(`Account : ${account.handle} · karma ${c.karma ?? 'never measured'} · ${c.repliesToday} published today`);
