@@ -28,8 +28,12 @@
  */
 import { userDataDir, consoleBase } from './console-endpoint.mjs';
 
-/** Long enough for a Chrome launch plus a karma read, under the unit's TimeoutStartSec=5min. */
-const TIMEOUT_MS = 4 * 60 * 1000;
+/**
+ * Must exceed a full-fleet karma pass (~5 min at 13 accounts, ~20-35 s per account) so the client
+ * does not abort after the server has already written every row, AND stay at or below the unit's
+ * TimeoutStartSec. If the account count grows, raise this and TimeoutStartSec together.
+ */
+const TIMEOUT_MS = 12 * 60 * 1000;
 
 export async function requestKarma({
   base = consoleBase(userDataDir()),
