@@ -52,6 +52,9 @@ export interface UnattendedInput {
   permalink?: string | null | undefined;
   /** The posting account's latest measured karma (health counters); null when never measured. */
   karma?: number | null | undefined;
+  /** Subreddits to floor beyond the static seed, derived from observed removals
+      (src/removal-floor.ts). Absent leaves KARMA_FLOOR_SUBS behaviour unchanged. */
+  flooredSubs?: ReadonlySet<string> | undefined;
   /** The body when the draft is a warmup draft (`w_…`, src/warming.ts isWarmupDraftId); null or
       absent for every other draft. Read by the REDDIT bar only — see WARMUP_WAIVABLE. */
   warmupBody?: string | null | undefined;
@@ -261,7 +264,10 @@ function redditPlacement(input: UnattendedInput): { refuse: string } | null {
   const sub = /\/r\/([A-Za-z0-9_]+)(?:[/?#]|$)/.exec(input.permalink ?? '')?.[1]?.toLowerCase();
   if (!sub || sub === 'unknown') return { refuse: `cannot read the subreddit from "${input.permalink ?? ''}"` };
   const floor = policy.cautionKarmaBelow.value;
-  if (KARMA_FLOOR_SUBS.has(sub) && !(typeof input.karma === 'number' && input.karma >= floor)) {
+  const flooredSubs = input.flooredSubs && input.flooredSubs.size
+    ? new Set<string>([...KARMA_FLOOR_SUBS, ...input.flooredSubs])
+    : KARMA_FLOOR_SUBS;
+  if (flooredSubs.has(sub) && !(typeof input.karma === 'number' && input.karma >= floor)) {
     return { refuse: `r/${sub} waits for karma ${floor} before posting unattended; the posting account has ${input.karma ?? 'never measured'}` };
   }
   return null;

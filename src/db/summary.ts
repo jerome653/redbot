@@ -258,3 +258,18 @@ export async function consoleTotals(db: Db): Promise<ConsoleTotals> {
     regret: n('regret'), removals: n('removals'), certifications: n('certifications')
   };
 }
+
+/** Permalinks of moderator-removed replies observed since sinceIso, across all accounts. Feeds
+    src/removal-floor.ts flooredSubsFromRemovals; the subreddit is parsed from the permalink, the
+    same way the publish gate reads it. */
+export async function removalPermalinksSince(
+  db: Db,
+  sinceIso: string
+): Promise<Array<{ permalink: string | null }>> {
+  const r = await db.query<{ permalink: string | null }>(
+    `SELECT permalink FROM observations
+      WHERE kind = 'reply-marked-removed' AND permalink IS NOT NULL AND ts >= $1`,
+    [sinceIso]
+  );
+  return r.rows;
+}

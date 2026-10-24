@@ -37,6 +37,9 @@ import { unattendedPublishDecision, certificationOnlyRefusal, publishBar, type U
 import { latestCertification } from '../db/certifications.js';
 import { isWarmupDraftId } from '../warming.js';
 import { getPool } from '../db.js';
+import { policy } from '../policy.js';
+import { flooredSubsFromRemovals } from '../removal-floor.js';
+import { removalPermalinksSince } from '../db/summary.js';
 import { health } from '../health.js';
 import { viewThread } from '../behavior.js';
 import { makeRng, sessionSeed } from '../rand.js';
@@ -272,6 +275,10 @@ export async function reply(
     /* Kept for the second decision after the final re-gate (step 6). */
     let autoInput: UnattendedInput | null = null;
     if (opts?.unattended) {
+      const flooredSubs = flooredSubsFromRemovals(
+        await removalPermalinksSince(getPool(), new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString()),
+        policy.subRemovalFloorCount.value
+      );
       autoInput = {
         enabled: process.env.REDBOT_AUTO_PUBLISH,
         certVerdict: target.certification?.verdict ?? null,
@@ -281,6 +288,7 @@ export async function reply(
         latestCert,
         permalink: target.permalink,
         karma: verdict.counters.karma,
+        flooredSubs,
         warmupBody
       };
       const auto = unattendedPublishDecision(autoInput);

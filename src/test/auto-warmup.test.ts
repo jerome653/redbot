@@ -219,5 +219,15 @@ test('reply.ts tags every publish.* row with warming for a warmup draft, and fee
   for (const r of rows) assert.match(r, /\.\.\.warmTag/, r.slice(0, 80));
   assert.match(src, /const warmTag = warmup \? \{ warming: true \} : \{\};/);
   assert.match(src, /latestCert,\s+warmupBody\s+\}\);/, 'the early (before-page) refusal sees the warmup body');
-  assert.match(src, /karma: verdict\.counters\.karma,\s+warmupBody\s+\};/, 'the full decision (and the final re-check) sees it');
+  assert.match(src, /karma: verdict\.counters\.karma,\s+flooredSubs,\s+warmupBody\s+\};/, 'the full decision (and the final re-check) sees it');
+});
+
+test("REDDIT: a subreddit floored from observed removals refuses for any account, like the static seed", () => {
+  const into = (over = {}) => ({ ...noClaims, warmupBody: GOOD, karma: 1, permalink: "/r/webhosting/comments/1/x/", ...over });
+  /* r/webhosting is NOT in KARMA_FLOOR_SUBS, so at karma 1 a warmup there publishes unattended... */
+  assert.equal(underBar("REDDIT", () => unattendedPublishDecision(into())).publish, true);
+  /* ...until it is handed in as a removal-derived floored sub, when it behaves exactly like r/wordpress. */
+  const floored = underBar("REDDIT", () => unattendedPublishDecision(into({ flooredSubs: new Set(["webhosting"]) })));
+  assert.equal(floored.publish, false);
+  assert.match(floored.why, /karma 10/);
 });
