@@ -127,3 +127,57 @@ test('a body too large to be a verdict is cut, not pasted whole into the journal
   });
   assert.ok(lines.join('').length < 400, `one line, not a page: got ${lines.join('').length}`);
 });
+
+/* THE 300 s CAP. Measured 25 Oct 04:05:00 PDT: the unit started 04:00:00 and logged
+   "did not answer - fetch failed" at exactly 300 s, under a 12-minute AbortSignal. Node's
+   built-in fetch has its own headers timeout of 300 s that no signal can extend, so the default
+   transport must not be fetch. These run against a real local server. */
+import http from 'node:http';
+import { postJson } from './karma-request.mjs';
+
+const slowServer = (delayMs, body = '{"code":0,"output":[]}') => new Promise((resolve) => {
+  const srv = http.createServer((req, res) => {
+    let got = '';
+    req.on('data', (c) => { got += c; });
+    req.on('end', () => setTimeout(() => {
+      res.setHeader('content-type', 'application/json');
+      res.end(body.replace('"output":[]', `"output":[${JSON.stringify(got)}]`));
+    }, delayMs));
+  });
+  srv.listen(0, '127.0.0.1', () => resolve({ srv, base: `http://127.0.0.1:${srv.address().port}` }));
+});
+
+test('the default transport is not the global fetch', async () => {
+  const { srv, base } = await slowServer(0);
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('global fetch was used'); };
+  try {
+    const lines = [];
+    const code = await requestKarma({ base, log: (l) => lines.push(l) });
+    assert.equal(code, 0, lines.join('\n'));
+    assert.deepEqual(lines, ['{}'], 'the request body reached the server');
+  } finally { globalThis.fetch = real; srv.close(); }
+});
+
+test('postJson waits as long as it is told to, and no longer', async () => {
+  const { srv, base } = await slowServer(300);
+  try {
+    const res = await postJson(`${base}/api/karma/measure`, { method: 'POST', headers: {}, body: '{}', timeoutMs: 2000 });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).code, 0);
+    await assert.rejects(
+      postJson(`${base}/api/karma/measure`, { method: 'POST', headers: {}, body: '{}', timeoutMs: 100 }),
+      /no answer within 100 ms/
+    );
+  } finally { srv.close(); }
+});
+
+test('a timeout is exit 1 and names how long it waited', async () => {
+  const { srv, base } = await slowServer(300);
+  try {
+    const lines = [];
+    const code = await requestKarma({ base, timeoutMs: 100, log: (l) => lines.push(l) });
+    assert.equal(code, 1);
+    assert.match(lines.join('\n'), /no answer within 100 ms/);
+  } finally { srv.close(); }
+});
