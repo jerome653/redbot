@@ -26,6 +26,7 @@
  * non-zero, because `redbot-karma.service` has no `SuccessExitStatus` override: a run that
  * measured nothing has to show FAILED rather than report a success nobody reads.
  */
+import http from 'node:http';
 import { userDataDir, consoleBase } from './console-endpoint.mjs';
 
 /**
@@ -35,10 +36,35 @@ import { userDataDir, consoleBase } from './console-endpoint.mjs';
  */
 const TIMEOUT_MS = 12 * 60 * 1000;
 
+/**
+ * POST over node:http, with `timeoutMs` as its ONLY time limit. Not the global fetch: Node's
+ * fetch has a headers timeout of 300 s that an AbortSignal cannot extend, so #69's 12 minutes
+ * never applied. Measured 25 Oct: started 04:00:00 PDT, "did not answer - fetch failed" at
+ * 04:05:00. The route answers only when the whole fleet pass is over, so its headers can be the
+ * last thing to arrive. Returns the slice of a fetch Response that requestKarma reads.
+ */
+export function postJson(url, { method, headers, body, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(url, { method, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('error', reject);
+      res.on('end', () => {
+        clearTimeout(timer);
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ ok: res.statusCode < 400, status: res.statusCode, json: async () => JSON.parse(text) });
+      });
+    });
+    const timer = setTimeout(() => req.destroy(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs);
+    req.on('error', (e) => { clearTimeout(timer); reject(e); });
+    req.end(body);
+  });
+}
+
 export async function requestKarma({
   base = consoleBase(userDataDir()),
   handle,
-  fetchImpl = fetch,
+  fetchImpl = postJson,
   log = console.log,
   timeoutMs = TIMEOUT_MS
 } = {}) {
@@ -56,7 +82,7 @@ export async function requestKarma({
          reads as "every configured account". The ternary this replaced was an equivalent
          mutant: both forms produced the same two bytes, and no test could tell them apart. */
       body: JSON.stringify({ handle }),
-      signal: AbortSignal.timeout(timeoutMs)
+      timeoutMs
     });
   } catch (e) {
     /* A stale port file reads fine and connects to nothing. Say which URL, so the next person
