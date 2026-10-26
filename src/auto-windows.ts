@@ -1,6 +1,8 @@
 /**
- * When unattended work may run at all (Jerome, 2026-10-23: "run auto when Clark is not around ...
- * auto can run from 1am to 5am and 6pm to 12 midnight"; Clark works 06:00-17:00 Manila).
+ * When unattended work may run at all (Jerome, 2026-10-27: "6am to 5pm dont touch- else you can
+ * run auto"; Clark works 06:00-17:00 Manila). It was 18-24,01-05 from 2026-10-23. The window
+ * closes at 05:00, not 06:00: a turn that starts inside the window runs 15-20 min past its start,
+ * so the last hour before the shift is where the final turn lands and the 05:30 karma run goes.
  *
  * The rotation reads the same rule in tools/product/rotation.mjs (parseWindows / inWindows); this
  * is the copy the single-account `redbot auto --every` loop reads, because that loop runs from
@@ -9,7 +11,7 @@
  */
 import { isWeekend } from './weekend.js';
 
-export const DEFAULT_AUTO_WINDOWS = '18-24,01-05@Asia/Manila';
+export const DEFAULT_AUTO_WINDOWS = '17-24,00-05@Asia/Manila';
 
 /**
  * Weekends (Saturday/Sunday in Asia/Manila) open the window to a full 24h — Clark is away all

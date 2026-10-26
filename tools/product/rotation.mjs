@@ -25,12 +25,13 @@
 export const DEFAULT_SHIFT = '06-17@Asia/Manila';
 
 /**
- * When the rotation may run at all (Jerome, 2026-10-23: "run auto when Clark is not around ...
- * auto can run from 1am to 5am and 6pm to 12 midnight"). REDBOT_AUTO_WINDOWS overrides it. The hour
- * either side of the shift stays empty so a turn never runs into Clark's day. Each account's own
- * quiet hours (src/window.ts) still apply inside these windows.
+ * When the rotation may run at all (Jerome, 2026-10-27: "6am to 5pm dont touch- else you can run
+ * auto"; it was 18-24,01-05 from 2026-10-23). REDBOT_AUTO_WINDOWS overrides it. The hour before the
+ * shift stays empty so a turn never runs into Clark's day; the hour after it does not need to,
+ * because the shift ends at 17:00. Each account's own quiet hours (src/window.ts) still apply
+ * inside these windows, so they have to sit outside both the shift and most of this window.
  */
-export const DEFAULT_AUTO_WINDOWS = '18-24,01-05@Asia/Manila';
+export const DEFAULT_AUTO_WINDOWS = '17-24,00-05@Asia/Manila';
 
 /**
  * Weekends (Saturday/Sunday Asia/Manila) open the window to a full 24h — Clark is away all weekend.

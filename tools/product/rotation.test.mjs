@@ -57,7 +57,7 @@ test('the default shift is Clark\'s, 06:00 to 17:00 Manila', () => {
 
 test('parseWindows reads "HH-HH,HH-HH@Zone" and refuses anything unreadable', () => {
   assert.deepEqual(parseWindows(DEFAULT_AUTO_WINDOWS), [
-    { from: 18, to: 24, zone: 'Asia/Manila' }, { from: 1, to: 5, zone: 'Asia/Manila' }
+    { from: 17, to: 24, zone: 'Asia/Manila' }, { from: 0, to: 5, zone: 'Asia/Manila' }
   ]);
   assert.deepEqual(parseWindows('22-06@UTC'), [{ from: 22, to: 6, zone: 'UTC' }]);
   assert.equal(parseWindows('18-24,1-5'), null);
@@ -66,11 +66,11 @@ test('parseWindows reads "HH-HH,HH-HH@Zone" and refuses anything unreadable', ()
   assert.equal(parseWindows(''), null);
 });
 
-test('inWindows: 18:00-24:00 and 01:00-05:00 Manila, end hours exclusive', () => {
+test('inWindows: 17:00-24:00 and 00:00-05:00 Manila, end hours exclusive', () => {
   const w = parseWindows(DEFAULT_AUTO_WINDOWS);
   const at = (manilaHour) => new Date(Date.UTC(2026, 9, 22, manilaHour - 8));
-  for (const h of [18, 20, 23, 25, 27, 28]) assert.equal(inWindows(w, at(h)), true, `${h % 24}:00 Manila`);
-  for (const h of [17, 24, 29, 30, 30 + 4, 30 + 10]) assert.equal(inWindows(w, at(h)), false, `${h % 24}:00 Manila`);
+  for (const h of [17, 18, 20, 23, 24, 25, 27, 28]) assert.equal(inWindows(w, at(h)), true, `${h % 24}:00 Manila`);
+  for (const h of [16, 29, 30, 30 + 4, 30 + 10]) assert.equal(inWindows(w, at(h)), false, `${h % 24}:00 Manila`);
 });
 
 test('outside the auto windows the tick rests: no needs read, no Chrome', async () => {
