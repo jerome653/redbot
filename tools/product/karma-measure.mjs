@@ -20,7 +20,7 @@
  *
  * AND THE RACE IS WON BY THE DANGEROUS SIDE. redbot-karma.timer picks 11:00 UTC because "the
  * browser is provably free then" - the loop account's quiet hours, 0-8 America/Los_Angeles.
- * Under `DEFAULT_AUTO_WINDOWS = '18-24,01-05@Asia/Manila'` (rotation.mjs) 11:00 UTC is 19:00
+ * Under the 2026-10-23 `DEFAULT_AUTO_WINDOWS = '18-24,01-05@Asia/Manila'` (rotation.mjs) 11:00 UTC is 19:00
  * Manila, INSIDE an active window. So the run that "succeeded" on 21 Oct measured a browser the
  * rotation owned - two processes on one CDP port, which on 2026-09-28 had to be killed to
  * protect a publish in flight. The run that FAILED was the safe one.

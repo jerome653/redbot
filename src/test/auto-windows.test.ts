@@ -5,12 +5,12 @@ import { offWindowReason, DEFAULT_AUTO_WINDOWS, DEFAULT_AUTO_WINDOWS_WEEKEND } f
 /** Manila is UTC+8: hour h in Manila on 2026-10-22 (a Thursday) is UTC h-8. */
 const manila = (h: number) => new Date(Date.UTC(2026, 9, 22, h - 8));
 
-test('the single-account loop runs inside 18:00-24:00 and 01:00-05:00 Manila', () => {
-  for (const h of [18, 23, 25, 28]) assert.equal(offWindowReason(manila(h), {}), null, `${h % 24}:00 Manila`);
+test('the single-account loop runs from 17:00 Manila through to 05:00', () => {
+  for (const h of [17, 18, 23, 24, 25, 28]) assert.equal(offWindowReason(manila(h), {}), null, `${h % 24}:00 Manila`);
 });
 
-test('the single-account loop rests during and around Clark\'s shift, and from 00:00 to 01:00', () => {
-  for (const h of [17, 24, 29, 30, 34, 40]) {
+test('the single-account loop rests through Clark\'s shift and the hour before it', () => {
+  for (const h of [16, 29, 30, 34, 40]) {
     assert.match(offWindowReason(manila(h), {}) ?? '', /outside the auto windows/i, `${h % 24}:00 Manila`);
   }
 });

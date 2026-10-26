@@ -2852,7 +2852,7 @@ function rotationStart({ everyMinutes }) {
   if (!shift) return { ok: false, error: `REDBOT_OPERATOR_SHIFT="${shiftText}" is not "HH-HH@Zone" (for example 06-17@Asia/Manila).` };
   const windowsText = process.env.REDBOT_AUTO_WINDOWS || DEFAULT_AUTO_WINDOWS;
   const windows = parseWindows(windowsText);
-  if (!windows) return { ok: false, error: `REDBOT_AUTO_WINDOWS="${windowsText}" is not "HH-HH,HH-HH@Zone" (for example 18-24,01-05@Asia/Manila).` };
+  if (!windows) return { ok: false, error: `REDBOT_AUTO_WINDOWS="${windowsText}" is not "HH-HH,HH-HH@Zone" (for example 17-24,00-05@Asia/Manila).` };
   /* Weekends (Sat/Sun Asia/Manila) open to a full 24h; the tick picks these when isWeekend(now). */
   const weekendWindowsText = process.env.REDBOT_AUTO_WINDOWS_WEEKEND || DEFAULT_AUTO_WINDOWS_WEEKEND;
   const weekendWindows = parseWindows(weekendWindowsText);
