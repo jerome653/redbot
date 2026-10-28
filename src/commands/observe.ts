@@ -26,7 +26,7 @@
 import type { Browser, Page } from 'playwright';
 import { attach, isBrowserUp, whoAmI, isBlocked, isRateLimited, NoBrowserError } from '../browser.js';
 import { loadDrafts, loadThreads } from '../store.js';
-import { appendInteraction, INTERACTION_SCHEMA_VERSION } from '../interactions.js';
+import { appendInteraction, INTERACTION_SCHEMA_VERSION, type ObservedReply } from '../interactions.js';
 import { currentAgeHours } from '../select.js';
 import { recordObservation, loadObservations, type Checkpoint, type Observation } from '../health.js';
 import { record, say, setAccount } from '../log.js';
@@ -112,6 +112,8 @@ export interface CommentSighting {
     score: number | null;
     depth: number | null;
     distinguished: string | null;
+    /** Authors of the comments directly beneath this reply — see ObservedReply.childAuthors. */
+    childAuthors: string[];
   }>;
 }
 
@@ -185,6 +187,7 @@ async function lookFor(page: Page, draft: Draft): Promise<CommentSighting> {
             thingId: string | null; author: string | null; body: string;
             renderedAge: string | null; timestamp: string | null;
             score: number | null; depth: number | null; distinguished: string | null;
+            childAuthors: string[];
           }>
         };
       }
@@ -233,19 +236,42 @@ async function lookFor(page: Page, draft: Draft): Promise<CommentSighting> {
       const hasOwnSlot = Array.from(hit.querySelectorAll('[slot="comment"]'))
         .some((el) => el.closest('shreddit-comment') === hit);
 
+      /**
+       * A reply's OWN text, and who has answered it. Both have the defect fixed above for our own
+       * node: `n.innerText` is the reply's whole SUBTREE — every answer beneath it and Reddit's
+       * chrome (author line, "Reply", "Share") — so the stored "body" of a reply that had been
+       * answered carried the answer too. Reply-back (src/reply-back.ts) drafts from this text and
+       * would have quoted us back at ourselves. Own `[slot="comment"]` first; failing that, the
+       * node with nested comments stripped, as for ours.
+       */
+      const ownBody = (n: Element): string => {
+        const slot = Array.from(n.querySelectorAll('[slot="comment"]'))
+          .find((el) => el.closest('shreddit-comment') === n) as HTMLElement | undefined;
+        if (slot) return slot.innerText.trim();
+        const c = n.cloneNode(true) as Element;
+        for (const nested of Array.from(c.querySelectorAll('shreddit-comment'))) nested.remove();
+        return (c.textContent ?? '').replace(/\s+/g, ' ').trim();
+      };
       // Every comment beneath ours, verbatim. Read defensively: an attribute Reddit does not
       // render becomes null, never a guess and never an omitted key.
       const replies = kids.map((n) => {
         const timeEl = n.querySelector('time');
+        const own = idOf(n);
         return {
-          thingId: idOf(n),
+          thingId: own,
           author: n.getAttribute('author'),
-          body: (n as HTMLElement).innerText,
+          body: ownBody(n),
           renderedAge: timeEl ? (timeEl as HTMLElement).innerText.trim() || null : null,
           timestamp: timeEl ? timeEl.getAttribute('datetime') : null,
           score: numAttr(n, 'score'),
           depth: numAttr(n, 'depth'),
-          distinguished: n.getAttribute('distinguished')
+          distinguished: n.getAttribute('distinguished'),
+          childAuthors: own
+            ? nodes
+                .filter((g) => (g.getAttribute('parentid') ?? g.getAttribute('parent-id')) === own)
+                .map((g) => g.getAttribute('author'))
+                .filter((a): a is string => Boolean(a))
+            : []
         };
       });
 
@@ -614,19 +640,7 @@ async function observeTargets(
               directReplyCount: sight.childReplies,
               via: sight.via
             },
-            replies: sight.replies.map((r) => ({
-              thingId: r.thingId,
-              author: r.author,
-              byOriginalPoster: Boolean(author) && (r.author ?? '').toLowerCase() === author,
-              byUs: Boolean(me.username) && (r.author ?? '').toLowerCase() === me.username!.toLowerCase(),
-              body: r.body,
-              renderedAge: r.renderedAge,
-              timestamp: r.timestamp,
-              score: r.score,
-              depth: r.depth,
-              distinguished: r.distinguished,
-              humanLabel: null      // never machine-filled; see interactions.ts
-            })),
+            replies: observedReplies(sight.replies, { opAuthor: author, me: me.username }),
             note
           });
 
@@ -652,4 +666,30 @@ async function observeTargets(
     if (out) await out.close();
     await s.close();
   }
+}
+
+/**
+ * The rendered replies as interaction rows. Exported so the mapping — which reply-back now depends
+ * on for `childAuthors` and `byUs` — is driven by a unit test rather than only by a live page.
+ */
+export function observedReplies(
+  replies: CommentSighting['replies'],
+  who: { opAuthor: string | null; me: string | null }
+): ObservedReply[] {
+  const op = (who.opAuthor ?? '').toLowerCase();
+  const me = (who.me ?? '').toLowerCase();
+  return replies.map((r) => ({
+    thingId: r.thingId,
+    author: r.author,
+    byOriginalPoster: Boolean(op) && (r.author ?? '').toLowerCase() === op,
+    byUs: Boolean(me) && (r.author ?? '').toLowerCase() === me,
+    body: r.body,
+    renderedAge: r.renderedAge,
+    timestamp: r.timestamp,
+    score: r.score,
+    depth: r.depth,
+    distinguished: r.distinguished,
+    childAuthors: r.childAuthors,
+    humanLabel: null      // never machine-filled; see interactions.ts
+  }));
 }
