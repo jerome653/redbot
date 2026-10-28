@@ -2930,12 +2930,12 @@ function rotationStart({ everyMinutes }) {
   loop = runRotationLoop({
     alive: () => autoProc === me,
     gapMs: gap * 60_000,
-    stallMs: 3 * gap * 60_000,
+    /* Never under 45 min: a reading session alone is planned at 15-30 min (src/policy.ts). */
+    stallMs: Math.max(3 * gap, 45) * 60_000,
     tick: async (current) => {
       rotationHolds.live = true;
       try { return await rotationTick({ ...deps, alive: current }); }
-      /* A runner the watchdog retired must not clear `live` under the runner that replaced it. */
-      finally { if (current() || autoProc !== me) rotationHolds.live = false; }
+      finally { rotationHolds.live = false; }
     },
     onResult: (r) => {
       if (r.why === 'error') deps.log(`tick failed: ${r.error}`);
@@ -2945,13 +2945,14 @@ function rotationStart({ everyMinutes }) {
        never did. The 25 Oct gap left nothing at all. */
     onStall: (ms, killed) => {
       const what = `no tick finished and no cycle output for ${Math.round(ms / 60_000)} min — ` +
-        (killed ? 'killed the hung cycle; the loop carries on.' : 'restarted the loop (the stuck tick can no longer start a cycle).');
+        (killed ? 'killed the hung cycle; the loop carries on.' : 'the tick is stuck outside any cycle — recorded, not restarted (one runner, ever).');
       deps.log(`watchdog: ${what}`);
       record('error', `rotation watchdog: ${what}`, { level: 'error' }).catch(() => {});
     },
-    killChild: () => {
+    /* SIGTERM first; a child still there at the next stall gets SIGKILL. */
+    killChild: (strikes) => {
       if (!me.child) return false;
-      try { me.child.kill(); } catch { /* already gone; close clears me.child */ }
+      try { me.child.kill(strikes > 1 ? 'SIGKILL' : 'SIGTERM'); } catch { /* already gone; close clears me.child */ }
       return true;
     }
   });

@@ -286,7 +286,7 @@ test('server.mjs wires the guard: button checks ask loopHolds, Start waits for a
   assert.match(src, /const rotationHolds = holdRegistry\(\)/);
   assert.match(src, /if \(rotationHolds\.live\) return \{ ok: false/);
   assert.match(src, /rotationHolds\.live = true;\s+try \{ return await rotationTick\(\{ \.\.\.deps, alive: current \}\); \}/);
-  assert.match(src, /finally \{ if \(current\(\) \|\| autoProc !== me\) rotationHolds\.live = false; \}/);
+  assert.match(src, /finally \{ rotationHolds\.live = false; \}/);
   assert.match(src, /busy: \(h\) => /);
   assert.match(src, /hold: rotationHolds\.hold,/);
   assert.match(src, /release: rotationHolds\.release,/);
@@ -393,22 +393,33 @@ test('a tick that throws is recorded as an error and the loop carries on', async
   assert.equal(results[1].why, 'nothing-due');
 });
 
-test('watchdog: a tick stuck outside any child is retired and a new runner takes over — never two cycles at once', async () => {
-  const c = clock(); const stalls = []; let calls = 0; let firstCurrent;
+test('watchdog: a tick stuck outside any child is reported on every stall and NEVER replaced by a second runner', async () => {
+  const c = clock(); const stalls = []; let calls = 0;
   runRotationLoop({ ...c, gapMs: 600_000, stallMs: 1_800_000, alive: () => true,
-    tick: async (current) => {
-      calls++;
-      if (calls === 1) { firstCurrent = current; await new Promise(() => {}); }   // never resolves
-      return { ran: true, handle: 'a', code: 0 };
-    },
-    onResult: () => {}, onStall: (ms) => stalls.push(ms), killChild: () => false });
+    tick: async () => { calls++; await new Promise(() => {}); },   // never resolves
+    onResult: () => {}, onStall: (ms, killed) => stalls.push(killed), killChild: () => false });
   await c.advance(0);
   await c.advance(1_200_000);
-  assert.equal(stalls.length, 0, '20 min is not a stall at 3 x 10 min');
+  assert.equal(stalls.length, 0, '20 min is not a stall at 30 min');
   await c.advance(700_000);
-  assert.equal(stalls.length, 1, 'past 30 min with no progress the watchdog fires');
-  assert.equal(calls, 2, 'a new runner started a fresh tick');
-  assert.equal(firstCurrent(), false, 'the stuck runner is told it is no longer current, so it can never start a cycle');
+  assert.deepEqual(stalls, [false], 'past 30 min the stall is reported');
+  await c.advance(1_900_000);
+  assert.deepEqual(stalls, [false, false], 'and reported again a stall period later');
+  assert.equal(calls, 1, 'no second runner: a stuck runner beside a new one could close the Chrome of the new cycle');
+});
+
+test('watchdog: strikes count consecutive stalls on one tick, so the server can escalate to SIGKILL; a finished tick resets them', async () => {
+  const c = clock(); const strikes = []; let calls = 0; let release;
+  runRotationLoop({ ...c, gapMs: 600_000, stallMs: 1_800_000, alive: () => true,
+    tick: async () => { calls++; if (calls === 1) await new Promise((r) => { release = r; }); else await new Promise(() => {}); return { ran: true, handle: 'a', code: 1 }; },
+    onResult: () => {}, onStall: () => {}, killChild: (n) => { strikes.push(n); return true; } });
+  await c.advance(0);
+  await c.advance(1_900_000);
+  await c.advance(1_900_000);
+  assert.deepEqual(strikes, [1, 2], 'a child that ignored the first signal is struck again, harder');
+  release(); await c.advance(0); await c.advance(600_000);
+  await c.advance(1_900_000);
+  assert.deepEqual(strikes, [1, 2, 1], 'a new tick starts its strikes from 1');
 });
 
 test('watchdog: a hung cycle child is killed and the same runner carries on, no second runner', async () => {
@@ -431,15 +442,19 @@ test('watchdog: output from a long cycle is progress, so a 46-minute cycle that 
     onResult: () => {}, onStall: () => {}, killChild: () => { kills++; return true; } });
   for (let i = 0; i < 10; i++) { await c.advance(300_000); loop.progress(); }
   assert.equal(kills, 0);
+  await c.advance(1_900_000);
+  assert.equal(kills, 1, 'the same silence without output IS a stall — progress() is what spared it');
 });
 
 test('server.mjs wires the ledger, the watchdog and the one-child guard into the rotation', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8');
   assert.match(src, /runRotationLoop\(\{/);
-  assert.match(src, /stallMs: 3 \* gap \* 60_000/);
+  assert.match(src, /stallMs: Math\.max\(3 \* gap, 45\) \* 60_000/, 'never under 45 min: reading sessions run 15-30');
+  assert.match(src, /const out = \(d\) => \{ keep\(d\); if \(loop\) loop\.progress\(\); \};/, 'cycle output counts as progress');
+  assert.match(src, /me\.child\.kill\(strikes > 1 \? 'SIGKILL' : 'SIGTERM'\)/, 'a child that ignores SIGTERM gets SIGKILL');
   assert.match(src, /record\('rotation\.tick'/);
   assert.match(src, /record\('error', `rotation watchdog/);
   assert.match(src, /if \(me\.child\) \{/, 'runCycle refuses while a cycle child is still alive');
-  assert.match(src, /lastTick: /, 'the last decision is readable from autoStatus / pulse');
+  assert.match(src, /lastTick: autoProc && autoProc\.ledger \? autoProc\.ledger\.last\(\) : null/, 'the last decision is readable from autoStatus / pulse');
 });

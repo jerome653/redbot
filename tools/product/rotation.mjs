@@ -283,29 +283,33 @@ export function tickLedger({ write, heartbeatMs = 3_600_000 }) {
 /**
  * The loop, with a watchdog. Moved out of server.mjs so it can be tested with a hand-cranked clock.
  *
- * `tick(current)` runs one turn; `current()` turns false once this runner is retired, and the
- * server passes it as rotationTick's `alive`, so a retired runner can never start a cycle.
  * `progress()` is called by the server on every line a cycle child prints: a 46-minute cycle that
  * talks (cardinal, 2026-10-25T15:04Z) is working, not stuck. Past `stallMs` with neither a finished
- * tick nor a line of output, `onStall` reports it and the loop is recovered — by killing the cycle
- * child when there is one (its close resolves the tick and the same runner carries on), otherwise
- * by retiring the stuck runner and starting a new one. Never both, so never two cycles.
+ * tick nor a line of output, `onStall(idleMs, killed)` reports it, and `killChild(strikes)` is asked
+ * to end the cycle child when there is one (its close resolves the tick and the runner carries on;
+ * `strikes` counts consecutive stalls on the same tick so the server can escalate past a child that
+ * ignores SIGTERM).
+ *
+ * THERE IS EXACTLY ONE RUNNER, EVER. A tick stuck with no child (a probe, an open or `needs()` that
+ * never answers) is reported on every stall and NOT replaced: a second runner beside a stuck one let
+ * the stuck one wake up later and setLast, open, and close the Chrome the new runner's cycle was
+ * using (pipeline-verifier on PR #83, 2026-10-28). The 25 Oct gap was not a hung loop — it ticked
+ * every 10 minutes — so the ledger, not a restart, is what answers it.
  */
 export function runRotationLoop({ tick, alive, gapMs, stallMs, onResult, onStall, killChild,
   now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   every = (fn, ms) => setInterval(fn, ms), stopEvery = (h) => clearInterval(h) }) {
-  let gen = 0, lastProgress = now();
+  let lastProgress = now(), strikes = 0;
   const progress = () => { lastProgress = now(); };
-  async function run(mine) {
-    const current = () => alive() && mine === gen;
-    while (current()) {
+  async function run() {
+    while (alive()) {
       let r;
-      try { r = await tick(current); }
+      try { r = await tick(alive); }
       catch (e) { r = { ran: false, why: 'error', error: String(e && e.message ? e.message : e) }; }
-      if (mine !== gen) return;                     // retired while stuck: its result is not the loop's
+      strikes = 0;
       progress();
       try { onResult(r); } catch { /* reporting must not end the loop */ }
-      if (!current()) break;
+      if (!alive()) break;
       await sleep(gapMs);
     }
   }
@@ -314,10 +318,10 @@ export function runRotationLoop({ tick, alive, gapMs, stallMs, onResult, onStall
     const idle = now() - lastProgress;
     if (idle <= stallMs) return;
     progress();
-    const killed = killChild();
-    try { onStall(idle, killed); } catch { /* the recovery below still runs */ }
-    if (!killed) { gen += 1; run(gen); }
+    strikes += 1;
+    const killed = killChild(strikes);
+    try { onStall(idle, killed); } catch { /* reporting must not end the watch */ }
   }, Math.min(60_000, stallMs));
-  run(gen);
+  run();
   return { progress };
 }
