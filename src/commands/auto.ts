@@ -31,6 +31,8 @@ import { certifyCmd } from './certify.js';
 import { reply } from './reply.js';
 import { warmupDraft, type WarmupResult } from './warmup.js';
 import { warmingStage } from '../warming.js';
+import { loadUnansweredReplies, type UnansweredReply } from '../reply-back.js';
+import { replyBackDraft } from './answer.js';
 import { autoPublishEnabled, publishBarSummary } from '../autopublish.js';
 import { stripRefutedEnabled } from '../refuted-strip.js';
 import { recheckWithoutRefuted } from '../refuted-recheck.js';
@@ -283,13 +285,22 @@ async function work(account: AccountRecord | null): Promise<number> {
     say.warn(`${abandoned} source(s) skipped — scoring what is already collected instead.`);
   }
 
-  say.step('Working out which are worth answering…');
-  await opportunity();
+  /* Somebody waiting on an answer from us comes before a stranger's thread — see replyBackStep. */
+  const back = await replyBackStep();
 
-  const draftsBefore = (await loadDrafts()).length;
-  say.step('Writing a reply for the best one…');
-  await draft();
-  const written = (await loadDrafts()).length - draftsBefore;
+  let written = 0;
+  /* A reply-back whose submit could not be confirmed is recorded publish.fail, which spacing does
+     not read — so a 'failed' one also ends the turn's posting: it may have landed. */
+  if (back.published || back.status === 'failed') {
+    say.step('Answered a reply this turn — no new top-level comment (spacing would refuse it anyway).');
+  } else {
+    say.step('Working out which are worth answering…');
+    await opportunity();
+    const draftsBefore = (await loadDrafts()).length;
+    say.step('Writing a reply for the best one…');
+    await draft();
+    written = (await loadDrafts()).length - draftsBefore;
+  }
 
   if (written > 0) {
     const newest = (await loadDrafts())[(await loadDrafts()).length - 1];
@@ -326,7 +337,8 @@ async function work(account: AccountRecord | null): Promise<number> {
   await record('auto.cycle', `unattended cycle finished`, {
     account: account?.handle ?? null, collected, drafted: written,
     ...(collect.due ? {} : { collectSkipped: true }),
-    warmup: warm.ran ? (warm.draftId ?? 'none') : 'off'
+    warmup: warm.ran ? (warm.draftId ?? 'none') : 'off',
+    replyBack: back.draftId ?? (back.ran ? 'none' : 'off')
   });
   /* The message has to tell the truth about which install this is. It read "Nothing was
      published — that still needs you" unconditionally, which on an autonomous install would be
@@ -371,6 +383,54 @@ export function lastCollectionAt(history: HistoryEntry[]): string | null {
     if (best === null || new Date(e.ts).getTime() > new Date(best).getTime()) best = e.ts;
   }
   return best;
+}
+
+export interface ReplyBackStepDeps {
+  enabled: () => boolean;
+  account: () => string | null;
+  find: (account: string) => Promise<UnansweredReply[]>;
+  draft: (c: UnansweredReply, account: string) => Promise<{ draftId: string | null; why: string }>;
+  publish: (draftId: string) => Promise<void>;
+  status: (draftId: string) => Promise<string | null>;
+  rec?: typeof record;
+}
+
+/**
+ * REPLY-BACK: answer the person who replied to us, before writing a new top-level comment.
+ *
+ * Measured 2026-10-28: 11 of 38 observed comments had a reply, none answered. The work list comes
+ * from what this turn's observe already stored (src/reply-back.ts) — no new polling. ONE per turn,
+ * and the draft goes through `factCheckThenPublish`, the SAME certification → publish bar → gates
+ * path as every comment: spacing, the daily ceiling (a reply-back is a `publish.ok` like any
+ * other), the brakes, the floor, health and warming pace all still decide. `REDBOT_AUTO_REPLY_BACK=0`
+ * turns it off. Never fatal: a failure costs this turn its reply-back and nothing else.
+ */
+export async function replyBackStep(deps: ReplyBackStepDeps = {
+  enabled: () => process.env.REDBOT_AUTO_REPLY_BACK !== '0',
+  account: () => { try { return selectedAccount()?.handle ?? null; } catch { return null; } },
+  find: (a) => loadUnansweredReplies(a),
+  draft: replyBackDraft,
+  publish: (id) => factCheckThenPublish(id),
+  status: async (id) => (await loadDrafts()).find((d) => d.id === id)?.status ?? null
+}): Promise<{ ran: boolean; draftId: string | null; published: boolean; status?: string | null; why: string }> {
+  if (!deps.enabled()) return { ran: false, draftId: null, published: false, why: 'reply-back is off (REDBOT_AUTO_REPLY_BACK=0)' };
+  const account = deps.account();
+  if (!account) return { ran: false, draftId: null, published: false, why: 'no account selected' };
+  try {
+    const c = (await deps.find(account))[0];
+    if (!c) return { ran: true, draftId: null, published: false, why: 'no unanswered reply' };
+    say.step(`Reply-back: u/${c.author} replied under ${c.draftId} — drafting an answer…`);
+    const d = await deps.draft(c, account);
+    if (!d.draftId) return { ran: true, draftId: null, published: false, why: d.why };
+    await deps.publish(d.draftId);
+    const status = await deps.status(d.draftId);
+    return { ran: true, draftId: d.draftId, published: status === 'published', status, why: d.why };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    say.warn(`Reply-back step failed: ${msg}`);
+    await (deps.rec ?? record)('error', `auto reply-back failed: ${msg}`, { level: 'warn', replyBack: true }).catch(() => undefined);
+    return { ran: true, draftId: null, published: false, why: msg };
+  }
 }
 
 /**

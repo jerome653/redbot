@@ -123,6 +123,20 @@ export function unansweredReplies(input: UnansweredInput): UnansweredReply[] {
     const at = Date.parse(e.ts);
     if (Number.isFinite(at) && at > (lastBackAt.get(back.parentDraftId) ?? -Infinity)) lastBackAt.set(back.parentDraftId, at);
   }
+  /* ONE DRAFT PER REPLY, EVER. A reply-back draft in ANY state — declined, refused by a gate or the
+     publish bar, failed, or pending on an install that does not autopublish — means this reply has
+     had its attempt. Counting only publish.ok/attempt rows re-drafted and re-certified a refused
+     reply every turn without limit (pipeline-verifier on #82, 2026-10-28). */
+  for (const d of input.drafts) {
+    const back = parseReplyBackDraftId(d.id);
+    if (back) answered.add(back.parentThingId);
+  }
+  /* The two refusals that save no draft (src/commands/answer.ts): a decline, and a body refused
+     before saving. Both name the reply they were for. */
+  for (const e of input.history) {
+    if (e.kind !== 'draft.declined' && e.kind !== 'gate.block') continue;
+    if (e.data?.replyBack === true && typeof e.data.parentThingId === 'string') answered.add(e.data.parentThingId);
+  }
 
   /* The LATEST signed-in look at each comment. Signed-in because that is the vector that renders
      what this account would be answering; a reply gone since then is gone. */
