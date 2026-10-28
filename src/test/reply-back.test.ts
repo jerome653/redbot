@@ -183,3 +183,41 @@ test('observedReplies carries childAuthors through, and marks OP and us', () => 
   assert.deepEqual(out[0]!.childAuthors, ['alice']);
   assert.equal(out[0]!.humanLabel, null);
 });
+
+/* ---- part B: the reply context the publish path hands the gates ------------------------------ */
+
+import { replyContext, replyBackDraftId, parseReplyBackDraftId } from '../reply-back.js';
+
+test('a reply-back draft id round-trips its parent reply and parent draft', () => {
+  const id = replyBackDraftId('t1_x', 'd_7d76_muk', NOW);
+  assert.deepEqual(parseReplyBackDraftId(id), { parentThingId: 't1_x', parentDraftId: 'd_7d76_muk' });
+  assert.equal(parseReplyBackDraftId('d_1'), null);
+  assert.equal(parseReplyBackDraftId('rb_t1_x'), null);
+  assert.equal(parseReplyBackDraftId('rb_t1_x.d1'), null, 'a stamp is required');
+});
+
+test('replyContext: the reply\'s age is its own timestamp, else the first look that saw it', () => {
+  const ids = { parentThingId: 't1_x', parentDraftId: 'd1' };
+  const rows = [row('d1', 'alice', [reply('t1_x', 's')], { ts: ago(100) }), row('d1', 'alice', [reply('t1_x', 's')], { ts: ago(400) })];
+  const ctx = { ...base, selfId: 'rb_self', drafts: [], history: [] };
+  assert.equal(replyContext(ids, { ...ctx, interactions: rows }).seenAt, ago(400));
+  const stamped = [row('d1', 'alice', [reply('t1_x', 's', { timestamp: ago(900) })], { ts: ago(100) })];
+  assert.equal(replyContext(ids, { ...ctx, interactions: stamped }).seenAt, ago(900));
+  assert.equal(replyContext(ids, { ...ctx, interactions: [] }).seenAt, null);
+});
+
+test('replyContext: answered by history, by a fleet child on record or LIVE, or in flight — never by itself', () => {
+  const ids = { parentThingId: 't1_x', parentDraftId: 'd1' };
+  const ctx = { ...base, selfId: 'rb_self', drafts: [] as Draft[], history: [] as HistoryEntry[], interactions: [row('d1', 'alice', [reply('t1_x', 's')])] };
+  assert.equal(replyContext(ids, ctx).answered, null);
+  assert.ok(replyContext(ids, { ...ctx, history: [backRow('d1', 't1_x', 9000, 'publish.attempt')] }).answered);
+  assert.ok(replyContext(ids, { ...ctx, interactions: [row('d1', 'alice', [reply('t1_x', 's', { childAuthors: ['Bob'] })])] }).answered);
+  assert.ok(replyContext(ids, { ...ctx, liveAnswerers: ['bob'] }).answered, 'the live page wins');
+  assert.equal(replyContext(ids, { ...ctx, liveAnswerers: ['stranger'] }).answered, null);
+  const other = pub('rb_t1_x.d1.zz', 'alice', { status: 'approved' });
+  assert.ok(replyContext(ids, { ...ctx, drafts: [other] }).answered, 'another reply-back in flight');
+  const self = pub('rb_t1_x.d1.self', 'alice', { status: 'approved' });
+  const selfRow = { ...backRow('d1', 't1_x', 1, 'publish.attempt'), data: { draftId: self.id, replyBack: true, parentDraftId: 'd1', parentThingId: 't1_x' } };
+  assert.equal(replyContext(ids, { ...ctx, selfId: self.id, drafts: [self], history: [selfRow] }).answered, null);
+});
+

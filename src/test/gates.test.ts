@@ -389,3 +389,69 @@ test('a clean draft produces neither blocks nor advisories', () => {
   assert.deepEqual(r.blocks, []);
   assert.deepEqual(r.advisories, [], 'a clean draft must not accumulate advisory noise');
 });
+
+/* ---- reply-back (src/reply-back.ts) — three thread-level rules become reply-level ------------ */
+
+const RB_ID = 'rb_t1_x.d_0.abc';
+const rb = (over: Partial<GateInput> = {}) => base({
+  draft: draft({ id: RB_ID }),
+  /* The expected state of a reply-back: our comment is on the thread, its draft published, the
+     thread days old and no longer a question anyone assessed. */
+  threadState: state({ ownCommentPresent: true }),
+  allDrafts: [draft({ id: 'd_0', status: 'published' })],
+  thread: thread({ ageMinutes: 5 * 24 * 60, collectedAt: NOW.toISOString(), title: '[Guide] PHP 8.2 checkout 502 from admin-ajax.php', body: 'The PHP error log named a plugin fatal after the upgrade. WP_DEBUG_LOG and php-fpm made it visible.' }),
+  assessment: undefined,
+  replyBack: { parentThingId: 't1_x', seenAt: new Date(NOW.getTime() - 3 * 3_600_000).toISOString(), answered: null },
+  ...over
+});
+
+test('reply-back: our own earlier comment is not a duplicate — the reply-level rule replaces it', () => {
+  const r = evaluateGates(rb());
+  assert.equal(r.allow, true);
+  assert.deepEqual(r.advisories.map((b) => b.gate), [], JSON.stringify(r.advisories));
+});
+
+test('reply-back: refused as duplicate when THAT reply is already answered or in flight', () => {
+  const hit = gatesHit(rb({ replyBack: { parentThingId: 't1_x', seenAt: NOW.toISOString(), answered: 'bob already answered it' } }));
+  assert.ok(hit.includes('duplicate'));
+});
+
+test('reply-back: judged on the reply\'s age, not the thread\'s — refused past the reply ceiling', () => {
+  assert.ok(!gatesHit(rb()).includes('stale-thread'), '5-day-old thread, 3h-old reply: answerable');
+  const old = new Date(NOW.getTime() - 73 * 3_600_000).toISOString();
+  assert.ok(gatesHit(rb({ replyBack: { parentThingId: 't1_x', seenAt: old, answered: null } })).includes('stale-reply'));
+  assert.ok(gatesHit(rb({ replyBack: { parentThingId: 't1_x', seenAt: null, answered: null } })).includes('stale-reply'), 'unknown age fails closed');
+});
+
+test('reply-back: triage, priority and not-a-question are skipped, and the skip is on the record', () => {
+  const r = evaluateGates(rb({ assessment: assessment({ verdict: 'skip', score: 1 }) }));
+  const hit = [...r.blocks, ...r.advisories].map((b) => b.gate);
+  for (const g of ['triage', 'priority', 'not-a-question']) assert.ok(!hit.includes(g), g);
+  assert.deepEqual(r.skipped?.map((s) => s.gate), ['triage', 'priority', 'not-a-question']);
+});
+
+test('reply-back: every other gate still runs — window, health, certification, locked', () => {
+  assert.ok(gatesHit(rb({ threadState: state({ ownCommentPresent: true, locked: true }) })).includes('locked'));
+  assert.ok(gatesHit(rb({ window: { allowed: false, detail: 'quiet hours', rule: 'quiet-hours' } })).includes('window'));
+  assert.ok(gatesHit(rb({ health: { ...healthy, mayPublish: false, state: 'Cooldown' } })).includes('health'));
+  assert.ok(gatesHit(rb({ draft: draft({ id: RB_ID, certification: { verdict: 'REJECT', at: NOW.toISOString(), claims: 1, fatalContradictions: 1 } }) })).includes('certification'));
+});
+
+test('reply-back: a WARMING account is not refused warming:target for the thread\'s age or answers', () => {
+  const warmingHealth = { ...healthy, counters: { ...healthy.counters, karma: 1 } };
+  const busy = thread({ ageMinutes: 5 * 24 * 60, collectedAt: NOW.toISOString(), commentCount: 40, title: '[Guide] PHP 8.2 checkout 502 from admin-ajax.php', body: 'The PHP error log named a plugin fatal after the upgrade. WP_DEBUG_LOG and php-fpm made it visible.' });
+  const r = evaluateGates(rb({ health: warmingHealth, thread: busy }));
+  assert.ok(![...r.blocks, ...r.advisories].some((b) => b.gate === 'warming:target'), JSON.stringify(r.blocks));
+  assert.ok(r.skipped?.some((s) => s.gate === 'warming:target'));
+  assert.ok(gatesHit(rb({ draft: draft({ id: 'd_2' }), health: warmingHealth, thread: busy })).includes('warming:target'), 'top-level still refused');
+});
+
+test('reply-back: a reply-back id with no reply context is refused, never treated as top-level', () => {
+  assert.ok(gatesHit(rb({ replyBack: undefined })).includes('reply-back'));
+});
+
+test('no regression: a TOP-LEVEL draft in the same state still meets duplicate, stale-thread and triage', () => {
+  const hit = gatesHit(rb({ draft: draft({ id: 'd_2' }) }));
+  for (const g of ['duplicate', 'stale-thread', 'triage', 'not-a-question']) assert.ok(hit.includes(g), g);
+  assert.equal(evaluateGates(rb({ draft: draft({ id: 'd_2' }) })).skipped, undefined);
+});
