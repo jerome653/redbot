@@ -24,13 +24,17 @@
  *
  * An attempt with no result means the outcome is unknown: go look by hand, never re-run.
  */
-import { loadDrafts, saveDraft, loadThreads, loadAssessments } from '../store.js';
+import { loadDrafts, saveDraft, loadThreads, loadAssessments, loadHistory } from '../store.js';
 import { attach, isBrowserUp, whoAmI, isBlocked, isRateLimited, NoBrowserError } from '../browser.js';
 import { probeThreadState } from '../reddit/thread-state.js';
 import { appendInteraction, INTERACTION_SCHEMA_VERSION } from '../interactions.js';
 import { currentAgeHours } from '../select.js';
 import { autoBackup } from '../backup.js';
-import { publishComment } from '../reddit/post.js';
+import { publishComment, type PublishResult } from '../reddit/post.js';
+import { replyToComment } from '../reddit/actions.js';
+import { parseReplyBackDraftId, replyContext } from '../reply-back.js';
+import { loadInteractions } from '../interactions.js';
+import { observeUrl } from './observe.js';
 import { lintDraft, ensureDisclosure } from '../disclosure.js';
 import { evaluateGates } from '../gates.js';
 import { unattendedPublishDecision, certificationOnlyRefusal, publishBar, type UnattendedInput } from '../autopublish.js';
@@ -49,7 +53,7 @@ import {
   type Decision
 } from '../review.js';
 import { record, say, setAccount } from '../log.js';
-import { config, DATA, selectedAccount } from '../config.js';
+import { config, DATA, selectedAccount, loadAccounts } from '../config.js';
 import { checkWindow } from '../window.js';
 import { counters } from '../health.js';
 import type { Draft } from '../types.js';
@@ -116,7 +120,23 @@ export async function reply(
   /* A warmup draft (`w_…`, src/commands/warmup.ts) is tagged on every publish.* row, so karma
      progress can be audited from history alone; its body feeds the REDDIT bar's warmup waiver. */
   const warmup = isWarmupDraftId(target.id);
+  /**
+   * A reply-back (src/reply-back.ts, `rb_…`) answers one reply under one of our comments. Its
+   * rows carry `replyBack` + the parent ids — the contract `isReplyBackEntry` reads to stop the
+   * same reply being answered twice — and it counts as a publish like any other `publish.ok`.
+   */
+  const back = parseReplyBackDraftId(target.id);
   const warmTag = warmup ? { warming: true } : {};
+  const backTag = back ? { replyBack: true, parentDraftId: back.parentDraftId, parentThingId: back.parentThingId } : {};
+  /* The reply's age and whether it is already answered, for gates.ts. `live` is the authors read
+     beneath the reply on the page right before submitting (step 6). */
+  const replyBackInput = async (live?: string[]) => back
+    ? replyContext(back, {
+        selfId: target.id, account: target.account ?? selectedAccount()?.handle ?? '',
+        fleet: loadAccounts().map((a) => a.handle), drafts: await loadDrafts(),
+        interactions: await loadInteractions(), history: await loadHistory(), liveAnswerers: live
+      })
+    : undefined;
   const warmupBody = warmup ? target.body : null;
 
   /**
@@ -147,7 +167,7 @@ export async function reply(
       /* Nothing has signed in for this draft yet, so the row names the draft's account (record()
          falls back to the last setAccount when the draft carries none). */
       await record('publish.refused', `unattended publish refused for ${target.id}: ${early.refuse}`, {
-        draftId: target.id, why: early.refuse, stage: 'unattended', before: 'page', account: target.account ?? null, ...warmTag
+        draftId: target.id, why: early.refuse, stage: 'unattended', before: 'page', account: target.account ?? null, ...warmTag, ...backTag
       });
       return 1;
     }
@@ -162,7 +182,7 @@ export async function reply(
       const why = `account health is ${early2.state}${early2.resumeAt ? ` until ${early2.resumeAt}` : ''} — ${early2.reasons[0] ?? 'blocked'}`;
       say.fail(`  Not publishing unattended: ${why}`);
       await record('publish.refused', `unattended publish refused for ${target.id}: ${why}`, {
-        draftId: target.id, why, gate: 'health', stage: 'unattended', before: 'page', account: owner, ...warmTag
+        draftId: target.id, why, gate: 'health', stage: 'unattended', before: 'page', account: owner, ...warmTag, ...backTag
       });
       return 1;
     }
@@ -240,8 +260,10 @@ export async function reply(
       window: windowVerdict,
       health: verdict,
       threadState: state,
-      allDrafts: drafts
+      allDrafts: drafts,
+      replyBack: await replyBackInput()
     });
+    if (pre.skipped?.length) say.step(`Gates  : skipped as reply-back — ${pre.skipped.map((g) => g.gate).join(', ')}`);
 
     if (!pre.allow) {
       say.fail('Refusing to publish. Gates that failed:');
@@ -295,7 +317,7 @@ export async function reply(
       if (!auto.publish) {
         say.fail(`  Not publishing unattended: ${auto.why}`);
         await record('publish.refused', `unattended publish refused for ${target.id}: ${auto.why}`, {
-          draftId: target.id, why: auto.why, stage: 'unattended', ...warmTag
+          draftId: target.id, why: auto.why, stage: 'unattended', ...warmTag, ...backTag
         });
         return 1;
       }
@@ -304,7 +326,7 @@ export async function reply(
          its `why` is outside this block. */
       unattendedWhy = auto.why;
       await record('publish.unattended', `unattended publish allowed for ${target.id}: ${auto.why}`, {
-        draftId: target.id, why: auto.why, ...warmTag
+        draftId: target.id, why: auto.why, ...(pre.skipped ? { skipped: pre.skipped } : {}), ...warmTag, ...backTag
       });
     }
 
@@ -557,6 +579,13 @@ export async function reply(
     const identity2 = await whoAmI(s.page);
     const state2 = await probeThreadState(s.page, identity2.username);
     const verdict2 = await health(identity2.username);
+    /* Reply-back: who has answered that reply, read off the live page now. Anyone from the fleet
+       there refuses (gates.ts `duplicate`), whatever the observe record said an hour ago. */
+    const live = back
+      ? await s.page.evaluate((id: string) => Array.from(document.querySelectorAll('shreddit-comment'))
+          .filter((n) => (n.getAttribute('parentid') ?? n.getAttribute('parent-id')) === id)
+          .map((n) => n.getAttribute('author') ?? '').filter(Boolean), back.parentThingId).catch(() => [] as string[])
+      : undefined;
 
     const final = evaluateGates({
       draft: target,
@@ -567,7 +596,8 @@ export async function reply(
       window: windowVerdict,
       health: verdict2,
       threadState: state2,
-      allDrafts: await loadDrafts()
+      allDrafts: await loadDrafts(),
+      replyBack: await replyBackInput(live)
     });
 
     if (!final.allow) {
@@ -592,7 +622,7 @@ export async function reply(
       if (!again.publish) {
         say.fail(`  Not publishing unattended — at the final check: ${again.why}`);
         await record('publish.refused', `unattended publish refused at final check for ${target.id}: ${again.why}`, {
-          draftId: target.id, why: again.why, stage: 'final', ...warmTag
+          draftId: target.id, why: again.why, stage: 'final', ...warmTag, ...backTag
         });
         return 1;
       }
@@ -606,10 +636,21 @@ export async function reply(
 
     say.step('Publishing…');
     await record('publish.attempt', `submitting to ${target.permalink}`, {
-      draftId: target.id, permalink: target.permalink, body: target.body, ...warmTag
+      draftId: target.id, permalink: target.permalink, body: target.body, ...warmTag, ...backTag
     });
 
-    const result = await publishComment(s.page, target.permalink, target.body);
+    /* A reply-back is written in the reply's OWN composer (reddit/actions.ts replyToComment). An
+       unconfirmed submit is reported as a failure with an unknown outcome — the attempt row above
+       already stops it being answered again, so nothing retries it. */
+    const result: PublishResult = back
+      ? await replyToComment(s.page, (() => {
+          /* OUR comment's own page: it renders the reply beneath it even when the thread is long. */
+          const parent = drafts.find((d) => d.id === back.parentDraftId);
+          return parent ? observeUrl(parent) : target.permalink;
+        })(), back.parentThingId, target.body).then((r) =>
+          r.ok && r.confirmed ? { ok: true, url: r.url }
+            : { ok: false, error: r.ok ? 'submitted under the reply but not found there afterwards — outcome UNKNOWN, check by hand' : r.error })
+      : await publishComment(s.page, target.permalink, target.body);
 
     if (result.ok) {
       target.status = 'published';
@@ -622,7 +663,7 @@ export async function reply(
         say.warn('Reddit did not expose a comment permalink on the node — checkpoints will match on text instead.');
       }
       await record('publish.ok', `published ${target.id}`, {
-        draftId: target.id, url: result.url, commentPermalink: result.commentPermalink, commentId: result.commentId, ...warmTag
+        draftId: target.id, url: result.url, commentPermalink: result.commentPermalink, commentId: result.commentId, ...warmTag, ...backTag
       });
 
       /**
@@ -678,7 +719,7 @@ export async function reply(
     say.fail(`Publish failed: ${result.error}`);
     say.warn('If you are unsure whether it landed, open the thread and check by hand before retrying.');
     await record('publish.fail', `failed ${target.id}: ${result.error}`, {
-      draftId: target.id, error: result.error, ...warmTag
+      draftId: target.id, error: result.error, ...warmTag, ...backTag
     });
     return 1;
   } finally {
