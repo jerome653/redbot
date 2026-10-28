@@ -148,6 +148,9 @@ test('reply.ts tags every reply-back publish row and passes the reply context to
   assert.match(src, /record\('publish\.ok', [^\n]*\n[^\n]*\.\.\.backTag/, 'the publish.ok row is tagged');
   assert.match(src, /replyBack: await replyBackInput\(\)/, 'pre-gate gets the reply context');
   assert.match(src, /replyBack: await replyBackInput\(live\)/, 'final gate gets the reply context with the live re-read');
+  const answer = readFileSync(new URL('../../src/commands/answer.ts', import.meta.url), 'utf8');
+  assert.match(answer, /record\('draft\.declined', [^\n]*replyBack: true, parentThingId: c\.parentThingId/, 'a decline names its reply, or it is drafted again every turn');
+  assert.match(answer, /record\('gate\.block', [^\n]*replyBack: true, parentThingId: c\.parentThingId/, 'a pre-save refusal names its reply, or it is drafted again every turn');
 });
 
 test('at most one reply-back per comment thread per day', () => {
