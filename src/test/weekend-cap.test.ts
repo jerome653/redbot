@@ -14,7 +14,7 @@ const acct = (over: Partial<AccountRecord> = {}): AccountRecord => ({
 });
 
 const counters = (over: Partial<HealthCounters> = {}): HealthCounters => ({
-  account: 'tester', readsToday: 0, searchesToday: 0, repliesToday: 4,
+  account: 'tester', readsToday: 0, searchesToday: 0, repliesToday: 5,
   avgSessionMs: null, avgDwellMs: null, rateLimitHits24h: 0, loginFailures24h: 0,
   removalsObserved30d: 0, absentSignedOut30d: 0, suspensionNotices: 0,
   accountAgeDays: 30, karma: 50, lastReplyAt: null, lastRateLimitAt: null,
@@ -22,31 +22,31 @@ const counters = (over: Partial<HealthCounters> = {}): HealthCounters => ({
   fleetSize: 13, unattributedEvents24h: 0, ...over
 });
 
-test('dailyCeilingFor reflects the weekend multiplier (1 weekday, 5 weekend)', () => {
-  assert.equal(dailyCeilingFor(acct(), MON), 1, 'weekday cap 1');
-  assert.equal(dailyCeilingFor(acct(), SAT), 5, 'weekend cap 5');
+test('dailyCeilingFor reflects the weekend multiplier (3 weekday, 6 weekend)', () => {
+  assert.equal(dailyCeilingFor(acct(), MON), 3, 'weekday cap 3');
+  assert.equal(dailyCeilingFor(acct(), SAT), 6, 'weekend cap 6');
 });
 
-test('checkWindow: a 5th reply (repliesToday=4) is refused on a weekday, allowed on a weekend', () => {
-  const weekday = checkWindow({ account: acct(), repliesToday: 4, now: MON });
+test('checkWindow: a 6th reply (repliesToday=5) is refused on a weekday, allowed on a weekend', () => {
+  const weekday = checkWindow({ account: acct(), repliesToday: 5, now: MON });
   assert.equal(weekday.allowed, false, 'weekday refused');
   assert.equal(weekday.rule, 'daily-ceiling');
-  const weekend = checkWindow({ account: acct(), repliesToday: 4, now: SAT });
+  const weekend = checkWindow({ account: acct(), repliesToday: 5, now: SAT });
   assert.equal(weekend.allowed, true, weekend.detail);
 });
 
-test('health.assess: repliesToday=4 blocks on a weekday, is one-below-ceiling on a weekend', () => {
+test('health.assess: repliesToday=5 blocks on a weekday, is one-below-ceiling on a weekend', () => {
   const weekday = assess(counters(), MON);
   assert.equal(weekday.mayPublish, false, 'weekday blocks');
-  assert.match(weekday.reasons.join('\n'), /daily ceiling is 1/, 'weekday ceiling reads 1');
+  assert.match(weekday.reasons.join('\n'), /daily ceiling is 3/, 'weekday ceiling reads 3');
   const weekend = assess(counters(), SAT);
   assert.equal(weekend.mayPublish, true, 'weekend publishes');
-  assert.match(weekend.reasons.join('\n'), /one below the daily ceiling/, 'weekend caution at 4 of 5');
+  assert.match(weekend.reasons.join('\n'), /one below the daily ceiling/, 'weekend caution at 5 of 6');
 });
 
-test('checkWarmingPace: 4 published trips the daily ceiling on a weekday, not on a weekend', () => {
-  const weekday = checkWarmingPace({ publishedToday: 4, minutesSinceLast: 600, karma: 50, now: MON });
+test('checkWarmingPace: 5 published trips the daily ceiling on a weekday, not on a weekend', () => {
+  const weekday = checkWarmingPace({ publishedToday: 5, minutesSinceLast: 600, karma: 50, now: MON });
   assert.ok(weekday.issues.some((i) => i.rule === 'daily-ceiling'), 'weekday ceiling issue');
-  const weekend = checkWarmingPace({ publishedToday: 4, minutesSinceLast: 600, karma: 50, now: SAT });
+  const weekend = checkWarmingPace({ publishedToday: 5, minutesSinceLast: 600, karma: 50, now: SAT });
   assert.ok(!weekend.issues.some((i) => i.rule === 'daily-ceiling'), 'no weekend ceiling issue');
 });

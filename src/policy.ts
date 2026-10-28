@@ -143,12 +143,13 @@ export const policy = {
    * dailyCeilingFor, warming.ts pace, health.ts assess) now reads instead of this value directly.
    */
   maxRepliesPerDay: L(
-    1, 'replies/day (weekday)', 'declared',
-    'operator instruction 2026-10-24 — weekday cap of 1; weekends run at 1 x weekendReplyMultiplier (5), because Clark is away all weekend and auto does more then'
+    3, 'replies/day (weekday)', 'declared',
+    'operator instruction 2026-10-28 (Jerome: "1 karma a day is not good at all") — weekday cap 1 -> 3. Was 1 from 2026-10-24. '
+    + 'Measured 21-27 Oct: every eligible account hit the cap of 1 on a weekday, so the cap, not the engine, was the limit'
   ),
   weekendReplyMultiplier: L(
-    5, 'x weekday cap', 'declared',
-    'operator decision 2026-10-24 — Clark is away Sat/Sun, so each account may send 5x its weekday cap on weekends (effective weekend cap 5); tunable here, read via src/weekend.ts effectiveMaxRepliesPerDay'
+    2, 'x weekday cap', 'declared',
+    'operator decision 2026-10-24, re-based 2026-10-28 — Clark is away Sat/Sun; weekend = 3 x 2 = 6 (was 1 x 5 = 5); read via src/weekend.ts effectiveMaxRepliesPerDay'
   ),
   minMinutesBetweenReplies: L(
     45, 'minutes', 'provisional',
