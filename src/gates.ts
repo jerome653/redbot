@@ -19,6 +19,7 @@ import { assessQuality, type QualityReport } from './quality.js';
 import { policy } from './policy.js';
 import { isQuestionShaped, currentAgeHours } from './select.js';
 import { MIN_OPPORTUNITY_SCORE } from './opportunity.js';
+import { parseReplyBackDraftId } from './reply-back.js';
 import { checkWarmingComment, checkWarmingPace, isWarmingTarget, warmingStage } from './warming.js';
 import type { HealthVerdict } from './health.js';
 import type { WindowVerdict } from './window.js';
@@ -45,6 +46,12 @@ export interface GateResult {
   advisories: GateBlock[];
   warnings: string[];
   quality: QualityReport;
+  /**
+   * Gates that did not run, and why. Only ever set for a reply-back (src/reply-back.ts): the
+   * thread-level relevance checks do not apply when the person replied to US. Recorded rather than
+   * silently absent, so "no triage finding" is never mistaken for "triage passed".
+   */
+  skipped?: Array<{ gate: string; why: string }>;
 }
 
 /**
@@ -117,6 +124,13 @@ export interface GateInput {
    * under, rather than blocked by a rule that post-dates them.
    */
   requireContribution?: boolean | undefined;
+  /**
+   * The reply a reply-back draft answers, established by the caller (src/commands/reply.ts) from
+   * the observe record and the live page. `seenAt`: when the reply was written, or first observed
+   * when Reddit gave no timestamp; null when unknown. `answered`: why that reply is already
+   * answered or in flight, null when it is not. Read ONLY for a draft whose id is a reply-back id.
+   */
+  replyBack?: { parentThingId: string; seenAt: string | null; answered: string | null } | undefined;
   now?: Date | undefined;
 }
 
@@ -124,6 +138,21 @@ export function evaluateGates(input: GateInput): GateResult {
   const blocks: GateBlock[] = [];
   const warnings: string[] = [];
   const now = input.now ?? new Date();
+
+  /**
+   * REPLY-BACK: three THREAD-level rules become REPLY-level ones, for a reply-back draft only
+   * (src/reply-back.ts; MAIN's gate decision 2026-10-28). A reply-back answers someone who replied
+   * to us, so our earlier comment on the thread is the expected state, not a duplicate; the
+   * thread's age says nothing about whether that person is still waiting; and "is this thread
+   * worth entering" was answered when they spoke to us. Every other gate below runs unchanged,
+   * in the same order. A reply-back id with no established reply context is refused, never
+   * quietly judged as a top-level comment.
+   */
+  const back = parseReplyBackDraftId(input.draft.id) ? input.replyBack ?? null : null;
+  const skipped: Array<{ gate: string; why: string }> = [];
+  if (parseReplyBackDraftId(input.draft.id) && !back) {
+    blocks.push({ gate: 'reply-back', reason: 'a reply-back draft, but which reply it answers was not established — refusing rather than judging it as a top-level comment' });
+  }
 
   /* ---- 1. the linter ---- */
   const lint = lintDraft(input.draft.body);
@@ -206,7 +235,9 @@ export function evaluateGates(input: GateInput): GateResult {
    */
   const assessment = input.assessment;
 
-  if (!assessment) {
+  if (back) {
+    for (const gate of ['triage', 'priority']) skipped.push({ gate, why: 'reply-back — the person replied to us; that is the relevance' });
+  } else if (!assessment) {
     blocks.push({
       gate: 'triage',
       reason: 'no opportunity assessment on record — run `redbot opportunity` for this thread'
@@ -240,6 +271,8 @@ export function evaluateGates(input: GateInput): GateResult {
       gate: 'no-thread',
       reason: 'the thread this draft answers is not on record — cannot check that it is still a live question'
     });
+  } else if (back) {
+    skipped.push({ gate: 'not-a-question', why: 'reply-back — the person replied to us; that is the relevance' });
   } else {
     const shape = isQuestionShaped(input.thread);
     if (!shape.pass) {
@@ -254,7 +287,18 @@ export function evaluateGates(input: GateInput): GateResult {
   // and until 2026-07-27 it was not — `currentAgeHours` read `Date.now()`, so the same inputs
   // produced a different verdict depending on the day the gates ran.
   const hours = input.thread ? currentAgeHours(input.thread, now.getTime()) : null;
-  if (hours != null) {
+  if (back) {
+    /* The REPLY's age. Unknown fails closed, like every unestablished fact in this function. */
+    const replyH = back.seenAt ? (now.getTime() - Date.parse(back.seenAt)) / 3_600_000 : NaN;
+    if (!Number.isFinite(replyH) || replyH > policy.maxReplyAgeHoursToAnswer.value) {
+      blocks.push({
+        gate: 'stale-reply',
+        reason: Number.isFinite(replyH)
+          ? `the reply is ${Math.round(replyH)}h old, past the ${policy.maxReplyAgeHoursToAnswer.value}h limit — they have moved on`
+          : 'when the reply was written could not be established'
+      });
+    }
+  } else if (hours != null) {
     if (hours > policy.maxThreadAgeHoursToPublish.value) {
       blocks.push({
         gate: 'stale-thread',
@@ -334,7 +378,7 @@ export function evaluateGates(input: GateInput): GateResult {
   } else {
     if (ts.locked) blocks.push({ gate: 'locked', reason: 'thread is locked' });
     if (ts.archived) blocks.push({ gate: 'archived', reason: 'thread is archived' });
-    if (ts.ownCommentPresent) {
+    if (ts.ownCommentPresent && !back) {
       blocks.push({ gate: 'duplicate', reason: 'this account already has a comment on this thread' });
     }
     if (!ts.composerPresent && !ts.locked && !ts.archived) {
@@ -356,7 +400,9 @@ export function evaluateGates(input: GateInput): GateResult {
   // instant before the submit click, and a comment that actually landed can be mis-recorded
   // `failed` when confirmation misfires (evaluation H2). Treating a prior approved/published
   // draft for the same thread as a duplicate closes the re-post window either way.
-  if (others.some((d) => d.status === 'published' || d.status === 'approved')) {
+  if (back) {
+    if (back.answered) blocks.push({ gate: 'duplicate', reason: `reply ${back.parentThingId} is already answered — ${back.answered}` });
+  } else if (others.some((d) => d.status === 'published' || d.status === 'approved')) {
     blocks.push({ gate: 'duplicate', reason: 'a draft for this thread has already been approved or published in a previous run' });
   }
 
@@ -414,5 +460,5 @@ export function evaluateGates(input: GateInput): GateResult {
      lives in one readable place rather than in thirty scattered severities. */
   const hard = blocks.filter((b) => isHardGate(b.gate));
   const advisories = blocks.filter((b) => !isHardGate(b.gate));
-  return { allow: hard.length === 0, blocks: hard, advisories, warnings, quality };
+  return { allow: hard.length === 0, blocks: hard, advisories, warnings, quality, ...(back ? { skipped } : {}) };
 }

@@ -209,6 +209,11 @@ export const policy = {
     72, 'hours', 'declared',
     'a reply on a 4-day-old thread is not read; it is a footprint'
   ),
+  /** Reply-back (src/reply-back.ts): judged on the REPLY's age, never the thread's. */
+  maxReplyAgeHoursToAnswer: L(
+    72, 'hours', 'declared',
+    'MAIN 2026-10-28: an answer three days after someone replied to us is no longer a conversation'
+  ),
 
   /* ---------------- citation check (Argus Phase 10) ---------------- */
 

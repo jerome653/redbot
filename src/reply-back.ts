@@ -64,6 +64,22 @@ export interface UnansweredInput {
   history: HistoryEntry[];
 }
 
+/**
+ * A reply-back draft is named for what it answers, the way a warmup draft is named `w_…`
+ * (src/warming.ts): the drafts table has fixed columns, and a field added to `Draft` alone would
+ * be lost on the first reload. `rb_<parentThingId>.<parentDraftId>.<stamp>` — thing ids and draft
+ * ids never contain a dot.
+ */
+export const REPLY_BACK_DRAFT_PREFIX = 'rb_';
+export function replyBackDraftId(parentThingId: string, parentDraftId: string, now: Date = new Date()): string {
+  return `${REPLY_BACK_DRAFT_PREFIX}${parentThingId}.${parentDraftId}.${now.getTime().toString(36)}`;
+}
+export function parseReplyBackDraftId(id: string): { parentThingId: string; parentDraftId: string } | null {
+  if (!id.startsWith(REPLY_BACK_DRAFT_PREFIX)) return null;
+  const [parentThingId, parentDraftId, stamp] = id.slice(REPLY_BACK_DRAFT_PREFIX.length).split('.');
+  return parentThingId && parentDraftId && stamp ? { parentThingId, parentDraftId } : null;
+}
+
 /** The history contract part B writes on every reply-back `publish.*` row. */
 export function isReplyBackEntry(e: HistoryEntry): { parentDraftId: string; parentThingId: string } | null {
   const d = e.data;
@@ -153,4 +169,58 @@ export async function loadUnansweredReplies(account: string, now: Date = new Dat
   ]);
   const [drafts, interactions, history] = await Promise.all([loadDrafts(), loadInteractions(), loadHistory()]);
   return unansweredReplies({ account, fleet: loadAccounts().map((a) => a.handle), now, drafts, interactions, history });
+}
+
+export interface ReplyContextInput {
+  /** The reply-back draft being judged — its own rows and status never count against it. */
+  selfId: string;
+  fleet: string[];
+  account: string;
+  drafts: Draft[];
+  interactions: InteractionRecord[];
+  history: HistoryEntry[];
+  /** Authors rendered beneath the reply on the live page just before submitting, when read. */
+  liveAnswerers?: string[];
+}
+
+/**
+ * What src/gates.ts needs to judge a reply-back (GateInput.replyBack), established here so the
+ * rule is testable and the publish path only gathers inputs.
+ *
+ * `seenAt`: Reddit's own timestamp on the reply when it rendered one, else the FIRST observation
+ * that saw it — an upper bound on how fresh it is, so the age ceiling can only err toward refusing.
+ * `answered`: the first reason the reply is already answered or being answered, else null.
+ */
+export function replyContext(
+  ids: { parentThingId: string; parentDraftId: string },
+  input: ReplyContextInput
+): { parentThingId: string; seenAt: string | null; answered: string | null } {
+  const fleet = new Set([...input.fleet, input.account].map((h) => h.toLowerCase()));
+  let seen = Infinity;
+  let latest: { at: number; r: ObservedReply } | null = null;
+  for (const row of input.interactions) {
+    if (row.draftId !== ids.parentDraftId) continue;
+    const r = row.replies.find((x) => x.thingId === ids.parentThingId);
+    if (!r) continue;
+    const at = Date.parse(row.ts);
+    const stamped = r.timestamp ? Date.parse(r.timestamp) : NaN;
+    seen = Math.min(seen, Number.isFinite(stamped) ? stamped : at);
+    if (row.vector === 'signed-in' && (!latest || at > latest.at)) latest = { at, r };
+  }
+
+  const fleetChild = (authors: string[] | null | undefined) => (authors ?? []).find((a) => fleet.has(a.toLowerCase()));
+  const live = fleetChild(input.liveAnswerers);
+  const onRecord = fleetChild(latest?.r.childAuthors);
+  const inHistory = input.history.find((e) =>
+    (e.kind === 'publish.ok' || e.kind === 'publish.attempt') && e.data?.draftId !== input.selfId &&
+    isReplyBackEntry(e)?.parentThingId === ids.parentThingId);
+  const inFlight = input.drafts.find((d) => d.id !== input.selfId && (d.status === 'approved' || d.status === 'published') &&
+    parseReplyBackDraftId(d.id)?.parentThingId === ids.parentThingId);
+
+  const answered = live ? `${live} has answered it (live page)`
+    : onRecord ? `${onRecord} has answered it (observe record)`
+    : inHistory ? `a reply-back was already ${inHistory.kind === 'publish.ok' ? 'published' : 'attempted'} at ${inHistory.ts}`
+    : inFlight ? `reply-back ${inFlight.id} is already ${inFlight.status}`
+    : null;
+  return { parentThingId: ids.parentThingId, seenAt: Number.isFinite(seen) ? new Date(seen).toISOString() : null, answered };
 }
