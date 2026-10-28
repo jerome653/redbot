@@ -108,21 +108,41 @@ export function nextHandle(handles, last) {
 }
 
 /**
- * The due accounts in the order they should be worked: fewest publishes today first, ties broken
- * by the round robin that starts after `last`. Not-due accounts are dropped here, so nothing
- * downstream can open a Chrome for an account in its quiet hours or done for the day.
+ * The due accounts in the order they should be worked: fewest TURNS today first, then fewest
+ * publishes, ties broken by the round robin that starts after `last`. Not-due accounts are dropped
+ * here, so nothing downstream can open a Chrome for an account in its quiet hours or done for the day.
+ *
+ * TURNS BEFORE PUBLISHES. Publishes alone starved the fleet: 2026-10-25 00:37Z-06:53Z, 34 of 36
+ * turns went to ryangrowth12, each ending in 0.4 s on the removal brake — a turn that never
+ * publishes leaves its account at 0 and so first, every tick, while 10 others were due. A turn is
+ * the resource being shared; `turns` (handle -> turns today) comes from the server's turnCounter.
  *
  * needs: [{ handle, due, rule, why, servedToday, target }] in the fleet's order.
  */
-export function orderByNeed(needs, last) {
+export function orderByNeed(needs, last, turns) {
   const n = needs.length;
   const li = needs.findIndex((x) => x.handle === last);
   const rr = (i) => (i - li - 1 + n) % n;   // li = -1 (unknown) starts at the first account
+  const t = (x) => (turns && turns.get(x.handle)) || 0;
   return needs
     .map((x, i) => ({ x, pos: rr(i) }))
     .filter(({ x }) => x.due)
-    .sort((a, b) => a.x.servedToday - b.x.servedToday || a.pos - b.pos)
+    .sort((a, b) => t(a.x) - t(b.x) || a.x.servedToday - b.x.servedToday || a.pos - b.pos)
     .map(({ x }) => x);
+}
+
+/**
+ * Turns taken per account in the current Manila day — in memory: a restart only resets fairness,
+ * it can never refuse or grant a turn. `note(h)` is called when a turn is committed to an account.
+ */
+export function turnCounter(zone = 'Asia/Manila', now = () => new Date()) {
+  let day = null; let map = new Map();
+  const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now());
+  const roll = () => { const d = today(); if (d !== day) { day = d; map = new Map(); } };
+  return {
+    note(h) { roll(); map.set(h, (map.get(h) || 0) + 1); },
+    get() { roll(); return map; }
+  };
 }
 
 /** "3 quiet-hours, 2 done-for-today" — one line for a tick that found nothing to do. */
@@ -182,7 +202,7 @@ export async function rotationTick(deps) {
     deps.log('No accounts to rotate through.');
     return { ran: false, why: 'no-accounts' };
   }
-  const queue = orderByNeed(needs, deps.last());
+  const queue = orderByNeed(needs, deps.last(), deps.turns ? deps.turns() : undefined);
   if (!queue.length) {
     /* Decided from the history table alone: no port probe, no Chrome. */
     deps.log(`Nothing due (${tally(needs)}) — no Chrome opened.`);
@@ -217,6 +237,7 @@ export async function rotationTick(deps) {
       }
       /* Recorded BEFORE the cycle, so an account whose cycle crashes does not win every tie after. */
       deps.setLast(handle);
+      if (deps.noteTurn) deps.noteTurn(handle);
       if (state === 'free') {
         const r = await deps.openBrowser(handle);
         if (!r || !r.ok) {

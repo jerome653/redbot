@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseShift, onShift, nextHandle, orderByNeed, rotationTick, holdRegistry, DEFAULT_SHIFT,
   parseWindows, inWindows, DEFAULT_AUTO_WINDOWS, DEFAULT_AUTO_WINDOWS_WEEKEND, isWeekend,
-  tickSummary, tickLedger, runRotationLoop
+  tickSummary, tickLedger, runRotationLoop, turnCounter
 } from './rotation.mjs';
 
 const shift = parseShift(DEFAULT_SHIFT);
@@ -110,6 +110,42 @@ test('orderByNeed: only due accounts, least-served first, ties by round robin af
   assert.deepEqual(orderByNeed(needs, 'b').map((n) => n.handle), ['d', 'b', 'e', 'a']);
   assert.deepEqual(orderByNeed(needs, 'd').map((n) => n.handle), ['b', 'd', 'e', 'a']);
   assert.deepEqual(orderByNeed([notDue('a', 'done-for-today', 2)], null), []);
+});
+
+test('orderByNeed: TURNS today come first — an account whose turns never publish cannot win every tick (25 Oct)', () => {
+  const needs = [due('ryan', 0), due('a', 1), due('b', 1)];
+  assert.deepEqual(orderByNeed(needs, null).map((n) => n.handle), ['ryan', 'a', 'b'], 'without turns: least-served, as before');
+  const turns = new Map([['ryan', 34], ['a', 1], ['b', 1]]);
+  assert.deepEqual(orderByNeed(needs, null, turns).map((n) => n.handle), ['a', 'b', 'ryan']);
+  assert.deepEqual(orderByNeed([due('a', 0), due('b', 2)], null, new Map([['b', 2]])).map((n) => n.handle), ['a', 'b'], 'no turns yet goes first');
+});
+
+test('the tick notes the turn it commits to, and the next tick moves on even though nothing published', async () => {
+  const tc = turnCounter('Asia/Manila', () => ON);
+  const d = deps({ needs: async () => [due('a', 0), due('b', 0), due('c', 0)] });
+  d.turns = () => tc.get(); d.noteTurn = (h) => tc.note(h);
+  d.last = () => null;   // round robin pinned, so only the turn count can move the choice
+  const seen = [];
+  for (let i = 0; i < 3; i++) seen.push((await rotationTick(d)).handle);
+  assert.deepEqual(seen, ['a', 'b', 'c']);
+  assert.equal(tc.get().get('a'), 1);
+});
+
+test('turnCounter resets at the Manila day boundary', () => {
+  let t = new Date('2026-10-28T15:59:00Z');   // 23:59 Manila
+  const tc = turnCounter('Asia/Manila', () => t);
+  tc.note('a'); tc.note('a');
+  assert.equal(tc.get().get('a'), 2);
+  t = new Date('2026-10-28T16:00:00Z');       // 00:00 Manila, next day
+  assert.equal(tc.get().get('a'), undefined);
+});
+
+test('server.mjs feeds the turn counter to the rotation', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8');
+  assert.match(src, /const rotationTurns = turnCounter\(\);/);
+  assert.match(src, /turns: \(\) => rotationTurns\.get\(\),/);
+  assert.match(src, /noteTurn: \(h\) => rotationTurns\.note\(h\),/);
 });
 
 test('on shift the rotation still works the accounts the operator is not using', async () => {

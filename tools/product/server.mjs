@@ -59,7 +59,7 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 import { startAlignedBrowser } from './browser-start.mjs';
 import { createAddAccountFlows, karmaFromOutput } from './add-account-flow.mjs';
 import { replyAccount, ensureBrowser } from './reply-browser.mjs';
-import { rotationTick, tickLedger, runRotationLoop, parseShift, parseWindows, holdRegistry, DEFAULT_SHIFT, DEFAULT_AUTO_WINDOWS, DEFAULT_AUTO_WINDOWS_WEEKEND } from './rotation.mjs';
+import { rotationTick, tickLedger, runRotationLoop, turnCounter, parseShift, parseWindows, holdRegistry, DEFAULT_SHIFT, DEFAULT_AUTO_WINDOWS, DEFAULT_AUTO_WINDOWS_WEEKEND } from './rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -2703,6 +2703,8 @@ let autoLog = [];
 /* Kept apart from autoProc on purpose: Stop clears autoProc at once, but the turn still owns that
    Chrome until it has closed it. See holdRegistry in ./rotation.mjs. */
 const rotationHolds = holdRegistry();
+/* Process-wide so a Stop/Start of the rotation keeps today's turn counts (rotation.mjs turnCounter). */
+const rotationTurns = turnCounter();
 /** True while the unattended loop — single account or rotation — owns this account's Chrome. */
 const loopHolds = (account) => !!(autoProc && autoProc.account === account) || rotationHolds.holds(account);
 const loopHoldsMessage = (account) => (rotationHolds.holds(account) && !(autoProc && autoProc.account === account))
@@ -2878,6 +2880,9 @@ function rotationStart({ everyMinutes }) {
     /* Read from the history table only — a tick with nothing due opens no Chrome. */
     needs: async (now) => (await import('../../dist/rotation-need.js')).fleetNeeds(now),
     last: () => last,
+    /* Turns per account today: the first ordering key, so a turn that never publishes cannot win every tick. */
+    turns: () => rotationTurns.get(),
+    noteTurn: (h) => rotationTurns.note(h),
     setLast: (h) => {
       last = h;
       try { if (pushStateApi) pushStateApi.writePushState({ ...pushStateApi.readPushState(), rotationLast: h }); } catch { /* in memory still advances */ }
