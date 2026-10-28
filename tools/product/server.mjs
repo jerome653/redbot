@@ -59,7 +59,7 @@ import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
 import { startAlignedBrowser } from './browser-start.mjs';
 import { createAddAccountFlows, karmaFromOutput } from './add-account-flow.mjs';
 import { replyAccount, ensureBrowser } from './reply-browser.mjs';
-import { rotationTick, parseShift, parseWindows, holdRegistry, DEFAULT_SHIFT, DEFAULT_AUTO_WINDOWS, DEFAULT_AUTO_WINDOWS_WEEKEND } from './rotation.mjs';
+import { rotationTick, tickLedger, runRotationLoop, parseShift, parseWindows, holdRegistry, DEFAULT_SHIFT, DEFAULT_AUTO_WINDOWS, DEFAULT_AUTO_WINDOWS_WEEKEND } from './rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -2869,6 +2869,7 @@ function rotationStart({ everyMinutes }) {
   const readLast = () => { try { return pushStateApi ? pushStateApi.readPushState().rotationLast ?? null : null; } catch { return null; } };
   let last = readLast();
   const findAccount = async (h) => (await consoleAccounts()).accounts.find((x) => x.handle === h);
+  let loop = null;
   const deps = {
     now: () => new Date(),
     shift,
@@ -2889,6 +2890,13 @@ function rotationStart({ everyMinutes }) {
     openBrowser: (h) => launchChrome(h, { background: true }),
     closeBrowser: async (h) => { const a = await findAccount(h); if (a) await stopBrowserImpl(a); },
     runCycle: (h) => new Promise((resolve) => {
+      /* At most one `cli.js auto` at a time, whatever the watchdog did: a runner it retired can
+         resume late, and two cycles would drive Chrome and the ceilings against each other. */
+      if (me.child) {
+        keep(`[rotation ${new Date().toISOString()}] ${h}: a cycle is still running — not starting a second.\n`);
+        resolve(1);
+        return;
+      }
       const child = spawn(process.execPath, [join(ROOT, 'dist', 'cli.js'), 'auto', '--once'], {
         cwd: SPAWN_CWD,
         /* Warmup-first turns: re-collect only when the shared corpus is older than this (default
@@ -2902,23 +2910,51 @@ function rotationStart({ everyMinutes }) {
         stdio: ['ignore', 'pipe', 'pipe']
       });
       me.child = child;
-      child.stdout.on('data', keep);
-      child.stderr.on('data', keep);
+      /* A line of output is progress: the watchdog must not kill a long cycle that is working. */
+      const out = (d) => { keep(d); if (loop) loop.progress(); };
+      child.stdout.on('data', out);
+      child.stderr.on('data', out);
       child.on('error', (e) => { keep(`\n[${h}: cycle failed to start: ${e.message}]\n`); me.child = null; resolve(1); });
       child.on('close', (code) => { me.child = null; resolve(code ?? 1); });
     }),
     log: (line) => keep(`[rotation ${new Date().toISOString()}] ${line}\n`)
   };
-  (async () => {
-    while (autoProc === me) {
+  /* What each tick decided, durable (history 'rotation.tick', deduped; see tickLedger) and on
+     /api/pulse as auto.lastTick. Imported per write like `needs` above, so a missing dist only
+     loses the row, never the loop. */
+  const record = async (...a) => (await import('../../dist/log.js')).record(...a);
+  const ledger = tickLedger({
+    write: ({ summary, ...data }) => { record('rotation.tick', summary, { ...data, status: data.why === 'error' ? 'failed' : undefined }).catch(() => {}); }
+  });
+  me.ledger = ledger;
+  loop = runRotationLoop({
+    alive: () => autoProc === me,
+    gapMs: gap * 60_000,
+    stallMs: 3 * gap * 60_000,
+    tick: async (current) => {
       rotationHolds.live = true;
-      try { await rotationTick(deps); }
-      catch (e) { deps.log(`tick failed: ${e && e.message ? e.message : e}`); }
-      finally { rotationHolds.live = false; }
-      if (autoProc !== me) break;
-      await new Promise((r) => setTimeout(r, gap * 60_000));
+      try { return await rotationTick({ ...deps, alive: current }); }
+      /* A runner the watchdog retired must not clear `live` under the runner that replaced it. */
+      finally { if (current() || autoProc !== me) rotationHolds.live = false; }
+    },
+    onResult: (r) => {
+      if (r.why === 'error') deps.log(`tick failed: ${r.error}`);
+      ledger.note(r);
+    },
+    /* Loud on purpose: an `error` row reaches metrics and the activity feed, which a quiet loop
+       never did. The 25 Oct gap left nothing at all. */
+    onStall: (ms, killed) => {
+      const what = `no tick finished and no cycle output for ${Math.round(ms / 60_000)} min — ` +
+        (killed ? 'killed the hung cycle; the loop carries on.' : 'restarted the loop (the stuck tick can no longer start a cycle).');
+      deps.log(`watchdog: ${what}`);
+      record('error', `rotation watchdog: ${what}`, { level: 'error' }).catch(() => {});
+    },
+    killChild: () => {
+      if (!me.child) return false;
+      try { me.child.kill(); } catch { /* already gone; close clears me.child */ }
+      return true;
     }
-  })();
+  });
   rememberAutoLoop({ account: '*', rotate: true, everyMinutes: gap });
   return { ok: true, ...autoStatus() };
 }
@@ -2930,6 +2966,8 @@ function autoStatus() {
     account: autoProc ? autoProc.account : null,
     everyMinutes: autoProc ? autoProc.every : null,
     startedAt: autoProc ? autoProc.startedAt : null,
+    /* The rotation's newest decision (tickLedger), readable on /api/pulse after the log scrolls. */
+    lastTick: autoProc && autoProc.ledger ? autoProc.ledger.last() : null,
     log: autoLog.join('').split('\n').filter(Boolean).slice(-40)
   };
 }

@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseShift, onShift, nextHandle, orderByNeed, rotationTick, holdRegistry, DEFAULT_SHIFT,
-  parseWindows, inWindows, DEFAULT_AUTO_WINDOWS, DEFAULT_AUTO_WINDOWS_WEEKEND, isWeekend
+  parseWindows, inWindows, DEFAULT_AUTO_WINDOWS, DEFAULT_AUTO_WINDOWS_WEEKEND, isWeekend,
+  tickSummary, tickLedger, runRotationLoop
 } from './rotation.mjs';
 
 const shift = parseShift(DEFAULT_SHIFT);
@@ -284,8 +285,8 @@ test('server.mjs wires the guard: button checks ask loopHolds, Start waits for a
   assert.equal((src.match(/loopHolds\(account\)/g) || []).length, 2);
   assert.match(src, /const rotationHolds = holdRegistry\(\)/);
   assert.match(src, /if \(rotationHolds\.live\) return \{ ok: false/);
-  assert.match(src, /rotationHolds\.live = true;\s+try \{ await rotationTick\(deps\); \}/);
-  assert.match(src, /finally \{ rotationHolds\.live = false; \}/);
+  assert.match(src, /rotationHolds\.live = true;\s+try \{ return await rotationTick\(\{ \.\.\.deps, alive: current \}\); \}/);
+  assert.match(src, /finally \{ if \(current\(\) \|\| autoProc !== me\) rotationHolds\.live = false; \}/);
   assert.match(src, /busy: \(h\) => /);
   assert.match(src, /hold: rotationHolds\.hold,/);
   assert.match(src, /release: rotationHolds\.release,/);
@@ -318,4 +319,127 @@ test('on a weekend the rotation runs at 10:00 (full-24h window); on a weekday 10
   const r = await rotationTick(mon);
   assert.equal(r.ran, false, 'Monday 10:00 rests');
   assert.equal(r.why, 'off-window');
+});
+
+/* ---- the tick ledger and the watchdog (2026-10-25: 8 h with no turn, and no record of why) ---- */
+
+test('nothing-due carries its tally, none-available names why each due account was skipped', async () => {
+  const nd = await rotationTick(deps({ needs: async () => [notDue('a', 'quiet-hours'), notDue('b', 'quiet-hours')] }));
+  assert.equal(nd.why, 'nothing-due');
+  assert.equal(nd.tally, '2 quiet-hours');
+  const na = await rotationTick(deps({ busy: (h) => h === 'a',
+    browserState: async () => 'foreign', needs: async () => [due('a'), due('b')] }));
+  assert.equal(na.why, 'none-available');
+  assert.deepEqual(na.skipped, [{ handle: 'a', why: 'busy' }, { handle: 'b', why: 'foreign' }]);
+});
+
+test('tickSummary says what the tick decided in one readable line', () => {
+  assert.match(tickSummary({ ran: false, why: 'nothing-due', tally: '3 quiet-hours' }), /nothing due \(3 quiet-hours\)/i);
+  assert.match(tickSummary({ ran: true, handle: 'a', code: 0 }), /a ran.*exit 0/);
+  assert.match(tickSummary({ ran: false, why: 'none-available', skipped: [{ handle: 'a', why: 'busy' }] }), /a: busy/);
+  assert.match(tickSummary({ ran: false, why: 'error', error: 'boom' }), /boom/);
+});
+
+test('tickLedger writes when the outcome changes, and otherwise at most an hourly heartbeat', () => {
+  const rows = [];
+  const l = tickLedger({ write: (r) => rows.push(r), heartbeatMs: 3_600_000 });
+  const t0 = Date.parse('2026-10-25T07:00:00Z');
+  const nd = { ran: false, why: 'nothing-due', tally: '13 quiet-hours' };
+  l.note(nd, t0);
+  for (let i = 1; i <= 5; i++) l.note(nd, t0 + i * 600_000);      // 50 min resting: no new row
+  assert.equal(rows.length, 1);
+  l.note({ ...nd, tally: '12 quiet-hours' }, t0 + 3_000_000);       // tally drift alone is not a change
+  assert.equal(rows.length, 1);
+  l.note(nd, t0 + 3_600_000);                                        // an hour on: heartbeat
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].heartbeat, true);
+  l.note({ ran: true, handle: 'a', code: 0 }, t0 + 3_700_000);       // a change: written at once
+  l.note({ ran: true, handle: 'b', code: 0 }, t0 + 4_300_000);       // another account is another outcome
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.map((r) => r.why), ['nothing-due', 'nothing-due', 'ran', 'ran']);
+  assert.equal(rows[3].handle, 'b');
+  assert.equal(l.last().why, 'ran');
+  assert.match(l.last().at, /^2026-10-25T/);
+});
+
+/** A hand-cranked clock: sleeps and the watchdog interval advance only when the test says so. */
+function clock() {
+  let t = 0; const sleeps = []; let watch = null;
+  const flush = () => new Promise((r) => setImmediate(r));
+  return {
+    now: () => t,
+    sleep: (ms) => new Promise((r) => sleeps.push({ at: t + ms, r })),
+    every: (fn) => { watch = fn; return 1; },
+    stopEvery: () => { watch = null; },
+    async advance(ms) {
+      t += ms;
+      const due = sleeps.filter((s) => s.at <= t);
+      for (const s of due) { sleeps.splice(sleeps.indexOf(s), 1); s.r(); }
+      await flush();
+      if (watch) watch();
+      await flush();
+    }
+  };
+}
+
+test('a tick that throws is recorded as an error and the loop carries on', async () => {
+  const c = clock(); const results = []; let n = 0;
+  runRotationLoop({ ...c, gapMs: 600_000, stallMs: 1_800_000, alive: () => n < 3,
+    tick: async () => { n++; if (n === 1) throw new Error('db locked'); return { ran: false, why: 'nothing-due' }; },
+    onResult: (r) => results.push(r), onStall: () => {}, killChild: () => false });
+  await c.advance(0); await c.advance(600_000); await c.advance(600_000);
+  assert.equal(results[0].why, 'error');
+  assert.match(results[0].error, /db locked/);
+  assert.equal(results[1].why, 'nothing-due');
+});
+
+test('watchdog: a tick stuck outside any child is retired and a new runner takes over — never two cycles at once', async () => {
+  const c = clock(); const stalls = []; let calls = 0; let firstCurrent;
+  runRotationLoop({ ...c, gapMs: 600_000, stallMs: 1_800_000, alive: () => true,
+    tick: async (current) => {
+      calls++;
+      if (calls === 1) { firstCurrent = current; await new Promise(() => {}); }   // never resolves
+      return { ran: true, handle: 'a', code: 0 };
+    },
+    onResult: () => {}, onStall: (ms) => stalls.push(ms), killChild: () => false });
+  await c.advance(0);
+  await c.advance(1_200_000);
+  assert.equal(stalls.length, 0, '20 min is not a stall at 3 x 10 min');
+  await c.advance(700_000);
+  assert.equal(stalls.length, 1, 'past 30 min with no progress the watchdog fires');
+  assert.equal(calls, 2, 'a new runner started a fresh tick');
+  assert.equal(firstCurrent(), false, 'the stuck runner is told it is no longer current, so it can never start a cycle');
+});
+
+test('watchdog: a hung cycle child is killed and the same runner carries on, no second runner', async () => {
+  const c = clock(); let calls = 0; let release; let kills = 0;
+  runRotationLoop({ ...c, gapMs: 600_000, stallMs: 1_800_000, alive: () => true,
+    tick: async () => { calls++; if (calls === 1) await new Promise((r) => { release = r; }); return { ran: true, handle: 'a', code: 1 }; },
+    onResult: () => {}, onStall: () => {}, killChild: () => { kills++; release(); return true; } });
+  await c.advance(0);
+  await c.advance(1_900_000);
+  assert.equal(kills, 1);
+  assert.equal(calls, 1, 'no second runner was started beside the one whose child was killed');
+  await c.advance(600_000);
+  assert.equal(calls, 2, 'the same runner ticked again after its gap');
+});
+
+test('watchdog: output from a long cycle is progress, so a 46-minute cycle that talks is never killed', async () => {
+  const c = clock(); let kills = 0;
+  const loop = runRotationLoop({ ...c, gapMs: 600_000, stallMs: 1_800_000, alive: () => true,
+    tick: async () => new Promise(() => {}),
+    onResult: () => {}, onStall: () => {}, killChild: () => { kills++; return true; } });
+  for (let i = 0; i < 10; i++) { await c.advance(300_000); loop.progress(); }
+  assert.equal(kills, 0);
+});
+
+test('server.mjs wires the ledger, the watchdog and the one-child guard into the rotation', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8');
+  assert.match(src, /runRotationLoop\(\{/);
+  assert.match(src, /stallMs: 3 \* gap \* 60_000/);
+  assert.match(src, /record\('rotation\.tick'/);
+  assert.match(src, /record\('error', `rotation watchdog/);
+  assert.match(src, /if \(me\.child\) \{/, 'runCycle refuses while a cycle child is still alive');
+  assert.match(src, /lastTick: /, 'the last decision is readable from autoStatus / pulse');
 });
