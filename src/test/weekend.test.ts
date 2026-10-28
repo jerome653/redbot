@@ -39,7 +39,7 @@ test('effectiveMaxRepliesPerDay: weekday is the base cap, weekend is base x mult
     policy.maxRepliesPerDay.value * policy.weekendReplyMultiplier.value,
     'weekend = base x multiplier'
   );
-  // The decided numbers: weekday cap 1, weekend effective cap 5.
-  assert.equal(effectiveMaxRepliesPerDay(weekday), 1, 'weekday literal');
-  assert.equal(effectiveMaxRepliesPerDay(weekend), 5, 'weekend literal');
+  // The decided numbers (2026-10-28): weekday cap 3, weekend effective cap 6.
+  assert.equal(effectiveMaxRepliesPerDay(weekday), 3, 'weekday literal');
+  assert.equal(effectiveMaxRepliesPerDay(weekend), 6, 'weekend literal');
 });

@@ -7,8 +7,8 @@
  * An account is DUE when all three hold:
  *   - checkWindow allows it now — its quiet hours, its timezone and its ceiling, the very same
  *     verdict the cycle will ask for, so the rotation never opens a Chrome the cycle then refuses;
- *   - it has published fewer than its daily target today, target = min(2, the ceiling checkWindow
- *     enforces) — 2 is the bottom of the Today screen's stage-1 "2 to 4" a day;
+ *   - it has published fewer than its daily target today, target = the ceiling checkWindow
+ *     enforces (2026-10-28: the old rotation-only min(2, ...) held the weekend cap of 5 to 2);
  *   - its last publish is at least policy.minMinutesBetweenReplies ago.
  *
  * It grants nothing. Every gate on the publish path (fact-check, publish bar, pace, spacing,
@@ -21,11 +21,12 @@ import { counters, loadObservations } from './health.js';
 import { loadHistory } from './store.js';
 import { policy } from './policy.js';
 
-/** Publishes a day the rotation works an account up to. Never above the account's ceiling. */
-export const ROTATION_DAILY_TARGET = 2;
-
+/**
+ * Publishes a day the rotation works an account up to: its full ceiling. A second, lower number
+ * here is how a weekend cap of 5 delivered 2 (measured 24-25 Oct) — one cap, read in one place.
+ */
 export function dailyTargetFor(account: AccountRecord, now: Date = new Date()): number {
-  return Math.min(ROTATION_DAILY_TARGET, dailyCeilingFor(account, now));
+  return dailyCeilingFor(account, now);
 }
 
 export interface AccountNeed {
