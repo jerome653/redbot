@@ -67,6 +67,16 @@ export interface ObservedReply {
   /** Reddit marks moderator/admin comments. Null when the attribute is absent. */
   distinguished: string | null;
   /**
+   * Who has answered THIS reply: the authors of the comments rendered directly beneath it.
+   *
+   * Added 2026-10-28 for reply-back (src/reply-back.ts). Without it "has anyone from the fleet
+   * already answered this person?" had no record to ask — observe kept only the direct children of
+   * our comment, never theirs — and an answer typed by hand would be answered a second time.
+   * Optional because every row written before that date lacks it; absent means "not looked", which
+   * is a different fact from `[]`, "looked, nobody has answered".
+   */
+  childAuthors?: string[] | null;
+  /**
    * What kind of reply this is — corrective, supportive, neutral, moderation.
    *
    * **Human-labelled only.** Left null by every automated path, forever. A model classifying
