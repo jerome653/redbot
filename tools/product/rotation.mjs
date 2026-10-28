@@ -186,13 +186,17 @@ export async function rotationTick(deps) {
   if (!queue.length) {
     /* Decided from the history table alone: no port probe, no Chrome. */
     deps.log(`Nothing due (${tally(needs)}) — no Chrome opened.`);
-    return { ran: false, why: 'nothing-due' };
+    return { ran: false, why: 'nothing-due', tally: tally(needs) };
   }
 
+  /* Why each due account was passed over, carried out of the tick: 'none-available' alone was all
+     the 25 Oct gap could have said, and it does not say which gate held every account. */
+  const skipped = [];
   for (const need of queue) {
     const handle = need.handle;
     if (deps.busy && deps.busy(handle)) {
       deps.log(`${handle}: a console button is driving its Chrome — skipped this turn.`);
+      skipped.push({ handle, why: 'busy' });
       continue;
     }
     /* Held straight after the busy check with no await between, so a button cannot start on this
@@ -203,10 +207,12 @@ export async function rotationTick(deps) {
       const state = await deps.browserState(handle);
       if (state === 'running' && operatorOn) {
         deps.log(`${handle}: its Chrome is open during the operator's shift — theirs, left alone.`);
+        skipped.push({ handle, why: 'operator' });
         continue;
       }
       if (state !== 'free' && state !== 'running') {
         deps.log(`${handle}: its debug port is ${state}, not this account's Chrome — skipped this turn.`);
+        skipped.push({ handle, why: String(state) });
         continue;
       }
       /* Recorded BEFORE the cycle, so an account whose cycle crashes does not win every tie after. */
@@ -215,6 +221,7 @@ export async function rotationTick(deps) {
         const r = await deps.openBrowser(handle);
         if (!r || !r.ok) {
           deps.log(`${handle}: Chrome would not open (${(r && r.error) || 'no reason given'}) — skipped this turn.`);
+          skipped.push({ handle, why: `open failed: ${(r && r.error) || 'no reason given'}` });
           continue;
         }
         opened = true;
@@ -235,5 +242,86 @@ export async function rotationTick(deps) {
     }
   }
   deps.log(`${queue.length} account(s) due, none available this tick.`);
-  return { ran: false, why: 'none-available' };
+  return { ran: false, why: 'none-available', skipped };
+}
+
+/** One line for a tick's outcome — the ledger row's summary and /api/pulse's lastTick. */
+export function tickSummary(r) {
+  if (r.ran) return `${r.handle} ran one cycle, exit ${r.code}.`;
+  if (r.why === 'nothing-due') return `Nothing due (${r.tally || 'no tally'}).`;
+  if (r.why === 'none-available') return `Due accounts, none available: ${(r.skipped || []).map((s) => `${s.handle}: ${s.why}`).join('; ')}.`;
+  if (r.why === 'error') return `Tick failed: ${r.error}`;
+  return `Not run: ${r.why}${r.handle ? ` (${r.handle})` : ''}.`;
+}
+
+/**
+ * The rotation's decisions, written down (history kind 'rotation.tick', migration 0024).
+ *
+ * On 2026-10-25 the loop ran no turn from 06:54Z to 15:04Z and the reason existed only in autoLog,
+ * which a restart threw away. Every tick is a decision, but a loop resting through the night makes
+ * the same one 144 times a day, so a row is written when the outcome CHANGES — why + handle; a
+ * drifting tally is not a change — plus a heartbeat at most every `heartbeatMs`, so a quiet stretch
+ * still proves the loop was alive. `last()` is the newest outcome whether written or not.
+ */
+export function tickLedger({ write, heartbeatMs = 3_600_000 }) {
+  let lastKey = null, lastWrittenAt = -Infinity, latest = null;
+  return {
+    note(r, nowMs = Date.now()) {
+      const key = `${r.why || (r.ran ? 'ran' : '?')}|${r.handle || ''}`;
+      latest = { at: new Date(nowMs).toISOString(), why: r.ran ? 'ran' : r.why, handle: r.handle || null, summary: tickSummary(r) };
+      const changed = key !== lastKey;
+      if (!changed && nowMs - lastWrittenAt < heartbeatMs) return null;
+      lastKey = key; lastWrittenAt = nowMs;
+      const row = { ...latest, ...(changed ? {} : { heartbeat: true }), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.ran ? { code: r.code } : {}) };
+      try { write(row); } catch { /* the ledger must never stop the loop it records */ }
+      return row;
+    },
+    last: () => latest
+  };
+}
+
+/**
+ * The loop, with a watchdog. Moved out of server.mjs so it can be tested with a hand-cranked clock.
+ *
+ * `progress()` is called by the server on every line a cycle child prints: a 46-minute cycle that
+ * talks (cardinal, 2026-10-25T15:04Z) is working, not stuck. Past `stallMs` with neither a finished
+ * tick nor a line of output, `onStall(idleMs, killed)` reports it, and `killChild(strikes)` is asked
+ * to end the cycle child when there is one (its close resolves the tick and the runner carries on;
+ * `strikes` counts consecutive stalls on the same tick so the server can escalate past a child that
+ * ignores SIGTERM).
+ *
+ * THERE IS EXACTLY ONE RUNNER, EVER. A tick stuck with no child (a probe, an open or `needs()` that
+ * never answers) is reported on every stall and NOT replaced: a second runner beside a stuck one let
+ * the stuck one wake up later and setLast, open, and close the Chrome the new runner's cycle was
+ * using (pipeline-verifier on PR #83, 2026-10-28). The 25 Oct gap was not a hung loop — it ticked
+ * every 10 minutes — so the ledger, not a restart, is what answers it.
+ */
+export function runRotationLoop({ tick, alive, gapMs, stallMs, onResult, onStall, killChild,
+  now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  every = (fn, ms) => setInterval(fn, ms), stopEvery = (h) => clearInterval(h) }) {
+  let lastProgress = now(), strikes = 0;
+  const progress = () => { lastProgress = now(); };
+  async function run() {
+    while (alive()) {
+      let r;
+      try { r = await tick(alive); }
+      catch (e) { r = { ran: false, why: 'error', error: String(e && e.message ? e.message : e) }; }
+      strikes = 0;
+      progress();
+      try { onResult(r); } catch { /* reporting must not end the loop */ }
+      if (!alive()) break;
+      await sleep(gapMs);
+    }
+  }
+  const watch = every(() => {
+    if (!alive()) { stopEvery(watch); return; }
+    const idle = now() - lastProgress;
+    if (idle <= stallMs) return;
+    progress();
+    strikes += 1;
+    const killed = killChild(strikes);
+    try { onStall(idle, killed); } catch { /* reporting must not end the watch */ }
+  }, Math.min(60_000, stallMs));
+  run();
+  return { progress };
 }

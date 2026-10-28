@@ -112,6 +112,17 @@ describe('a valid status is left alone', () => {
   });
 });
 
+describe('the rotation tick ledger (0024)', () => {
+  /* The rotation's own decisions were in memory only, so an 8-hour gap on 2026-10-25 left no
+     record of why. The CHECK enum has to accept the row, or record() swallows it with a warning. */
+  test("'rotation.tick' is accepted by the database", async () => {
+    await record('rotation.tick', 'rotation-tick-accepted', { why: 'nothing-due' });
+    const row = await rowFor('rotation-tick-accepted');
+    assert.ok(row, 'the database refused a rotation.tick row');
+    assert.equal(row.kind, 'rotation.tick');
+  });
+});
+
 describe('a history write that fails anyway', () => {
   /* `kind` is a code constant, not caller input, so it is deliberately NOT normalised — which
      makes it the honest way to produce a refusal `record` cannot repair. */

@@ -223,6 +223,8 @@ export type HistoryKind =
    * the new log and the only surviving statement that a reset happened at all.
    */
   | 'reset'
+  /** One decision of the rotation loop (tools/product/rotation.mjs tickLedger), deduped. 0024. */
+  | 'rotation.tick'
   | 'error';
 
 export interface HistoryEntry {
