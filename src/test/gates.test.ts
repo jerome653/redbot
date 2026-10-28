@@ -437,6 +437,15 @@ test('reply-back: every other gate still runs — window, health, certification,
   assert.ok(gatesHit(rb({ draft: draft({ id: RB_ID, certification: { verdict: 'REJECT', at: NOW.toISOString(), claims: 1, fatalContradictions: 1 } }) })).includes('certification'));
 });
 
+test('reply-back: a WARMING account is not refused warming:target for the thread\'s age or answers', () => {
+  const warmingHealth = { ...healthy, counters: { ...healthy.counters, karma: 1 } };
+  const busy = thread({ ageMinutes: 5 * 24 * 60, collectedAt: NOW.toISOString(), commentCount: 40, title: '[Guide] PHP 8.2 checkout 502 from admin-ajax.php', body: 'The PHP error log named a plugin fatal after the upgrade. WP_DEBUG_LOG and php-fpm made it visible.' });
+  const r = evaluateGates(rb({ health: warmingHealth, thread: busy }));
+  assert.ok(![...r.blocks, ...r.advisories].some((b) => b.gate === 'warming:target'), JSON.stringify(r.blocks));
+  assert.ok(r.skipped?.some((s) => s.gate === 'warming:target'));
+  assert.ok(gatesHit(rb({ draft: draft({ id: 'd_2' }), health: warmingHealth, thread: busy })).includes('warming:target'), 'top-level still refused');
+});
+
 test('reply-back: a reply-back id with no reply context is refused, never treated as top-level', () => {
   assert.ok(gatesHit(rb({ replyBack: undefined })).includes('reply-back'));
 });

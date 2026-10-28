@@ -358,7 +358,11 @@ export function evaluateGates(input: GateInput): GateResult {
 
     // Stage 1 picks threads for being READ, which is a tighter question than the 72h publish
     // ceiling above answers: a 6h-old thread is well inside that ceiling and still buried.
-    if (input.thread) {
+    // A reply-back is judged on the REPLY (stale-reply above), not the thread: the thread's age and
+    // answer count were cleared when our comment went up, and the person is answering us now.
+    if (back) {
+      skipped.push({ gate: 'warming:target', why: 'reply-back — judged on the reply\'s age (stale-reply), not the thread\'s' });
+    } else if (input.thread) {
       const target = isWarmingTarget({
         ageHours: hours,
         commentCount: input.thread.commentCount,
