@@ -4606,10 +4606,56 @@ function accountEditor(a){
     yes.onclick=()=>removeReq(false);
     const no=el('button','mini');
     no.textContent='Keep it';
-    no.onclick=()=>{rbar.textContent='';rmsg.textContent='';rbar.append(rm)};
+    no.onclick=()=>{rbar.textContent='';rmsg.textContent='';rbar.append(rm,del)};
     rbar.textContent='';rbar.append(yes,no);
   };
-  rbar.append(rm);
+  /* Delete = remove the record AND its sign-in folder. Unlike Remove it cannot be undone by
+     re-adding: the folder is the only copy of the Reddit session. The server stops the account's
+     browser first, and refuses before writing anything if it cannot. */
+  const delReq=async(confirm)=>{
+    const held=busy(`Deleting ${a.handle} and its sign-in folder…`);
+    let r;
+    try{
+      r=await fetch('/api/account/remove',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify(confirm?{handle:a.handle,confirm:true,deleteProfile:true}:{handle:a.handle,deleteProfile:true})}).then(x=>x.json());
+    }catch(e){held.fail(String(e&&e.message||e));return}
+    held.done(r.ok?(r.profileDirDeleted?`${a.handle} deleted — sign-in folder ${r.profileDirDeleted} deleted with it`
+                                       :`${a.handle} deleted`):undefined);
+    if(r.ok){EDITING=null;await load();go('accounts');return}
+    if(r.needsConfirm){
+      rbar.textContent='';
+      rmsg.innerHTML=`<span style="color:var(--ember)">${esc(r.error||'')}</span>`;
+      const anyway=el('button','mini danger');
+      anyway.textContent='Delete anyway';
+      anyway.setAttribute('aria-label',`Delete ${a.handle} anyway`);
+      anyway.onclick=()=>delReq(true);
+      const keep=el('button','mini');
+      keep.textContent='Keep it';
+      keep.onclick=()=>{EDITING=null;accounts()};
+      rbar.append(anyway,keep);
+      return;
+    }
+    rmsg.innerHTML=`<span style="color:var(--ember)">${esc(r.error||'could not delete')}</span>`;
+  };
+
+  const del=el('button','mini danger');
+  del.textContent='Delete account + sign-in';
+  del.setAttribute('aria-label',`Delete ${a.handle} and its sign-in folder`);
+  del.onclick=()=>{
+    rbar.textContent='';
+    rmsg.innerHTML='This deletes the record <b>and</b> the sign-in folder '+
+      (a.profileDir?`<code>${esc(a.profileDir)}</code> `:'')+
+      'from disk. The Reddit session is gone for good — adding the account back means signing in again.';
+    const yes=el('button','mini danger');
+    yes.textContent=`Yes, delete ${a.handle}`;
+    yes.setAttribute('aria-label',`Confirm deleting ${a.handle}`);
+    yes.onclick=()=>delReq(false);
+    const no=el('button','mini');
+    no.textContent='Keep it';
+    no.onclick=()=>{rbar.textContent='';rmsg.textContent='';rbar.append(rm,del)};
+    rbar.textContent='';rbar.append(yes,no);
+  };
+  rbar.append(rm,del);
   danger.append(rbar,rmsg);
 
   bar.append(save,cancel);

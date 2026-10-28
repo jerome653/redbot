@@ -2062,6 +2062,57 @@ test('stopping refuses to kill a process it cannot prove is ours', async () => {
   }
 });
 
+test('delete + sign-in refuses while a browser it cannot prove is ours holds the port, and writes nothing', async () => {
+  await forgetAccount('Port_Acct');
+  let kid = null;
+  try {
+    const made = await create({ handle: 'Port_Acct' });
+    const { profileDir } = made.body.account;
+    kid = await holdPort(made.body.account.debugPort, join(DATA, 'somebody-elses-profile'));
+
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/account/remove`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ handle: 'Port_Acct', confirm: true, deleteProfile: true })
+    });
+    const body = await r.json();
+    assert.equal(r.status, 409, JSON.stringify(body));
+    assert.match(body.error, /could not be stopped, so nothing was deleted/);
+    assert.equal(kid.exitCode, null, 'the stranger must still be running');
+    assert.ok(existsSync(join(DATA, profileDir)), 'the folder must still be there');
+    assert.equal((await pool.query('SELECT handle FROM accounts WHERE lower(handle) = $1', ['port_acct'])).rowCount, 1,
+                 'and so must the record');
+  } finally {
+    try { kid?.kill(); } catch { /* already gone */ }
+    await forgetAccount('Port_Acct');
+  }
+});
+
+test('delete + sign-in stops the account’s own browser, then deletes the record and the folder', async () => {
+  await forgetAccount('Port_Acct');
+  let kid = null;
+  try {
+    const made = await create({ handle: 'Port_Acct' });
+    const { debugPort, profileDir } = made.body.account;
+    kid = await holdPort(debugPort, join(DATA, profileDir));
+    assert.equal((await portFor('Port_Acct')).state, 'running', 'precondition: it must be running first');
+
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/account/remove`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ handle: 'Port_Acct', confirm: true, deleteProfile: true })
+    });
+    const body = await r.json();
+    assert.equal(r.status, 200, `delete was refused: ${JSON.stringify(body)}`);
+    assert.equal(body.profileDirDeleted, profileDir);
+    assert.equal(body.profileDirKept, undefined);
+    assert.equal((await pool.query('SELECT handle FROM accounts WHERE lower(handle) = $1', ['port_acct'])).rowCount, 0);
+    await until(async () => kid.exitCode !== null || kid.signalCode !== null, 'the account’s browser to be stopped');
+    assert.ok(!existsSync(join(DATA, profileDir)), 'the sign-in folder must be gone');
+  } finally {
+    try { kid?.kill(); } catch { /* already gone */ }
+    await forgetAccount('Port_Acct');
+  }
+});
+
 test('stopping ends the account’s own browser, and the port goes quiet', async () => {
   await forgetAccount('Port_Acct');
   let kid = null;
