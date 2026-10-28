@@ -16,7 +16,7 @@
  * No credentials here. An account record is a handle, a role, a port and a folder; the Reddit
  * session lives in the Chrome profile on disk and never in a column. Secrets go to the vault.
  */
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { DATA, accountsPath, loadAccountsFile, forgetAccounts } from './config.js';
 import type { AccountRecord } from './config.js';
 import { getPool, dbUnavailableReason } from './db.js';
@@ -31,7 +31,7 @@ import {
   portIsFree, statusForAccounts, firstFreePortInRange, DEBUG_PORT_FIRST, DEBUG_PORT_LAST
 } from './ports.js';
 import { machineId } from './machine.js';
-import { allocateProfileDir, profileState, resolveProfileDir } from './profiles.js';
+import { allocateProfileDir, profileState, resolveProfileDir, PROFILE_PREFIX } from './profiles.js';
 import { loadPersonas, savePersona, type AccountPersona } from './db/personas.js';
 import { planFleetVoices, voiceKey } from './persona-allocate.js';
 import { isAbsolute, dirname, basename, join } from 'node:path';
@@ -596,6 +596,39 @@ export interface DeleteResult {
   removedFrom?: ('database' | 'seed-file')[];
   /** The signed-in Chrome folder, LEFT ON DISK. Named so the person knows it is still there. */
   profileDirKept?: string;
+  /** `deleteProfile: true` only: the Chrome folder that was deleted with the account. */
+  profileDirDeleted?: string;
+}
+
+/**
+ * The one shape of folder a delete may remove: a redbot-allocated `chrome-profile-*` directly
+ * under the data root. An adopted profile (an absolute path the operator pointed an account at)
+ * is somebody's own Chrome, not redbot's, and is refused — as is anything a path trick could
+ * resolve outside the data root.
+ */
+function deletableProfileDir(profileDir: string): string | null {
+  if (isAbsolute(profileDir) || basename(profileDir) !== profileDir) return null;
+  if (!new RegExp(`^${PROFILE_PREFIX}[a-z]+$`).test(profileDir)) return null;
+  return join(DATA, profileDir);
+}
+
+/**
+ * Delete the Chrome folder of an account, refusing before anything is written when it cannot.
+ * Returns the error to report, or null when the folder may go.
+ */
+function profileDeleteRefusal(handle: string, profileDir: string,
+                              known: readonly AccountRecord[]): string | null {
+  if (!deletableProfileDir(profileDir)) {
+    return `${handle}'s sign-in folder ${profileDir} is not a redbot-made folder under the data `
+         + 'directory, so redbot will not delete it. Nothing has been removed.';
+  }
+  const other = known.find((a) => a.handle.toLowerCase() !== handle.toLowerCase()
+    && (a.profileDir ?? '').toLowerCase() === profileDir.toLowerCase());
+  if (other) {
+    return `${profileDir} is also ${other.handle}'s sign-in folder, so it will not be deleted. `
+         + 'Nothing has been removed.';
+  }
+  return null;
 }
 
 /**
@@ -615,7 +648,7 @@ export interface DeleteResult {
  * nothing until the caller sends them back.
  */
 export async function deleteConsoleAccount(body: {
-  handle?: unknown; confirm?: unknown;
+  handle?: unknown; confirm?: unknown; deleteProfile?: unknown;
 }): Promise<DeleteResult> {
   const handle = String(body.handle ?? '').trim();
   if (!HANDLE_RE.test(handle)) {
@@ -638,7 +671,32 @@ export async function deleteConsoleAccount(body: {
 
   const known = await knownAccounts();
   const current = known.find((a) => a.handle.toLowerCase() === handle.toLowerCase());
+  const deleteProfile = body.deleteProfile === true;
+
+  /* An account removed earlier left its folder kept (see rememberKeptFolder). Deleting it now is
+     the second half of that removal, and it needs no account record to exist. */
+  if (!current && deleteProfile) {
+    const kept = loadKept().find((k) => k.handle.toLowerCase() === handle.toLowerCase());
+    if (!kept) return { ok: false, error: `${handle} is not set up, and no sign-in folder is kept for it.` };
+    const refusal = profileDeleteRefusal(kept.handle, kept.profileDir, known);
+    if (refusal) return { ok: false, error: refusal };
+    try {
+      rmSync(deletableProfileDir(kept.profileDir)!, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+    } catch (e) {
+      return { ok: false, error: `The sign-in folder ${kept.profileDir} could not be deleted: ${
+        e instanceof Error ? e.message : String(e)}` };
+    }
+    forgetKeptFolder(kept.handle);
+    return { ok: true, handle: kept.handle, removedFrom: [], profileDirDeleted: kept.profileDir };
+  }
   if (!current) return { ok: false, error: `${handle} is not set up.` };
+
+  /* Refused BEFORE either store is written: a delete that removed the record and then could not
+     remove the folder would leave exactly the stranded session this option exists to clear. */
+  if (deleteProfile && current.profileDir) {
+    const refusal = profileDeleteRefusal(current.handle, current.profileDir, known);
+    if (refusal) return { ok: false, error: refusal };
+  }
 
   /**
    * A configured database is the only case where a seed-file-only delete would LIE.
@@ -698,6 +756,22 @@ export async function deleteConsoleAccount(body: {
   /* The kept folder gets an owner on record so re-adding this username can take it back. Written
      AFTER the stores, because a folder recorded as kept for an account that still exists would
      hand the same session to the next creation of that name. */
+  if (deleteProfile && current.profileDir) {
+    forgetAccounts();
+    try {
+      rmSync(deletableProfileDir(current.profileDir)!, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+    } catch (e) {
+      /* The record is gone and the folder is not: keep it on record so it can be re-adopted or
+         deleted again, rather than stranding it. */
+      rememberKeptFolder(current.handle, current.profileDir);
+      return { ok: false, handle: current.handle, removedFrom, profileDirKept: current.profileDir,
+        error: `${current.handle} was removed, but its sign-in folder ${current.profileDir} could not be deleted: ${
+          e instanceof Error ? e.message : String(e)}` };
+    }
+    forgetKeptFolder(current.handle);
+    return { ok: true, handle: current.handle, removedFrom, profileDirDeleted: current.profileDir };
+  }
+
   if (current.profileDir) rememberKeptFolder(current.handle, current.profileDir);
 
   forgetAccounts();

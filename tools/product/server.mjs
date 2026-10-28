@@ -3937,6 +3937,23 @@ const server = createServer((req, res) => {
         return send(r.ok ? 200 : 400, JSON.stringify(r));
       }
       if (url.pathname === '/api/account/remove') {
+        /* Deleting the sign-in folder under a running Chrome would leave it writing into a
+           half-deleted profile, so that browser is stopped first — and a stop that is refused
+           (it cannot be proven to be ours) refuses the delete, before anything is written. */
+        if (body.deleteProfile === true) {
+          const { accounts: all } = await consoleAccounts();
+          const acct = all.find((x) => x.handle.toLowerCase() === String(body.handle || '').toLowerCase());
+          if (acct) {
+            const [st] = await portStatusImpl([acct]);
+            if (st && st.state !== 'free' && st.port != null) {
+              const stopped = await stopBrowserImpl(acct);
+              if (!stopped.ok) {
+                return send(409, JSON.stringify({ ok: false,
+                  error: `${acct.handle}'s browser is still running and could not be stopped, so nothing was deleted: ${stopped.error}` }));
+              }
+            }
+          }
+        }
         const r = await deleteAccountImpl(body);
         return send(r.ok ? 200 : r.needsConfirm ? 409 : 400, JSON.stringify(r));
       }
