@@ -48,6 +48,7 @@
  */
 import { loadThreads, loadDrafts, saveDraft, loadHistory, loadAccountPersona } from '../store.js';
 import { currentAgeHours } from '../select.js';
+import { freshTier } from '../freshness.js';
 import { complete, extractJson } from '../llm.js';
 import { warmupPrompt } from '../prompts.js';
 import { bannedPhraseHits } from '../persona.js';
@@ -120,8 +121,10 @@ export function warmingCandidates(
       title: t.title
     }) }))
     .filter((r) => r.verdict.ok)
-    // youngest first: the whole point is being read before the thread is buried
-    .sort((a, b) => (a.age ?? 1e9) - (b.age ?? 1e9));
+    /* Fresh AND quiet first, then youngest: the whole point is being read before the thread is
+       buried, and youngest-only sent a 1h thread with 7 answers ahead of a 3h one with 1. Answer
+       count was ignored here — see src/freshness.ts for the 2026-10-28 measurement. */
+    .sort((a, b) => freshTier(a.t, now) - freshTier(b.t, now) || (a.age ?? 1e9) - (b.age ?? 1e9));
 }
 
 /** What one warmup run did: the CLI's exit code, and the draft it saved (null when none). */

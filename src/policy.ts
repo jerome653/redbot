@@ -313,6 +313,35 @@ export const policy = {
   warmingMaxAnswers: L(
     8, 'existing answers', 'declared',
     'past this the reply is one voice in a crowd and earns the account nothing'
+  ),
+
+  /* ---------------- freshness preference (ranking only) ---------------- */
+
+  /**
+   * Which eligible threads are tried FIRST. A preference, never a filter: these two numbers decide
+   * the order of the candidates that already passed every ceiling above, and a cycle with no fresh
+   * thread drafts the best stale one exactly as before. See src/freshness.ts.
+   *
+   * MEASURED 2026-10-28 on production: 44 comments published 21–27 Oct. Of the 38 with a later
+   * score check, 30 stayed at 1 (the automatic self-vote, which is not karma), 5 reached 2 and 3
+   * fell to 0 — fleet karma rose about +4 in the week. Most sat in big, busy r/webdev threads. The
+   * ceilings were holding (24h, 8 answers); what they hold is "not hopeless", and inside that band
+   * the pick went to the highest gap score, which saturates (7 of 14 at exactly 100, 2026-07-23)
+   * and says nothing about whether anyone will still be reading.
+   *
+   * 6h: inside the warming ceiling with room, and about where the r/WordPress `/new` floor sat
+   * (6.1h, 2026-07-27) — so on a slow subreddit the youngest post is at the line, on r/webdev well
+   * under it. 5 answers, not the ~15 first proposed: every candidate has already passed
+   * `warmingMaxAnswers` (8), so 15 would put every candidate in the fresh tier and change nothing.
+   * Both `declared`; the vote checks on the next week of comments are what would measure them.
+   */
+  freshThreadMaxAgeHours: L(
+    6, 'hours', 'declared',
+    'under this a thread is still being read; 30 of 38 late comments in busy threads stayed at the self-vote (2026-10-28)'
+  ),
+  freshThreadMaxAnswers: L(
+    5, 'existing answers', 'declared',
+    'a quiet thread puts our reply in view; must sit under warmingMaxAnswers (8) or it ranks nothing'
   )
 } as const;
 

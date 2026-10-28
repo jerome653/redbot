@@ -15,6 +15,7 @@ import { analyzeGap } from '../gap.js';
 import { assessOpportunity, MIN_OPPORTUNITY_SCORE } from '../opportunity.js';
 import { isQuestionShaped, PILOT_SUBREDDITS, allowedSubreddits, currentAgeHours } from '../select.js';
 import { policy } from '../policy.js';
+import { analysisOrder } from '../freshness.js';
 import { selectedAccount } from '../config.js';
 import { enabledSources } from '../sources.js';
 import { trace, timed } from '../trace.js';
@@ -228,7 +229,10 @@ export async function opportunity(opts?: { force?: boolean; limit?: number; only
   }
 
   const existing = new Map((await loadGaps()).map((g) => [g.threadId, g]));
-  const todo = (opts?.force ? keep : keep.filter((t) => !existing.has(t.id)))
+  /* Fresh, quiet threads take the analysis slots first — the limit is unchanged, only who gets a
+     slot. Collection order (collected_at DESC) let a batch of busy /hot rows fill all 15 while a
+     2h-old thread waited a cycle and aged. See src/freshness.ts. */
+  const todo = analysisOrder(opts?.force ? keep : keep.filter((t) => !existing.has(t.id)))
     .slice(0, opts?.limit ?? 15);
 
   if (!todo.length) {

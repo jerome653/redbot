@@ -33,6 +33,8 @@
  * (src/select.ts:236) made for thread age, applied to the verdict that age feeds.
  */
 import { assessOpportunity } from './opportunity.js';
+import { currentAgeHours } from './select.js';
+import { isFresh, freshTier, byAge } from './freshness.js';
 import type { Thread, GapAnalysis, OpportunityAssessment } from './types.js';
 
 export interface RankInput {
@@ -44,6 +46,8 @@ export interface RankInput {
   drafted: ReadonlySet<string>;
   /** `redbot draft <threadId>` — when given, only that thread is considered. */
   threadId?: string | undefined;
+  /** The clock the freshness order is read against. Injectable for the same reason as currentAgeHours. */
+  now?: number;
 }
 
 /**
@@ -58,7 +62,8 @@ export function rankCandidates(input: RankInput): OpportunityAssessment[] {
   const byThread = new Map(input.threads.map((t) => [t.id, t]));
   const gapByThread = new Map(input.gaps.map((g) => [g.threadId, g]));
 
-  const out: OpportunityAssessment[] = [];
+  const now = input.now ?? Date.now();
+  const out: Array<{ a: OpportunityAssessment; t: Thread }> = [];
   for (const stored of input.assessments) {
     if (input.threadId ? stored.threadId !== input.threadId : input.drafted.has(stored.threadId)) continue;
 
@@ -68,8 +73,24 @@ export function rankCandidates(input: RankInput): OpportunityAssessment[] {
 
     /* The stored score and verdict are discarded here, deliberately and completely. */
     const fresh = assessOpportunity(thread, gap);
-    if (fresh.verdict === 'contribute') out.push(fresh);
+    if (fresh.verdict !== 'contribute') continue;
+    if (isFresh(thread, now)) {
+      fresh.reasons.push(
+        `fresh: ${Math.round(currentAgeHours(thread, now) ?? 0)}h old with ${thread.commentCount} answer(s) — ` +
+        `ranked ahead of older or busier threads (src/freshness.ts)`
+      );
+    }
+    out.push({ a: fresh, t: thread });
   }
 
-  return out.sort((a, b) => b.score - a.score);
+  /**
+   * TIER, THEN SCORE, THEN AGE. The score still decides inside a tier, and the verdict is untouched,
+   * so nothing under the contribution floor is promoted — a fresh 45 is only ever chosen over a stale
+   * 100 that ALSO cleared the bar. Age breaks ties because the score saturates (7 of 14 at exactly
+   * 100, measured 2026-07-23), and among equals the younger thread has more readers left.
+   * MEASURED 2026-10-28: 30 of 38 checked comments stayed at the self-vote; see src/freshness.ts.
+   */
+  return out
+    .sort((x, y) => freshTier(x.t, now) - freshTier(y.t, now) || y.a.score - x.a.score || byAge(x.t, y.t, now))
+    .map((x) => x.a);
 }
