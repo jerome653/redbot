@@ -35,6 +35,15 @@ test('replyBackStep: a refused publish is reported as not published, so the turn
   assert.equal((await replyBackStep(stepDeps({ status: async () => 'pending' }))).published, false);
 });
 
+test('replyBackStep: an unconfirmed submit (failed) carries its status, so the turn writes no top-level comment beside it', async () => {
+  const r = await replyBackStep(stepDeps({ status: async () => 'failed' }));
+  assert.equal(r.published, false);
+  assert.equal(r.status, 'failed');
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../../src/commands/auto.ts', import.meta.url), 'utf8');
+  assert.match(src, /if \(back\.published \|\| back\.status === 'failed'\) \{/);
+});
+
 test('replyBackStep: off, no account, nothing waiting, a decline, or a throw — nothing published', async () => {
   const seen: string[] = [];
   assert.equal((await replyBackStep(stepDeps({ enabled: () => false }, seen))).ran, false);

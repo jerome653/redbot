@@ -289,7 +289,9 @@ async function work(account: AccountRecord | null): Promise<number> {
   const back = await replyBackStep();
 
   let written = 0;
-  if (back.published) {
+  /* A reply-back whose submit could not be confirmed is recorded publish.fail, which spacing does
+     not read — so a 'failed' one also ends the turn's posting: it may have landed. */
+  if (back.published || back.status === 'failed') {
     say.step('Answered a reply this turn — no new top-level comment (spacing would refuse it anyway).');
   } else {
     say.step('Working out which are worth answering…');
@@ -410,7 +412,7 @@ export async function replyBackStep(deps: ReplyBackStepDeps = {
   draft: replyBackDraft,
   publish: (id) => factCheckThenPublish(id),
   status: async (id) => (await loadDrafts()).find((d) => d.id === id)?.status ?? null
-}): Promise<{ ran: boolean; draftId: string | null; published: boolean; why: string }> {
+}): Promise<{ ran: boolean; draftId: string | null; published: boolean; status?: string | null; why: string }> {
   if (!deps.enabled()) return { ran: false, draftId: null, published: false, why: 'reply-back is off (REDBOT_AUTO_REPLY_BACK=0)' };
   const account = deps.account();
   if (!account) return { ran: false, draftId: null, published: false, why: 'no account selected' };
@@ -421,7 +423,8 @@ export async function replyBackStep(deps: ReplyBackStepDeps = {
     const d = await deps.draft(c, account);
     if (!d.draftId) return { ran: true, draftId: null, published: false, why: d.why };
     await deps.publish(d.draftId);
-    return { ran: true, draftId: d.draftId, published: (await deps.status(d.draftId)) === 'published', why: d.why };
+    const status = await deps.status(d.draftId);
+    return { ran: true, draftId: d.draftId, published: status === 'published', status, why: d.why };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     say.warn(`Reply-back step failed: ${msg}`);

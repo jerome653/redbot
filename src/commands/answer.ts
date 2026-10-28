@@ -46,7 +46,7 @@ export async function replyBackDraft(c: UnansweredReply, account: string): Promi
   const banned = bannedPhraseHits(body, persona);
   const why = [...lint.issues, ...warm.issues.map((i) => i.rule), ...banned.map((p) => `persona: "${p}"`)];
   if (!lint.ok || !warm.ok || banned.length) {
-    await record('gate.block', `reply-back refused before saving for ${c.parentThingId}`, { account, rules: why, replyBack: true });
+    await record('gate.block', `reply-back refused before saving for ${c.parentThingId}`, { account, rules: why, replyBack: true, parentThingId: c.parentThingId });
     return { draftId: null, why: `refused before saving: ${why.join(', ')}` };
   }
 

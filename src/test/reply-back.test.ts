@@ -120,6 +120,36 @@ test('a reply-back attempted or published in history is answered — an unknown 
   }
 });
 
+test('ONE draft per reply, ever: a reply-back draft in ANY state means the reply had its attempt', () => {
+  const interactions = [row('d1', 'alice', [reply('t1_a', 'x'), reply('t1_b', 'y')])];
+  for (const status of ['pending', 'rejected', 'failed', 'approved'] as const) {
+    const rb = pub(replyBackDraftId('t1_a', 'd1'), 'alice', { status });
+    const got = unansweredReplies({ ...base, drafts: [pub('d1', 'alice'), rb], interactions, history: [] });
+    assert.deepEqual(got.map((g) => g.parentThingId), ['t1_b'], status);
+  }
+});
+
+test('a declined or pre-save-refused reply-back is never drafted again', () => {
+  const interactions = [row('d1', 'alice', [reply('t1_a', 'x'), reply('t1_b', 'y')])];
+  for (const kind of ['draft.declined', 'gate.block'] as const) {
+    const h: HistoryEntry = { ts: ago(60), kind, account: 'alice', summary: 'reply-back refused', data: { replyBack: true, parentThingId: 't1_a' } };
+    const got = unansweredReplies({ ...base, drafts: [pub('d1', 'alice')], interactions, history: [h] });
+    assert.deepEqual(got.map((g) => g.parentThingId), ['t1_b'], kind);
+  }
+  const plain: HistoryEntry = { ts: ago(60), kind: 'gate.block', account: 'alice', summary: 'top-level', data: { parentThingId: 't1_a' } };
+  assert.deepEqual(unansweredReplies({ ...base, drafts: [pub('d1', 'alice')], interactions, history: [plain] }).map((g) => g.parentThingId), ['t1_a'], 'a non-reply-back row does not count');
+});
+
+test('reply.ts tags every reply-back publish row and passes the reply context to both gate runs', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../../src/commands/reply.ts', import.meta.url), 'utf8');
+  assert.match(src, /const backTag = back \? \{ replyBack: true, parentDraftId: back\.parentDraftId, parentThingId: back\.parentThingId \} : \{\};/);
+  assert.match(src, /record\('publish\.attempt', [^\n]*\n[^\n]*\.\.\.backTag/, 'the attempt row is tagged — without it an unknown outcome could be retried and double-post');
+  assert.match(src, /record\('publish\.ok', [^\n]*\n[^\n]*\.\.\.backTag/, 'the publish.ok row is tagged');
+  assert.match(src, /replyBack: await replyBackInput\(\)/, 'pre-gate gets the reply context');
+  assert.match(src, /replyBack: await replyBackInput\(live\)/, 'final gate gets the reply context with the live re-read');
+});
+
 test('at most one reply-back per comment thread per day', () => {
   const interactions = [row('d1', 'alice', [reply('t1_a', 'x'), reply('t1_b', 'y')]), row('d2', 'alice', [reply('t1_c', 'z')])];
   const drafts = [pub('d1', 'alice'), pub('d2', 'alice')];
