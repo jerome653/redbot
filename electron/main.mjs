@@ -844,8 +844,23 @@ async function boot() {
 export const SERVICE_LOCK_RETRY_MS = 15_000;
 export const WAITING_FOR_LOCK = Object.freeze({ redbotService: 'waiting-for-lock' });
 
-export function isServiceRun(env = process.env) {
-  return Boolean(env.INVOCATION_ID) || env.REDBOT_SERVICE === '1';
+/**
+ * INVOCATION_ID ALONE IS NOT A SERVICE. Measured on cardinal, 29 Oct 03:28 UTC: the operator's VNC
+ * desktop is itself a systemd unit (tigervncserver@:5), so every app launched from it inherits
+ * INVOCATION_ID. Four double-clicks on the icon each waited silently for the lock instead of
+ * quitting, and knocked with WAITING_FOR_LOCK, so the holder never brought its window up. When
+ * /proc/self/cgroup is readable it decides: a unit runs in a `.service`, a desktop launch in a
+ * session `.scope`. Where it is not (Windows), INVOCATION_ID is trusted as before.
+ */
+export function readOwnCgroup() {
+  try { return readFileSync('/proc/self/cgroup', 'utf8'); } catch { return null; }
+}
+
+export function isServiceRun(env = process.env, cgroup = readOwnCgroup()) {
+  if (env.REDBOT_SERVICE === '1') return true;
+  if (!env.INVOCATION_ID) return false;
+  if (cgroup == null) return true;
+  return cgroup.trim().split('\n').some((line) => line.trimEnd().endsWith('.service'));
 }
 
 /**
@@ -853,10 +868,10 @@ export function isServiceRun(env = process.env) {
  * (a service polling the lock; onWon runs once when it is obtained).
  */
 export function claimInstance({
-  app: a = app, env = process.env, onWon, log = boot_log,
+  app: a = app, env = process.env, cgroup = readOwnCgroup(), onWon, log = boot_log,
   retryMs = SERVICE_LOCK_RETRY_MS, setInterval: every = setInterval, clearInterval: stop = clearInterval
 } = {}) {
-  const service = isServiceRun(env);
+  const service = isServiceRun(env, cgroup);
   const ask = () => (service ? a.requestSingleInstanceLock(WAITING_FOR_LOCK) : a.requestSingleInstanceLock());
   if (ask()) { onWon(); return 'won'; }
   if (!service) { a.quit(); return 'quit'; }
@@ -876,7 +891,11 @@ export function claimInstance({
 /** The holder's answer to another launch: bring the window up — unless it is a service waiting. */
 export function focusOnSecondInstance(w, additionalData) {
   if (additionalData && additionalData.redbotService === WAITING_FOR_LOCK.redbotService) return;
-  if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
+  if (!w) return;
+  if (w.isMinimized()) w.restore();
+  /* A hidden window is not minimised: on cardinal it sat unmapped and restore() alone did nothing. */
+  if (typeof w.isVisible === 'function' && !w.isVisible()) w.show();
+  w.focus();
 }
 
 /** Everything the lock holder wires. Runs exactly once, and only after the lock is ours. */
