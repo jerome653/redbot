@@ -470,11 +470,35 @@ function fakeLockApp(answers) {
 }
 
 test('a service run is INVOCATION_ID (systemd) or REDBOT_SERVICE=1, nothing else', () => {
-  assert.equal(isServiceRun({ INVOCATION_ID: 'abc123' }), true);
-  assert.equal(isServiceRun({ REDBOT_SERVICE: '1' }), true);
-  assert.equal(isServiceRun({}), false);
-  assert.equal(isServiceRun({ REDBOT_SERVICE: '0' }), false);
-  assert.equal(isServiceRun({ INVOCATION_ID: '' }), false);
+  assert.equal(isServiceRun({ INVOCATION_ID: 'abc123' }, null), true);
+  assert.equal(isServiceRun({ INVOCATION_ID: 'abc123' }, '0::/system.slice/redbot.service\n'), true);
+  assert.equal(isServiceRun({ REDBOT_SERVICE: '1' }, '0::/user.slice/user-1004.slice/session-c2.scope\n'), true);
+  assert.equal(isServiceRun({}, null), false);
+  assert.equal(isServiceRun({ REDBOT_SERVICE: '0' }, null), false);
+  assert.equal(isServiceRun({ INVOCATION_ID: '' }, null), false);
+});
+
+/*
+ * Measured on cardinal, 29 Oct 03:28-03:32 UTC: the operator's VNC desktop on :5 is itself started
+ * by systemd (tigervncserver@:5), so every app launched from it inherits INVOCATION_ID. Four
+ * double-clicks on the desktop icon each took the SERVICE path - waited silently for the lock and
+ * knocked with WAITING_FOR_LOCK, which the holder ignores - so the console never came forward.
+ * The cgroup is the truth: a desktop launch lives in a session .scope, a unit in a .service.
+ */
+test('THE 29 OCT INCIDENT: INVOCATION_ID inherited by a desktop session is NOT a service', () => {
+  const env = { INVOCATION_ID: '68e3' };
+  assert.equal(isServiceRun(env, '0::/user.slice/user-1004.slice/session-c2.scope\n'), false);
+  assert.equal(isServiceRun(env, '0::/user.slice/user-1004.slice/user@1004.service/app.slice/app-xfce4-redbot.scope\n'), false);
+  assert.equal(isServiceRun(env, '0::/user.slice/user-1004.slice/user@1004.service/app.slice/redbot.service\n'), true);
+
+  const { app, calls, timers, clock } = fakeLockApp([false]);
+  const result = claimInstance({
+    app, env, cgroup: '0::/user.slice/user-1004.slice/session-c2.scope\n', onWon() {}, log() {}, ...clock
+  });
+  assert.equal(result, 'quit', 'a desktop launch quits so the holder brings its own window up');
+  assert.equal(calls.quit, 1);
+  assert.deepEqual(calls.lock, [undefined], 'it knocks WITHOUT the waiting marker, so the holder focuses');
+  assert.equal(timers.fns.length, 0);
 });
 
 test('THE INCIDENT: under systemd a held lock is waited for, then boot runs — never quit', () => {
@@ -558,4 +582,17 @@ test('the holder ignores a waiting service knocking, and still focuses for a per
   assert.equal(w.restored, 1);
   assert.equal(w.focused, 1, 'a double-click on the icon still brings the window up');
   focusOnSecondInstance(null, undefined); /* no window yet: nothing to do, nothing thrown */
+});
+
+test('a person launching again also gets a HIDDEN window back, not only a minimised one', () => {
+  const w = {
+    visible: false, shown: 0, focused: 0,
+    isMinimized() { return false; }, restore() {}, isVisible() { return this.visible; },
+    show() { this.shown++; this.visible = true; }, focus() { this.focused++; }
+  };
+  focusOnSecondInstance(w, undefined);
+  assert.equal(w.shown, 1, 'an unmapped console window must be shown, or the double-click does nothing');
+  assert.equal(w.focused, 1);
+  focusOnSecondInstance(w, WAITING_FOR_LOCK);
+  assert.equal(w.shown, 1, 'a waiting service still never pulls it forward');
 });
