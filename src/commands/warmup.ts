@@ -138,7 +138,7 @@ export function warmingCandidates(
  * refused. A failed read falls back to the seed: the publish gate still refuses, this only saves a
  * model call.
  */
-async function warmupFlooredSubs(): Promise<ReadonlySet<string>> {
+export async function warmupFlooredSubs(): Promise<ReadonlySet<string>> {
   try {
     const dynamic = flooredSubsFromRemovals(
       await removalPermalinksSince(getPool(), new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString()),

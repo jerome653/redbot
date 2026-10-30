@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { ROOT, DATA, config, claudeConfigDir, OperatorAuthError, loadAccounts } from '../config.js';
 import { isBrowserUp } from '../browser.js';
 import { policy, limitsByProvenance } from '../policy.js';
-import { KARMA_FLOOR_SUBS } from '../autopublish.js';
+import { warmupFlooredSubs } from './warmup.js';
 import { assessFleetWarming } from '../fleet-warming.js';
 import { loadDrafts, loadThreads, loadGaps, loadAssessments } from '../store.js';
 import { loadObservations } from '../health.js';
@@ -420,7 +420,7 @@ export async function doctor(): Promise<number> {
     const fw = assessFleetWarming({
       accounts: loadAccounts(),
       observations,
-      floorSubs: KARMA_FLOOR_SUBS,
+      floorSubs: await warmupFlooredSubs(),
       cautionKarmaBelow: policy.cautionKarmaBelow.value,
     });
     add('fleet warming', fw.status, fw.detail);
