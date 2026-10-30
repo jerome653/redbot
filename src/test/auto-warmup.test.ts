@@ -231,3 +231,14 @@ test("REDDIT: a subreddit floored from observed removals refuses for any account
   assert.equal(floored.publish, false);
   assert.match(floored.why, /karma 10/);
 });
+
+/* RB-11, measured 2026-10-30: removals floored r/webdev, r/seo and r/webhosting fleet-wide
+   (src/removal-floor.ts via src/commands/reply.ts), but warmup filtered only the static seed, so it
+   kept drafting for subs the unattended publish then refused. */
+test('under the floor, a sub floored by removals is skipped for warmup like the static seed', () => {
+  const ts = [thread('a', 'webdev', 10), thread('b', 'SEO', 20), thread('c', 'cms', 30), thread('d', 'wordpress', 5)];
+  const floored = new Set(['wordpress', 'webdev', 'seo']);
+  assert.deepEqual(warmingCandidates(ts, new Set(), NOW, 1, floored).map((r) => r.t.id), ['c']);
+  assert.deepEqual(warmingCandidates(ts, new Set(), NOW, 10, floored).map((r) => r.t.id), ['d', 'a', 'b', 'c'],
+    'at the karma floor the removal floor no longer applies, exactly as the publish gate');
+});
