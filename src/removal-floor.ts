@@ -28,7 +28,13 @@ export function flooredSubsFromRemovals(
   thresholdCount: number
 ): Set<string> {
   const counts = new Map<string, number>();
+  /* One comment seen removed at two checkpoints (24h, 7d) is one removal: count each permalink once. */
+  const seen = new Set<string>();
   for (const r of removals) {
+    if (r.permalink) {
+      if (seen.has(r.permalink)) continue;
+      seen.add(r.permalink);
+    }
     const sub = subredditOfPermalink(r.permalink);
     if (sub) counts.set(sub, (counts.get(sub) ?? 0) + 1);
   }

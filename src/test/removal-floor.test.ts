@@ -33,3 +33,11 @@ test("an empty removal history floors nothing", () => {
 test("threshold 1 floors any sub with a single removal", () => {
   assert.deepEqual([...flooredSubsFromRemovals([rm("/r/onlyonce/c/1/")], 1)], ["onlyonce"]);
 });
+
+/* One comment observed at two checkpoints (24h, then 7d) is one removal, not two. Measured on
+   cardinal 2026-10-30: evanwebtalk r/webdev 1xeaekz has rows 398 (24h) and 774 (7d). */
+test("one comment seen removed at two checkpoints counts once toward the floor", () => {
+  const p = "/r/webdev/comments/1xeaekz/comment/19rldrjaqk51h/";
+  assert.equal(flooredSubsFromRemovals([rm(p), rm(p)], 2).size, 0);
+  assert.deepEqual([...flooredSubsFromRemovals([rm(p), rm(p), rm("/r/webdev/comments/2/b/")], 2)], ["webdev"]);
+});
