@@ -111,6 +111,22 @@ export function subredditFromPermalink(permalink: string | null | undefined): st
   return m?.[1] ?? null;
 }
 
+/**
+ * The history COLUMNS a landed reply fills — src/log.ts record() lifts exactly these keys out of
+ * `data`. Without them all 60 `publish.ok` rows since 2026-10-01 on cardinal had a null subreddit
+ * and permalink, while the `publish.attempt` row before each one carried the thread.
+ */
+export function publishOkColumns(
+  threadPermalink: string,
+  result: { url?: string | null; commentPermalink?: string | null }
+): { subreddit: string | null; threadUrl: string; permalink: string | null } {
+  return {
+    subreddit: subredditFromPermalink(threadPermalink),
+    threadUrl: threadPermalink,
+    permalink: result.commentPermalink ?? result.url ?? null
+  };
+}
+
 const SIGNED_OUT_STATE: Record<string, CommentState> = {
   'reply-visible-signed-out': 'visible',
   'reply-absent-signed-out': 'removed'
