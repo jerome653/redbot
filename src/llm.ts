@@ -18,12 +18,48 @@
  * there are two functions below and not one with a swapped base URL.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { delimiter as pathDelimiter, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
-import { config, anthropicKey, deepseekKey, claudeConfigDir, operatorRecord, type LlmProvider } from './config.js';
+import { config, paths, anthropicKey, deepseekKey, claudeConfigDir, operatorRecord, type LlmProvider } from './config.js';
 import { say } from './log.js';
+
+/**
+ * A DeepSeek 402, remembered ACROSS PROCESSES.
+ *
+ * MEASURED 2026-10-29 on cardinal: 100 `kind='error'` history rows in 4h47m, every one the same
+ * 402. Each tick is its own `dist/cli.js` process, so an in-memory flag would have stopped none
+ * of them. The latch is a file in the data directory: written on a 402, honoured for
+ * BALANCE_LATCH_MS, removed by the first call that succeeds after it expires.
+ *
+ * FAILS OPEN on an unreadable file, for the same reason `onlyProvider()` does: junk here must not
+ * refuse every call with no obvious cause.
+ */
+export const BALANCE_LATCH_MS = 30 * 60_000;
+const balanceLatchFile = () => pathJoin(paths.data, 'llm-balance-402.json');
+
+export function balanceLatch(now = Date.now()): { at: string; provider: string; until: string } | null {
+  try {
+    const raw = JSON.parse(readFileSync(balanceLatchFile(), 'utf8')) as { at?: unknown; provider?: unknown };
+    const at = typeof raw.at === 'string' ? Date.parse(raw.at) : NaN;
+    if (!Number.isFinite(at) || now - at >= BALANCE_LATCH_MS) return null;
+    return { at: raw.at as string, provider: String(raw.provider ?? ''), until: new Date(at + BALANCE_LATCH_MS).toISOString() };
+  } catch {
+    return null;
+  }
+}
+
+function setBalanceLatch(provider: LlmProvider): void {
+  try {
+    mkdirSync(paths.data, { recursive: true });
+    writeFileSync(balanceLatchFile(), JSON.stringify({ at: new Date().toISOString(), provider }));
+  } catch { /* a latch that cannot be written costs one more 402, nothing else */ }
+}
+
+export function clearBalanceLatch(): void {
+  try { rmSync(balanceLatchFile(), { force: true }); } catch { /* nothing to clear */ }
+}
 
 /** One announcement per process for a declared credential location. */
 let announcedOperator = false;
@@ -547,7 +583,24 @@ export async function complete(opts: CompleteOpts): Promise<string> {
    * not reproducible on the one new path where the value IS honoured.
    */
   if (config.llm.provider === 'api') return completeViaApi(opts);
-  if (config.llm.provider === 'deepseek') return completeViaDeepseek(opts);
+  if (config.llm.provider === 'deepseek') {
+    const latch = balanceLatch();
+    if (latch) {
+      throw new LlmError(
+        `Not run: LLM balance — DeepSeek answered HTTP 402 (insufficient balance) at ${latch.at}; ` +
+        `no call is made until ${latch.until}. Top the account up, or switch the provider.`,
+        402
+      );
+    }
+    try {
+      const out = await completeViaDeepseek(opts);
+      clearBalanceLatch();
+      return out;
+    } catch (e) {
+      if (e instanceof LlmError && e.status === 402) setBalanceLatch('deepseek');
+      throw e;
+    }
+  }
   return completeViaCli(opts);
 }
 

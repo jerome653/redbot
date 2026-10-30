@@ -28,7 +28,7 @@ process.env.REDBOT_LLM = 'deepseek';
 process.env.DEEPSEEK_API_KEY = 'sk-test-not-a-real-key';
 delete process.env.REDBOT_OPERATOR;
 
-const { complete } = await import('../llm.js');
+const { complete, clearBalanceLatch } = await import('../llm.js');
 const { config } = await import('../config.js');
 
 /** One recorded request, plus the canned answer the stub gave back. */
@@ -270,7 +270,7 @@ test('402 insufficient balance is terminal, and says so', async () => {
       (e: Error) => /insufficient balance/i.test(e.message) && /402/.test(e.message)
     );
     assert.equal(calls.length, 1, '402 must not be retried');
-  } finally { restore(); }
+  } finally { restore(); clearBalanceLatch(); }
 });
 
 test('401 names the key, and is not retried', async () => {

@@ -4417,6 +4417,16 @@ const server = createServer((req, res) => {
             recordedAt: data ? (data.recordedAt ?? null) : null
           })) problems.push(p);
 
+          /* The model provider refused for lack of funds. Every tick until the latch expires skips
+             generation, so the loop runs and writes rows while producing nothing — say why. */
+          const balance = llmApi && typeof llmApi.balanceLatch === 'function' ? llmApi.balanceLatch() : null;
+          if (balance) {
+            problems.push(
+              `LLM balance: ${balance.provider} answered HTTP 402 (insufficient balance) at ${balance.at}; `
+              + `no generation until it is topped up (next try after ${balance.until})`
+            );
+          }
+
           /* An account with no persona drafts in the shared default voice, and two accounts on one
              voice read as one writer. Both are stated; neither is inferred from silence. */
           let voices = null;
@@ -4443,6 +4453,7 @@ const server = createServer((req, res) => {
             auto,
             data,
             voices,
+            llmBalance: balance,
             healthy: problems.length === 0
           }));
         });
