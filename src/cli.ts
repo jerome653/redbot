@@ -39,7 +39,7 @@ import {
 } from './commands/status.js';
 import { say } from './log.js';
 import { provision, describeProvision } from './provision.js';
-import { beginRunLog, endRunLog } from './run-log.js';
+import { beginRunLog, captureCrashes, endRunLog } from './run-log.js';
 import { pathToFileURL } from 'node:url';
 
 const USAGE = `
@@ -492,6 +492,7 @@ if (invokedDirectly) {
      before main() so the run's first line is captured, and closed on both exits so a failed run
      is as readable as a successful one. */
   beginRunLog(process.argv.slice(2));
+  captureCrashes();
   main()
     .then((code) => { endRunLog(code); process.exit(code); })
     .catch((e) => {
