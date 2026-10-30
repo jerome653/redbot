@@ -229,3 +229,28 @@ export function endRunLog(code: number): void {
   } catch { /* the run is over; a broken log must not change its outcome */ }
   live = null;
 }
+
+/**
+ * Footer for a run that dies on an uncaught exception or an unhandled rejection.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY. Node prints a fatal exception straight to file descriptor 2, NOT through
+ * `process.stderr.write`, so `tee` never sees it, and the `.then`/`.catch` in src/cli.ts that
+ * write the footer never run. Measured on cardinal: 2026-10-26T19-47-11 (`redbot reply`) and
+ * 2026-10-29T20-02-23 (`redbot read r/CMS`) both end on a sub-command header with no footer and no
+ * error text, and the second one's `rotation.tick` row reads `code: 1`. The cause of both is gone.
+ *
+ * Written through `process.stderr.write` so the stack lands in the run log AND on the terminal,
+ * then the footer, then the exit — the same code Node would have exited with.
+ * ---------------------------------------------------------------------------
+ */
+export function captureCrashes(exit: (code: number) => void = (c) => process.exit(c)): void {
+  process.on('uncaughtException', (err, origin) => {
+    try {
+      const text = err instanceof Error ? (err.stack ?? `${err.name}: ${err.message}`) : String(err);
+      process.stderr.write(`\n  ✗  crashed (${origin}): ${text}\n`);
+    } catch { /* the footer and the exit still happen */ }
+    endRunLog(1);
+    exit(1);
+  });
+}
