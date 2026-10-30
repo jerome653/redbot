@@ -60,6 +60,9 @@ import {
   isWarmingTarget, checkWarmingPace, checkWarmingComment, WARMUP_DRAFT_PREFIX
 } from '../warming.js';
 import { KARMA_FLOOR_SUBS } from '../autopublish.js';
+import { flooredSubsFromRemovals } from '../removal-floor.js';
+import { removalPermalinksSince } from '../db/summary.js';
+import { getPool } from '../db.js';
 import { counters } from '../health.js';
 import { assessQuality } from '../quality.js';
 import type { Draft, Thread } from '../types.js';
@@ -103,17 +106,18 @@ async function minutesSinceLastPublish(account: string): Promise<number | null> 
 /**
  * The threads worth a warming comment, youngest first.
  *
- * Under the karma floor the KARMA_FLOOR_SUBS (r/wordpress) are skipped: a karma-1 comment there is
+ * Under the karma floor the floored subs (KARMA_FLOOR_SUBS plus any floored by removals) are skipped: a karma-1 comment there is
  * filtered by the subreddit, and the unattended publish refuses it anyway (src/autopublish.ts
  * redditPlacement) — so drafting one spends a model call on a comment that cannot be seen.
  */
 export function warmingCandidates(
-  threads: Thread[], drafted: ReadonlySet<string>, now: number, karma: number | null
+  threads: Thread[], drafted: ReadonlySet<string>, now: number, karma: number | null,
+  flooredSubs: ReadonlySet<string> = KARMA_FLOOR_SUBS
 ): Array<{ t: Thread; age: number | null; verdict: { ok: boolean; why: string } }> {
   const underFloor = !(typeof karma === 'number' && karma >= policy.cautionKarmaBelow.value);
   return threads
     .filter((t) => !drafted.has(t.id))
-    .filter((t) => !(underFloor && KARMA_FLOOR_SUBS.has(t.subreddit.toLowerCase())))
+    .filter((t) => !(underFloor && flooredSubs.has(t.subreddit.toLowerCase())))
     .map((t) => ({ t, age: currentAgeHours(t, now), verdict: isWarmingTarget({
       ageHours: currentAgeHours(t, now),
       commentCount: t.commentCount,
@@ -125,6 +129,25 @@ export function warmingCandidates(
        buried, and youngest-only sent a 1h thread with 7 answers ahead of a 3h one with 1. Answer
        count was ignored here — see src/freshness.ts for the 2026-10-28 measurement. */
     .sort((a, b) => freshTier(a.t, now) - freshTier(b.t, now) || (a.age ?? 1e9) - (b.age ?? 1e9));
+}
+
+/**
+ * The subs an under-floor account may not post to unattended: the static seed plus every sub the
+ * fleet's removals have floored, read the same way src/commands/reply.ts reads them for the publish
+ * gate (30 days, policy.subRemovalFloorCount). Without this, warmup drafted for subs the publish then
+ * refused. A failed read falls back to the seed: the publish gate still refuses, this only saves a
+ * model call.
+ */
+async function warmupFlooredSubs(): Promise<ReadonlySet<string>> {
+  try {
+    const dynamic = flooredSubsFromRemovals(
+      await removalPermalinksSince(getPool(), new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString()),
+      policy.subRemovalFloorCount.value
+    );
+    return new Set([...KARMA_FLOOR_SUBS, ...dynamic]);
+  } catch {
+    return KARMA_FLOOR_SUBS;
+  }
 }
 
 /** What one warmup run did: the CLI's exit code, and the draft it saved (null when none). */
@@ -165,7 +188,7 @@ export async function warmupDraft(opts?: { dry?: boolean }): Promise<WarmupResul
 
   /* ---------- 2. which threads are worth a comment ---------- */
   const drafted = new Set((await loadDrafts()).map((d) => d.threadId));
-  const candidates = warmingCandidates(await loadThreads(), drafted, Date.now(), c.karma);
+  const candidates = warmingCandidates(await loadThreads(), drafted, Date.now(), c.karma, await warmupFlooredSubs());
 
   say.step(`Targets : ${candidates.length} thread(s) inside the warming window`);
   if (!candidates.length) {
