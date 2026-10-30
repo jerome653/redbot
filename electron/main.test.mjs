@@ -501,12 +501,17 @@ test('THE 29 OCT INCIDENT: INVOCATION_ID inherited by a desktop session is NOT a
   assert.equal(timers.fns.length, 0);
 });
 
+/* A service run, pinned. claimInstance reads /proc/self/cgroup when none is passed, so a test that
+   leaves it out passes under a .service or on Windows and FAILS from an SSH or desktop session
+   (a .scope) — measured on cardinal 2026-10-30, both tests below failed 'quit' !== 'waiting'. */
+const SERVICE_CGROUP = '0::/system.slice/redbot.service\n';
+
 test('THE INCIDENT: under systemd a held lock is waited for, then boot runs — never quit', () => {
   const { app, calls, timers, clock } = fakeLockApp([false, false, false, true]);
   const said = [];
   let won = 0;
   const result = claimInstance({
-    app, env: { INVOCATION_ID: 'x' }, onWon: () => { won++; }, log: (l) => said.push(l), ...clock
+    app, env: { INVOCATION_ID: 'x' }, cgroup: SERVICE_CGROUP, onWon: () => { won++; }, log: (l) => said.push(l), ...clock
   });
   assert.equal(result, 'waiting');
   assert.equal(calls.quit, 0, 'a service that quits on a held lock is what burned the start limit');
@@ -563,7 +568,7 @@ test('with the lock free, boot is wired at once, by service or by hand', () => {
 
 test('after a wait, the app wiring happens exactly once', () => {
   const { app, calls, clock } = fakeLockApp([false, true]);
-  claimInstance({ app, env: { INVOCATION_ID: 'x' }, onWon: () => wireInstance(app), log() {}, ...clock });
+  claimInstance({ app, env: { INVOCATION_ID: 'x' }, cgroup: SERVICE_CGROUP, onWon: () => wireInstance(app), log() {}, ...clock });
   assert.equal(calls.on.length, 0, 'nothing is wired while another copy owns the app');
   assert.equal(calls.whenReady, 0);
   clock.tick(); clock.tick();
