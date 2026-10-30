@@ -314,6 +314,11 @@ export async function counters(
     (x) => x.kind === 'reply-marked-removed' || x.kind === 'reply-absent-signed-in'
   );
   const absentOut = o.filter((x) => x.kind === 'reply-absent-signed-out');
+  /* A removed comment is observed again at each checkpoint (24h, then 7d) and may be both marked
+     removed and absent signed-in. The stop counts comments, not looks: one permalink is one
+     removal. A row with no permalink cannot be matched to another, so it still counts alone. */
+  const distinctComments = (xs: typeof removals) =>
+    new Set(xs.map((x, i) => x.permalink ?? `row:${i}`)).size;
 
   const latest = (kind: ObservationKind) =>
     [...o].reverse().find((x) => x.kind === kind) ?? null;
@@ -334,7 +339,7 @@ export async function counters(
     avgDwellMs: avg(dwells),
     rateLimitHits24h: rateLimits.filter((e) => within(e.ts, DAY_MS)).length,
     loginFailures24h: loginFails.filter((e) => within(e.ts, DAY_MS)).length,
-    removalsObserved30d: removals.filter((x) => within(x.ts, 30 * DAY_MS)).length,
+    removalsObserved30d: distinctComments(removals.filter((x) => within(x.ts, 30 * DAY_MS))),
     absentSignedOut30d: absentOut.filter((x) => within(x.ts, 30 * DAY_MS)).length,
     suspensionNotices: o.filter((x) => x.kind === 'account-suspended-notice').length,
     accountAgeDays: Number.isFinite(createdMs)

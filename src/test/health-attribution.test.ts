@@ -135,3 +135,17 @@ test('a removal filed under Reddit\'s spelling of the name still reaches the con
   assert.equal(c.removalsObserved30d, 2, 'Reddit usernames are case-insensitive; the stop must not miss a recased name');
   assert.equal(assess(c, NOW).mayPublish, false);
 });
+
+test('one comment seen removed at the 24h and the 7d checkpoint is ONE removal, not two', async () => {
+  const NOW = new Date('2026-10-30T00:00:00.000Z');
+  const at = (h: number) => new Date(NOW.getTime() - h * 60 * 60_000).toISOString();
+  const permalink = '/r/webdev/comments/1xeaekz/comment/19rldrjaqk51h/';
+  const observations = [
+    { ts: at(100), account: 'evanwebtalk', kind: 'reply-marked-removed', vector: 'signed-in', permalink, checkpoint: '24h', value: 'Comment removed by moderator' },
+    { ts: at(30), account: 'evanwebtalk', kind: 'reply-marked-removed', vector: 'signed-in', permalink, checkpoint: '7d', value: 'Comment removed by moderator' },
+    { ts: at(30), account: 'evanwebtalk', kind: 'reply-absent-signed-in', vector: 'signed-in', permalink, checkpoint: '7d', value: true }
+  ] as never[];
+  const c = await counters('evanwebtalk', NOW, { history: [], observations }, undefined, 1);
+  assert.equal(c.removalsObserved30d, 1, 'the stop counts comments removed, not times we looked');
+  assert.ok(!assess(c, NOW).reasons.some((r) => /removals observed in 30 days/.test(r)), JSON.stringify(assess(c, NOW).reasons));
+});
