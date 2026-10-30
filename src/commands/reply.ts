@@ -44,6 +44,7 @@ import { getPool } from '../db.js';
 import { policy } from '../policy.js';
 import { flooredSubsFromRemovals } from '../removal-floor.js';
 import { removalPermalinksSince } from '../db/summary.js';
+import { publishOkColumns } from '../outcomes.js';
 import { health } from '../health.js';
 import { viewThread } from '../behavior.js';
 import { makeRng, sessionSeed } from '../rand.js';
@@ -663,7 +664,8 @@ export async function reply(
         say.warn('Reddit did not expose a comment permalink on the node — checkpoints will match on text instead.');
       }
       await record('publish.ok', `published ${target.id}`, {
-        draftId: target.id, url: result.url, commentPermalink: result.commentPermalink, commentId: result.commentId, ...warmTag, ...backTag
+        draftId: target.id, url: result.url, commentPermalink: result.commentPermalink, commentId: result.commentId, ...warmTag, ...backTag,
+        ...publishOkColumns(target.permalink, result)
       });
 
       /**
