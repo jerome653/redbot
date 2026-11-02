@@ -82,6 +82,13 @@ export interface HealthCounters {
   loginFailures24h: number;
   /** Observed, never inferred. */
   removalsObserved30d: number;
+  /**
+   * How many DIFFERENT subreddits those removed comments were in (Jerome, 2 Nov 2026, option C).
+   * The stop fires on this, not on the comment count: two removals in one sub is that sub
+   * removing us, which the subreddit floor (src/removal-floor.ts) already handles for the fleet.
+   * A removal with no permalink cannot be placed, so it counts as a subreddit of its own.
+   */
+  removalSubreddits30d: number;
   absentSignedOut30d: number;
   suspensionNotices: number;
   accountAgeDays: number | null;
@@ -319,6 +326,8 @@ export async function counters(
      removal. A row with no permalink cannot be matched to another, so it still counts alone. */
   const distinctComments = (xs: typeof removals) =>
     new Set(xs.map((x, i) => x.permalink ?? `row:${i}`)).size;
+  const distinctSubreddits = (xs: typeof removals) =>
+    new Set(xs.map((x, i) => /\/r\/([^/]+)\//i.exec(x.permalink ?? '')?.[1]?.toLowerCase() ?? `row:${i}`)).size;
 
   const latest = (kind: ObservationKind) =>
     [...o].reverse().find((x) => x.kind === kind) ?? null;
@@ -340,6 +349,7 @@ export async function counters(
     rateLimitHits24h: rateLimits.filter((e) => within(e.ts, DAY_MS)).length,
     loginFailures24h: loginFails.filter((e) => within(e.ts, DAY_MS)).length,
     removalsObserved30d: distinctComments(removals.filter((x) => within(x.ts, 30 * DAY_MS))),
+    removalSubreddits30d: distinctSubreddits(removals.filter((x) => within(x.ts, 30 * DAY_MS))),
     absentSignedOut30d: absentOut.filter((x) => within(x.ts, 30 * DAY_MS)).length,
     suspensionNotices: o.filter((x) => x.kind === 'account-suspended-notice').length,
     accountAgeDays: Number.isFinite(createdMs)
@@ -375,10 +385,10 @@ export function assess(c: HealthCounters, now: Date = new Date()): HealthVerdict
       `Replacing the account from this machine would be ban evasion.`
     );
   }
-  if (c.removalsObserved30d >= policy.removalsBeforeStop.value) {
+  if (c.removalSubreddits30d >= policy.removalsBeforeStop.value) {
     stop.push(
-      `${c.removalsObserved30d} removals observed in 30 days (threshold ${policy.removalsBeforeStop.value}) — ` +
-      `that is a pattern, not noise`
+      `${c.removalsObserved30d} removals observed in 30 days across ${c.removalSubreddits30d} subreddits ` +
+      `(threshold ${policy.removalsBeforeStop.value} subreddits) — that is a pattern, not noise`
     );
   }
   if (c.loginFailures24h >= policy.loginFailuresBeforeStop.value) {

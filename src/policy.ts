@@ -171,7 +171,7 @@ export const policy = {
     24 * 60 * 60_000, 'ms', 'declared',
     'one observed removal stops posting for a day so a person can look at why'
   ),
-  removalsBeforeStop: L(2, 'observed removals', 'declared', 'two removals is a pattern, not noise — stop and reassess'),
+  removalsBeforeStop: L(2, 'subreddits with an observed removal', 'declared', 'removals in two different subs is the account, not one sub — stop and reassess (Jerome, 2 Nov 2026, option C)'),
   subRemovalFloorCount: L(2, 'observed removals in one subreddit (fleet-wide)', 'declared', 'two removals in one sub is the sub removing us, not one bad comment — floor it for every account'),
   loginFailuresBeforeStop: L(2, 'failures', 'declared', 'repeated auth failure may be a suspension; stop rather than probe'),
 
