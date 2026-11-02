@@ -65,7 +65,7 @@ const COUNTERS: HealthCounters = {
   readsToday: 0, searchesToday: 0, repliesToday: 0,
   avgSessionMs: null, avgDwellMs: null,
   rateLimitHits24h: 0, loginFailures24h: 0,
-  removalsObserved30d: 0, absentSignedOut30d: 0, suspensionNotices: 0,
+  removalsObserved30d: 0, removalSubreddits30d: 0, absentSignedOut30d: 0, suspensionNotices: 0,
   accountAgeDays: 400, karma: 500,
   lastReplyAt: null, lastRateLimitAt: null, lastRemovalAt: null,
   /* Split out of lastRateLimitAt 2026-09-27: a 429 while COLLECTING no longer cools the account

@@ -149,3 +149,41 @@ test('one comment seen removed at the 24h and the 7d checkpoint is ONE removal, 
   assert.equal(c.removalsObserved30d, 1, 'the stop counts comments removed, not times we looked');
   assert.ok(!assess(c, NOW).reasons.some((r) => /removals observed in 30 days/.test(r)), JSON.stringify(assess(c, NOW).reasons));
 });
+
+test('option C: two removals in ONE subreddit do not stop the account; the sub floor handles that sub', async () => {
+  const NOW = new Date('2026-11-02T12:00:00.000Z');
+  const at = (h: number) => new Date(NOW.getTime() - h * 60 * 60_000).toISOString();
+  const observations = [
+    { ts: at(200), account: 'bealyntalks', kind: 'reply-marked-removed', vector: 'signed-in', permalink: '/r/webhosting/comments/aaa/comment/c1/', value: true },
+    { ts: at(100), account: 'bealyntalks', kind: 'reply-marked-removed', vector: 'signed-in', permalink: '/r/WebHosting/comments/bbb/comment/c2/', value: true }
+  ] as never[];
+  const c = await counters('bealyntalks', NOW, { history: [], observations }, undefined, 1);
+  assert.equal(c.removalsObserved30d, 2, 'both comments are still counted and reported');
+  assert.equal(c.removalSubreddits30d, 1, 'subreddit names are case-insensitive');
+  assert.ok(!assess(c, NOW).reasons.some((r) => /removals observed in 30 days/.test(r)), JSON.stringify(assess(c, NOW).reasons));
+});
+
+test('option C: removals in two different subreddits still stop the account', async () => {
+  const NOW = new Date('2026-11-02T12:00:00.000Z');
+  const at = (h: number) => new Date(NOW.getTime() - h * 60 * 60_000).toISOString();
+  const observations = [
+    { ts: at(200), account: 'evanwebtalk', kind: 'reply-marked-removed', vector: 'signed-in', permalink: '/r/webdev/comments/aaa/comment/c1/', value: true },
+    { ts: at(100), account: 'evanwebtalk', kind: 'reply-marked-removed', vector: 'signed-in', permalink: '/r/webhosting/comments/bbb/comment/c2/', value: true }
+  ] as never[];
+  const c = await counters('evanwebtalk', NOW, { history: [], observations }, undefined, 1);
+  assert.equal(c.removalSubreddits30d, 2);
+  assert.equal(assess(c, NOW).mayPublish, false);
+  assert.ok(assess(c, NOW).reasons.some((r) => /2 subreddits/.test(r)), JSON.stringify(assess(c, NOW).reasons));
+});
+
+test('option C: a removal with no permalink cannot be placed in a subreddit, so it counts as its own', async () => {
+  const NOW = new Date('2026-11-02T12:00:00.000Z');
+  const at = (h: number) => new Date(NOW.getTime() - h * 60 * 60_000).toISOString();
+  const observations = [
+    { ts: at(200), account: 'evanwebtalk', kind: 'reply-marked-removed', vector: 'signed-in', permalink: '/r/webdev/comments/aaa/comment/c1/', value: true },
+    { ts: at(100), account: 'evanwebtalk', kind: 'reply-marked-removed', vector: 'signed-in', value: true }
+  ] as never[];
+  const c = await counters('evanwebtalk', NOW, { history: [], observations }, undefined, 1);
+  assert.equal(c.removalSubreddits30d, 2, 'unknown is never assumed to be the same sub');
+  assert.equal(assess(c, NOW).mayPublish, false);
+});

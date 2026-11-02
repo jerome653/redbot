@@ -16,7 +16,7 @@ const acct = (over: Partial<AccountRecord> = {}): AccountRecord => ({
 const counters = (over: Partial<HealthCounters> = {}): HealthCounters => ({
   account: 'tester', readsToday: 0, searchesToday: 0, repliesToday: 5,
   avgSessionMs: null, avgDwellMs: null, rateLimitHits24h: 0, loginFailures24h: 0,
-  removalsObserved30d: 0, absentSignedOut30d: 0, suspensionNotices: 0,
+  removalsObserved30d: 0, removalSubreddits30d: 0, absentSignedOut30d: 0, suspensionNotices: 0,
   accountAgeDays: 30, karma: 50, lastReplyAt: null, lastRateLimitAt: null,
   lastReadRateLimitAt: null, readRateLimits24h: 0, lastRemovalAt: null,
   fleetSize: 13, unattributedEvents24h: 0, ...over

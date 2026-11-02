@@ -215,7 +215,7 @@ const counters = (over: Partial<HealthCounters> = {}): HealthCounters => ({
   readsToday: 0, searchesToday: 0, repliesToday: 0,
   avgSessionMs: null, avgDwellMs: null,
   rateLimitHits24h: 0, loginFailures24h: 0,
-  removalsObserved30d: 0, absentSignedOut30d: 0, suspensionNotices: 0,
+  removalsObserved30d: 0, removalSubreddits30d: 0, absentSignedOut30d: 0, suspensionNotices: 0,
   // Stage 1 by karma, as both live accounts actually are (measured 2026-07-27: karma 1).
   accountAgeDays: 3, karma: 1,
   lastReplyAt: null, lastRateLimitAt: null, lastRemovalAt: null,
