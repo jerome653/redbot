@@ -100,10 +100,39 @@ export async function countThreadsInDb(db: Db): Promise<number> {
   return Number(r.rows[0]?.n ?? 0);
 }
 
-export async function loadThreadsFromDb(db: Db, ids?: string[]): Promise<Thread[]> {
+/**
+ * `excludeRetired` leaves out the threads `thread_retirement` names (0025).
+ *
+ * Off by default, deliberately: every surface that REPORTS on the corpus — the console, the
+ * reports, doctor — must keep seeing the whole of it, because retiring a thread archives it
+ * rather than deleting it. Only the stages that would spend work re-reading the backlog pass
+ * it, which is the opportunity scan and the draft pick. Measured 2026-11-04: 1,274 of 1,913
+ * threads are over a week old with nothing ever drafted from them, and the scan re-read all of
+ * them every cycle.
+ *
+ * Applied to BOTH queries, not just the parent one. The comments query is the heavier of the
+ * pair — a collected thread carries every comment redbot read on it — so filtering only the
+ * threads would leave the expensive half of the work exactly where it was.
+ */
+export async function loadThreadsFromDb(
+  db: Db, ids?: string[], opts: { excludeRetired?: boolean } = {}
+): Promise<Thread[]> {
   if (ids && !ids.length) return [];
-  const where = ids ? 'WHERE id IN (SELECT j.value FROM json_each($1) j)' : '';
-  const commentWhere = ids ? 'WHERE thread_id IN (SELECT j.value FROM json_each($1) j)' : '';
+  const live = opts.excludeRetired
+    ? 'NOT EXISTS (SELECT 1 FROM thread_retirement r WHERE r.thread_id = $$ID$$)' : '';
+  const clause = (idCol: string, byId: string): string => {
+    const parts = [ids ? byId : '', live.replace('$$ID$$', idCol)].filter(Boolean);
+    return parts.length ? `WHERE ${parts.join(' AND ')}` : '';
+  };
+  /* FULLY QUALIFIED ON PURPOSE. `thread_retirement` has a column called `thread_id` too, so a
+     bare `thread_id` inside the subquery resolves to the SUBQUERY's own column: the correlation
+     collapses to `r.thread_id = r.thread_id`, true for every row, and the comments query then
+     returns NOTHING as soon as one thread is retired. Measured on node:sqlite — the bare form
+     returned 0 of 2 comment rows, the qualified form the correct 1. */
+  const where = clause('threads.id', 'threads.id IN (SELECT j.value FROM json_each($1) j)');
+  const commentWhere = clause(
+    'thread_comments.thread_id',
+    'thread_comments.thread_id IN (SELECT j.value FROM json_each($1) j)');
   const params = ids ? [JSON.stringify(ids)] : [];
 
   const t = await db.query<ThreadRow>(

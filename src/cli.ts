@@ -13,6 +13,7 @@ import { accounts } from './commands/accounts.js';
 import { personas } from './commands/personas.js';
 import { reset } from './commands/reset.js';
 import { sources } from './commands/sources.js';
+import { retire } from './commands/retire.js';
 import { probeKarma } from './probe-karma.js';
 import { primeAccounts, selectedAccount } from './config.js';
 import { read } from './commands/read.js';
@@ -57,7 +58,10 @@ redbot — Reddit engagement assistant
                                  account has no voice or two accounts share one. "seed" gives a
                                  distinct voice to every account that has none, and never
                                  overwrites one somebody wrote.
-    redbot sources [add|rm|on|off|import|export]
+    redbot sources [add|rm|on|off|retire|import|export]
+    redbot retire [--apply]      what a week of measurement says is dead: sources that produced
+                                 no assessed thread in 7 days, and the stale backlog the
+                                 opportunity scan re-reads every cycle. Reports unless --apply.
                                  where redbot looks for threads (the database is the record)
     redbot vault [list|check]    what secrets are stored, encrypted, in the database
     redbot vault set <name>      store one — piped in, never typed as an argument
@@ -332,6 +336,7 @@ async function main(): Promise<number> {
     });
     /** `--search "<q>"` adds a saved search; a bare value is a subreddit. */
     case 'sources': return sources(positional[0], positional[1], { search: flagValue('search'), why: flagValue('why') });
+    case 'retire':  return retire({ apply: flags.has('--apply') });
     /* Sends only what the dashboard has not acknowledged. `push dry-run` builds and validates
        without transmitting, which is the safe first run on an install that has never pushed. */
     case 'push':    return push(positional[0], {

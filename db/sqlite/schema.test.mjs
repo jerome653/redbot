@@ -378,10 +378,15 @@ describe('updated_at triggers', () => {
        0022 added `account_personas`, and this test is what caught that it needed the trigger
        rather than the omission being found from a stale timestamp months later. `account_locations`
        is in the same deliberate exclusion as `account_exit_ips`: it records WHEN a detection was
-       taken, and a row that moved would be a measurement claiming a time it was not made. */
+       taken, and a row that moved would be a measurement claiming a time it was not made.
+
+       0025 added `thread_retirement`, and this test caught it on the first run. It carries
+       updated_at because `why` is editable by hand — a person correcting the stated reason for
+       setting a thread aside should leave a trace of when they did. `retired_at` is the
+       measurement's own moment and is never moved. */
     const want = ['accounts', 'threads', 'gap_analyses', 'opportunity_assessments', 'drafts',
       'jobs', 'credentials', 'sources', 'account_machines', 'thread_prefilter', 'account_proxies',
-      'account_personas'];
+      'account_personas', 'thread_retirement'];
     const have = db.prepare("SELECT tbl_name FROM sqlite_master WHERE type='trigger'").all()
       .map((r) => r.tbl_name);
     assert.deepEqual([...have].sort(), [...want].sort());

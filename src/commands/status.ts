@@ -16,6 +16,7 @@ import { computeOutcomes } from '../outcomes.js';
 import { loadThreads, loadAssessments } from '../store.js';
 import { say } from '../log.js';
 import { NOTHING_TO_DO } from '../exit-codes.js';
+import { retirementPreview } from './retire.js';
 
 /* ------------------------------------------------------------------ */
 
@@ -176,6 +177,24 @@ export async function insightsCmd(): Promise<number> {
       say.step(`  ${t.stage}:${t.event} — n=${t.count} median ${t.medianMs}ms max ${t.maxMs}ms`);
     }
   }
+
+  /**
+   * What the next retirement would set aside, so it is read BEFORE it happens.
+   *
+   * One line, on a screen an operator already opens, because `redbot retire` is a command nobody
+   * runs until they know there is something to run it for. Fails soft: this is a reporting aid
+   * and must not take the insights report down with it.
+   */
+  try {
+    const r = await retirementPreview();
+    if (r.sources.length || r.threads.length) {
+      say.info('');
+      say.step(
+        `Retirement would set aside ${r.sources.length} source(s) and ` +
+        `${r.threads.length.toLocaleString()} stale thread(s) — see \`redbot retire\` ` +
+        `(nothing is retired until \`--apply\`)`);
+    }
+  } catch { /* no database, or a table this build predates — the rest of the report still stands */ }
 
   say.info('');
   /* NOT "data/trace.jsonl". That file does not exist and nothing writes it: `insertTrace`

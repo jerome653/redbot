@@ -10,7 +10,7 @@
  * discover that would be paying to re-learn something known. Only threads that survive the
  * prefilter are analyzed, and the ones dropped are reported with the reason.
  */
-import { loadThreads, loadGaps, saveGaps, loadAssessments, saveAssessments } from '../store.js';
+import { loadActiveThreads, loadGaps, saveGaps, loadAssessments, saveAssessments } from '../store.js';
 import { analyzeGap } from '../gap.js';
 import { assessOpportunity, MIN_OPPORTUNITY_SCORE } from '../opportunity.js';
 import { isQuestionShaped, PILOT_SUBREDDITS, allowedSubreddits, currentAgeHours } from '../select.js';
@@ -116,7 +116,9 @@ import { NOTHING_TO_DO } from '../exit-codes.js';
 export async function opportunity(opts?: { force?: boolean; limit?: number; only?: string[]; all?: boolean }): Promise<number> {
   say.head('redbot opportunity');
 
-  const threads = await loadThreads();
+  /* Retired threads are not offered to the scan. That is what stops this stage re-reading the
+     whole backlog every cycle — see 0025_thread_retirement and `redbot retire`. */
+  const threads = await loadActiveThreads();
   if (!threads.length) {
     /* The FACT goes on the flagged line and the terminal-only advice on an unflagged step.
        run-outcome.mjs reports the flagged line, so the desktop console — where there is no
