@@ -656,6 +656,14 @@ export async function reply(
             : r.ok
               ? {
                 ok: false, cause: 'unconfirmed', outcome: 'unresolved', permalink: target.permalink,
+                /* WITHOUT THIS THE ROW IS NEVER WRITTEN. `writeConfirmation` returns early on a
+                   result with no `evidence`, so the unresolved landing — the case worth studying —
+                   was the one case that recorded nothing. `same-page` because a reply-back is read
+                   off the page the submit touched and nothing stronger was done. */
+                evidence: {
+                  confirmed: false, source: 'same-page' as const,
+                  observed: 'the reply was submitted under our comment and was not on that page afterwards'
+                },
                 error: 'submitted under the reply and not found there afterwards — the outcome is UNRESOLVED, ' +
                   'not failed. Check the thread by hand; redbot will NOT re-submit it.'
               }

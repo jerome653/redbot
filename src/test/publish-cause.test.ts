@@ -59,6 +59,11 @@ interface El {
   /** undefined means `isEditable` THROWS, as it does on anything that is not a form control. */
   editable?: boolean;
   disabled?: boolean;
+  /**
+   * The click lands and THEN throws — a submit that navigates the page out from under Playwright.
+   * The click is recorded before the throw, because it really did happen.
+   */
+  throwsAfterDispatch?: boolean;
 }
 
 interface CommentNode { text: string; permalink: string | null; id: string | null }
@@ -98,6 +103,9 @@ class FakeLocator {
     const n = this.nodes[0];
     if (!n || n.hidden || n.disabled) throw new Error('locator.click: Timeout 10000ms exceeded');
     this.page.clicked.push(n.id ?? n.sel[0] ?? '(unnamed)');
+    if (n.throwsAfterDispatch) {
+      throw new Error('locator.click: Execution context was destroyed, most likely because of a navigation');
+    }
   }
 }
 
@@ -294,6 +302,53 @@ test('a comment that cannot be found anywhere is UNRESOLVED with its permalink, 
     'ONE submit click on the unresolved path — a blind re-submit is the worst outcome available here');
 });
 
+test('a submit click that THROWS after dispatch is UNRESOLVED, never "nothing was submitted"', async () => {
+  /**
+   * MEASURED BY THE VERIFIER on 2026-11-04: `submitted = true` sat after `await submit.click()`,
+   * so a click that threw with the click already dispatched — Playwright's "Execution context was
+   * destroyed, most likely because of a navigation", which is what a submit that navigates looks
+   * like — came back `outcome: 'failed'`, and src/commands/reply.ts then printed "Nothing was
+   * submitted … send again" for a comment that may be on Reddit.
+   */
+  const page = new FakePage({
+    tree: [signedIn(), postEl(), composer(), submitEl({ throwsAfterDispatch: true })]
+  });
+
+  const r = await publishComment(page.asPage(), PERMALINK, BODY, { sleep: noWait });
+
+  assert.equal(r.ok, false);
+  assert.equal(page.clicked.filter((c) => c === 'submit').length, 1, 'the click was dispatched');
+  assert.equal(r.outcome, 'unresolved',
+    'a click that threw after dispatch may have landed — reporting it as failed invites a double post');
+  assert.equal(r.cause, 'unconfirmed');
+  assert.match(r.error ?? '', /not re-?submit|never re-?submit/i);
+  assert.match(r.error ?? '', /reddit\.com\/r\/Wordpress\/comments\/1v7kvj2/,
+    'with the thread to go and look at');
+  assert.equal(r.evidence?.confirmed, false,
+    'and with evidence, or src/commands/reply.ts writes no confirmation row for it at all');
+});
+
+test('a signed-IN page that also carries a login link is not reported as signed out', async () => {
+  /* The one wrong-direction read still reachable: a signed-in page whose footer has a login link.
+     The signed-in markers are tried first for exactly this reason, and reporting `signed-out` here
+     would send an operator to re-authenticate a session that was never broken. */
+  const page = new FakePage({
+    tree: [
+      signedIn(),
+      { sel: ['a[href*="/login/"]'] },
+      postEl(),
+      composer(),
+      submitEl()
+    ],
+    comments: [ourNode()]
+  });
+
+  const r = await publishComment(page.asPage(), PERMALINK, BODY, { sleep: noWait });
+
+  assert.notEqual(r.cause, 'signed-out', 'a signed-in marker outranks a login link on the same page');
+  assert.equal(r.ok, true);
+});
+
 test('no publish path re-submits: the submit click appears exactly once in the source', () => {
   const src = readFileSync(join(ROOT, 'src', 'reddit', 'post.ts'), 'utf8');
   const clicks = src.slice(src.indexOf('export async function publishComment'), src.indexOf('export const redditBase'))
@@ -319,4 +374,10 @@ test('a confirmed landing is written to the confirmations table, not to a parall
   const src = readFileSync(join(ROOT, 'src', 'commands', 'reply.ts'), 'utf8');
   assert.match(src, /recordConfirmation\(/, 'the existing confirmations table is the record');
   assert.match(src, /result\.evidence/, 'with the evidence the publish path measured');
+
+  /* AND THE NEGATIVE ONE. An unresolved landing is the case worth studying, so the failure branch
+     writes its row too; deleting that call survived the suite until this assertion existed. */
+  const fail = src.slice(src.indexOf("target.status = 'failed'"), src.indexOf("record('publish.fail'"));
+  assert.match(fail, /writeConfirmation\(\)/,
+    'the failure branch records its confirmation before the publish.fail row');
 });

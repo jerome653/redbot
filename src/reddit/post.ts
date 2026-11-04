@@ -174,8 +174,19 @@ export async function publishComment(
     const submit = await firstUsable(page, sel.commentSubmit);
     if (!submit) return refuse(explainMissingSubmit(await submitControlPresent(page)), permalink);
 
-    await submit.click();
+    /**
+     * SET BEFORE THE CLICK, NOT AFTER.
+     *
+     * The click call can throw with the click already dispatched — Playwright reports exactly
+     * that as "Execution context was destroyed, most likely because of a navigation", which is
+     * what a submit that navigates the page looks like. Setting the flag after the await put that
+     * case on the "nothing happened" side of the line and the catch below then reported `failed`
+     * with "Nothing was submitted … send again" for a comment that may be on Reddit — the one
+     * outcome this whole path exists to prevent. A click we are about to dispatch counts as
+     * dispatched.
+     */
     submitted = true;
+    await submit.click();
     await nap(3500);
 
     /**
