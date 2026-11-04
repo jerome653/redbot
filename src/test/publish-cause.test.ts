@@ -220,6 +220,21 @@ test('signed in, not locked, and still no composer reports SELECTOR DRIFT — no
   assert.doesNotMatch(r.error ?? '', /logged out, or thread locked/);
 });
 
+test('a page that answers nothing is DRIVEN to undetermined, not guessed signed-out', async () => {
+  /* The unit test below hands `explainBlockedPublish` a pre-built state, so it never exercises
+     `readSignedIn` — and `readSignedIn` returning `false` instead of `null` on a page with no
+     marker either way survived the suite until this test drove the whole path. Reporting
+     `signed-out` on an unreadable page sends an operator to re-authenticate a working session. */
+  const page = new FakePage({ tree: [], bodyText: '' });
+
+  const r = await publishComment(page.asPage(), PERMALINK, BODY, { sleep: noWait });
+
+  assert.equal(r.cause, 'undetermined', 'an unreadable fact is admitted, never resolved by guessing');
+  assert.match(r.error ?? '', /could not be determined/i);
+  assert.equal(page.typed, '');
+  assert.deepEqual(page.clicked, []);
+});
+
 test('when a fact cannot be read, the failure SAYS so instead of picking a cause', () => {
   const v = explainBlockedPublish({ signedIn: null, locked: null, archived: null, composerPresent: false });
   assert.equal(v?.cause, 'undetermined');
@@ -355,6 +370,59 @@ test('no publish path re-submits: the submit click appears exactly once in the s
     .match(/submit\.click\(/g) ?? [];
   assert.equal(clicks.length, 1, 'one click, one attempt, whatever the verification finds');
   assert.doesNotMatch(src, /re-?submit\(/, 'there is no re-submit helper to call');
+});
+
+const { replyToComment } = await import('../reddit/actions.js');
+
+const COMMENT_ID = 't1_m3asured';
+/** The one selector string actions.ts builds for the parent comment, matched exactly. */
+const commentNode = (kids: El[] = []): El => ({
+  sel: [`shreddit-comment[thingid="${COMMENT_ID}"], shreddit-comment[id="${COMMENT_ID}"]`],
+  kids
+});
+
+test('a reply-back on a page that answers NOTHING is undetermined, not a selector-drift verdict', async () => {
+  /**
+   * MEASURED BY THE VERIFIER on 2026-11-04: this call site passed `composerPresent: true` into
+   * `explainBlockedPublish`, which returns null on that flag BEFORE it reaches its unreadable-fact
+   * branch. `undetermined` was therefore unreachable here, and a page that answered nothing was
+   * told "signed in, unlocked and unarchived - the selectors have drifted": three facts never read
+   * and a dev sent to hunt a drift. The page-level path calls the same page `undetermined`.
+   */
+  const page = new FakePage({ tree: [commentNode()], bodyText: '' });
+
+  const r = await replyToComment(page.asPage(), PERMALINK, COMMENT_ID, BODY);
+
+  assert.equal(r.ok, false);
+  assert.equal(r.cause, 'undetermined',
+    'an unreadable page is an admitted unknown — a wrong cause sends the operator somewhere else');
+  assert.doesNotMatch(r.error ?? '', /signed in, unlocked and unarchived/,
+    'and it must not assert facts it never read');
+  assert.equal(page.typed, '', 'nothing was typed');
+});
+
+test('a reply-back on a LOCKED thread reports locked, and the cause survives the hop', async () => {
+  /* The cause actions.ts measures has to reach the caller; discarding it and letting
+     src/commands/reply.ts fall back to `undetermined` reads as "we did not measure it". */
+  const page = new FakePage({
+    tree: [signedIn(), postEl({ locked: 'true' }), commentNode()],
+    bodyText: 'a thread\nThis thread is locked. New comments cannot be posted.'
+  });
+
+  const r = await replyToComment(page.asPage(), PERMALINK, COMMENT_ID, BODY);
+
+  assert.equal(r.cause, 'locked', 'the measured cause, not undetermined');
+  assert.match(r.error ?? '', /locked/i);
+  assert.equal(page.typed, '');
+});
+
+test('a reply-back on a signed-OUT page reports signed-out', async () => {
+  const page = new FakePage({ tree: [signedOut(), postEl(), commentNode()] });
+
+  const r = await replyToComment(page.asPage(), PERMALINK, COMMENT_ID, BODY);
+
+  assert.equal(r.cause, 'signed-out');
+  assert.equal(page.typed, '');
 });
 
 test('the reply-back path names a cause too, instead of "thread locked, or archived"', () => {

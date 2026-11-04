@@ -93,7 +93,13 @@ export async function replyToComment(
        change. The page is asked instead, by the same probe the page composer uses. */
     const replyBtn = await within(comment, sel.commentReplyButton);
     if (!replyBtn) {
-      const blocked = explainBlockedPublish({ ...await probePageState(page), composerPresent: true });
+      /* THE PROBE IS NOT OVERRIDDEN. Forcing `composerPresent: true` here reached
+         `explainBlockedPublish`'s `if (s.composerPresent) return null` before its unreadable-fact
+         branch, so `undetermined` became unreachable from this call site and a page that answered
+         NOTHING was told "signed in, unlocked and unarchived - go and look at the selectors": a
+         confident wrong cause, and the two halves of the publish path disagreeing about the same
+         facts, which is what TIER0-BLOCKER-2026-07-27 was. The page is read as it is. */
+      const blocked = explainBlockedPublish(await probePageState(page));
       return blocked
         ? { ok: false, cause: blocked.cause, error: blocked.message }
         : {
