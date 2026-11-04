@@ -94,6 +94,17 @@ export async function loadThreads(): Promise<Thread[]> {
 }
 
 /**
+ * The threads the engine should still be working on — the corpus minus what was retired.
+ *
+ * Named rather than left as an options object at each call site, so there is one answer to
+ * "which stages skip the backlog": the opportunity scan and the draft pick, and nothing that
+ * reports. See 0025_thread_retirement for the measurement this exists for.
+ */
+export async function loadActiveThreads(): Promise<Thread[]> {
+  return loadThreadsFromDb(getPool(), undefined, { excludeRetired: true });
+}
+
+/**
  * Upsert by id, newest wins. Returns how many were new — the same contract the
  * JSON implementation had, and what `read` and `search` report to the operator.
  *

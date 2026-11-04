@@ -448,8 +448,15 @@ describe('the schema-derived column map', () => {
     // persona quietly missing half of itself. The round trip is pinned in
     // src/test/persona-store.test.ts; the count here is what says a NEW column of the same shape
     // has appeared and needs the same treatment.
+    //
+    // Migration 0025 (thread_retirement) moved the date count, and nothing else:
+    //   date     46 -> 49   thread_retirement.{retired_at,created_at,updated_at}
+    // Three timestamps, no json and no boolean, which is the point of that table's shape: a
+    // retirement is a thread id, a sentence and when it was decided. This count is what proved
+    // the three new columns are COERCED rather than arriving as raw text — src/db/retirement.ts
+    // reads two timestamps back out and had to be written for a `Date`, not a string.
     const expected = {
-      date: 46, json: 24, boolean: 14, blob: 3
+      date: 49, json: 24, boolean: 14, blob: 3
     };
 
     const rows = await getPool().query<{ name: string; sql: string }>(

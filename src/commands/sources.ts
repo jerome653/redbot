@@ -2,6 +2,8 @@
  * `redbot sources`                    — where redbot looks for threads, and where that came from
  * `redbot sources add r/<name>`       — add a subreddit
  * `redbot sources add --search "<q>"` — add a saved search
+ * `redbot sources retire <value> --why "<reason>"`
+ *                                     — switch one off for stated cause: "no longer in need"
  * `redbot sources rm <value>`         — take one off the list
  * `redbot sources import` / `export`  — move between the database and data/sources.json
  *
@@ -109,6 +111,31 @@ async function switchCmd(value: string | undefined, isSearch: boolean, on: boole
   return 0;
 }
 
+/**
+ * Retire one by hand — the operator's other reason, which no measurement can see.
+ *
+ * `redbot retire` covers "a week of collecting produced nothing". This covers "no longer in
+ * need", which is a decision about intent: a subreddit can be perfectly productive and still be
+ * the wrong room to be in. The reason is REQUIRED, because that is the only thing distinguishing
+ * this from the switch-off that already exists — and because the live list's two mis-flagged
+ * rows are what a reason with no flag looks like.
+ */
+async function retireCmd(value: string | undefined, isSearch: boolean, why?: string): Promise<number> {
+  if (!value) { say.fail('Which one? `redbot sources retire <name-or-query> --why "<reason>"`'); return 1; }
+  if (!why?.trim()) {
+    say.fail('Say why: `redbot sources retire <name> --why "no longer in need"`');
+    say.step('A retirement with no stated reason is indistinguishable from a mistake.');
+    return 1;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const r = await switchSource(isSearch ? 'search' : 'subreddit', value, false,
+    `Retired ${today} by hand: ${why.trim()}. Off, not deleted — \`redbot sources on\` puts it back.`);
+  if (!r.ok) { say.fail(r.error ?? 'could not retire that source'); return 1; }
+  say.ok(`${r.kind === 'search' ? `Search "${r.value}"` : `r/${r.value}`} is retired — off, with the reason on the record.`);
+  say.step('It keeps its place and its history. `redbot sources on` switches it back.');
+  return 0;
+}
+
 async function importCmd(): Promise<number> {
   say.head('redbot sources import');
   const reason = dbUnavailableReason();
@@ -147,9 +174,10 @@ export async function sources(
     if (sub === 'rm' || sub === 'remove') return await remove(target, isSearch);
     if (sub === 'on')  return await switchCmd(target, isSearch, true);
     if (sub === 'off') return await switchCmd(target, isSearch, false);
+    if (sub === 'retire') return await retireCmd(target, isSearch, opts.why);
     if (sub === 'import') return await importCmd();
     if (sub === 'export') return await exportCmd();
-    say.fail(`Unknown: "${sub}". One of: list, add, rm, import, export.`);
+    say.fail(`Unknown: "${sub}". One of: list, add, rm, on, off, retire, import, export.`);
     return 1;
   } catch (e) {
     say.fail(e instanceof Error ? e.message : String(e));

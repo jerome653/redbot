@@ -71,14 +71,28 @@ export async function deleteSource(db: Db, kind: SourceKind, value: string): Pro
   return (r.rowCount ?? 0) > 0;
 }
 
-/** Switch a source on or off without losing why it was added. */
+/**
+ * Switch a source on or off, optionally replacing why.
+ *
+ * `why` omitted keeps the reason the source was added with — that is the original contract and
+ * the common case. `why` GIVEN is for a switch that is itself a finding: retirement writes the
+ * measurement that justified it (src/retire.ts), and the flag and the sentence have to land in
+ * the SAME statement. They did not before, and the live record shows what that costs — two rows
+ * carried "Disabled 2026-09-28: 0/62 threads in scope…" and "Disabled 2026-10-18: 0 post links
+ * in every cycle…" while `enabled` was still 1, because the only writer of this column was a
+ * person typing in a text field and nothing moved the flag with it. One statement cannot do half
+ * of that.
+ */
 export async function setSourceEnabled(
-  db: Db, kind: SourceKind, value: string, enabled: boolean
+  db: Db, kind: SourceKind, value: string, enabled: boolean, why?: string
 ): Promise<boolean> {
-  const r = await db.query(
-    'UPDATE sources SET enabled = $3 WHERE kind = $1 AND lower(value) = lower($2)',
-    [kind, value, enabled]
-  );
+  const r = why === undefined
+    ? await db.query(
+      'UPDATE sources SET enabled = $3 WHERE kind = $1 AND lower(value) = lower($2)',
+      [kind, value, enabled])
+    : await db.query(
+      'UPDATE sources SET enabled = $3, why = $4 WHERE kind = $1 AND lower(value) = lower($2)',
+      [kind, value, enabled, why]);
   return (r.rowCount ?? 0) > 0;
 }
 

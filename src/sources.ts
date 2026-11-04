@@ -285,7 +285,7 @@ export async function editSource(
  * fallback, because it only ever gets used when nothing else can be consulted.
  */
 export async function switchSource(
-  kind: SourceKind, rawValue: string, enabled: boolean
+  kind: SourceKind, rawValue: string, enabled: boolean, why?: string
 ): Promise<MutationResult> {
   const value = String(rawValue ?? '').trim().replace(/^\/?r\//i, '');
   if (!value) return { ok: false, error: 'Nothing to switch.' };
@@ -298,7 +298,10 @@ export async function switchSource(
 
   /* Refuse rather than create. A switch is a change to something that exists; inventing the row
      here would let a typo in the console add a source under the guise of turning one off. */
-  const changed = await setSourceEnabled(getPool(), kind, value, enabled);
+  /* `why` given replaces the reason in the same statement as the flag — see setSourceEnabled.
+     Retirement is the caller that needs it: a source switched off with no stated measurement is
+     exactly the state this list was found in. */
+  const changed = await setSourceEnabled(getPool(), kind, value, enabled, why);
   if (!changed) return { ok: false, error: 'Not on the list.' };
 
   writeSeedFile(await loadSourcesFromDb(getPool()));

@@ -17,7 +17,7 @@
  *   restatement        the draft repeated the thread; saved with the issue, publishing blocked
  */
 import {
-  loadThreads, loadDrafts, saveDraft, loadGaps, loadAssessments, loadAccountPersona
+  loadActiveThreads, loadDrafts, saveDraft, loadGaps, loadAssessments, loadAccountPersona
 } from '../store.js';
 import { complete, extractJson } from '../llm.js';
 import { draftPrompt } from '../prompts.js';
@@ -118,7 +118,8 @@ export function draftBlocks(c: DraftChecks, b: string, noveltyIssues: string[]):
 export async function draft(threadIdArg?: string): Promise<number> {
   say.head('redbot draft');
 
-  const threads = await loadThreads();
+  /* The same corpus the scan sees: a retired thread is not a candidate to draft for. */
+  const threads = await loadActiveThreads();
   const gaps = await loadGaps();
   const assessments = await loadAssessments();
 
