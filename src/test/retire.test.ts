@@ -152,6 +152,14 @@ describe('the opportunity scan does not see a retired thread', () => {
     assert.ok(!ids.includes('aaaaaaaaaaa1'), `the scan must skip a retired thread: ${ids.join(', ')}`);
     assert.ok(ids.includes('bbbbbbbbbbb2'), 'and must still see the live one');
 
+    /* THE LIVE THREAD KEEPS ITS COMMENTS. The retirement subquery correlates on `thread_id`, and
+       `thread_retirement` has a column of that name too: with a bare column reference the
+       correlation collapses to `r.thread_id = r.thread_id` and the comments query returns nothing
+       at all once ONE thread is retired — threads with their comment context silently stripped,
+       which is what the opportunity scan and drafting read. */
+    assert.equal(scanned.find((t) => t.id === 'bbbbbbbbbbb2')?.comments.length, 1,
+      'the live thread must keep its comments while another thread is retired');
+
     /* Archived, not deleted — the row and its comments are both still there. */
     const all = await loadThreadsFromDb(getPool());
     assert.ok(all.some((t) => t.id === 'aaaaaaaaaaa1'), 'retiring must not delete the thread');

@@ -124,8 +124,15 @@ export async function loadThreadsFromDb(
     const parts = [ids ? byId : '', live.replace('$$ID$$', idCol)].filter(Boolean);
     return parts.length ? `WHERE ${parts.join(' AND ')}` : '';
   };
-  const where = clause('id', 'id IN (SELECT j.value FROM json_each($1) j)');
-  const commentWhere = clause('thread_id', 'thread_id IN (SELECT j.value FROM json_each($1) j)');
+  /* FULLY QUALIFIED ON PURPOSE. `thread_retirement` has a column called `thread_id` too, so a
+     bare `thread_id` inside the subquery resolves to the SUBQUERY's own column: the correlation
+     collapses to `r.thread_id = r.thread_id`, true for every row, and the comments query then
+     returns NOTHING as soon as one thread is retired. Measured on node:sqlite — the bare form
+     returned 0 of 2 comment rows, the qualified form the correct 1. */
+  const where = clause('threads.id', 'threads.id IN (SELECT j.value FROM json_each($1) j)');
+  const commentWhere = clause(
+    'thread_comments.thread_id',
+    'thread_comments.thread_id IN (SELECT j.value FROM json_each($1) j)');
   const params = ids ? [JSON.stringify(ids)] : [];
 
   const t = await db.query<ThreadRow>(
