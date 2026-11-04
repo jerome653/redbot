@@ -39,7 +39,9 @@ const LINKS = ['l1', 'l2', 'l3', 'l4', 'l5'];
 
 /** A scripted page: `script[link]` says what happens when that link is opened. */
 function harness(script: Record<string, 'thread' | 'null' | '429' | 'throw'>, opts?: {
-  budget?: { rateLimitBackoffMs: number; maxRateLimitRetries: number };
+  budget?: { rateLimitBackoffMs: number; maxRateLimitRetries: number; rateLimitBackoffMaxMs?: number };
+  /** The jitter draw. Fixed in a test so an exact wait can be asserted; Math.random live. */
+  random?: () => number;
   /** Links whose SECOND opening behaves differently — how a backoff is shown to have worked. */
   onRetry?: Record<string, 'thread' | 'null' | '429'>;
   pacing?: { minActionMs: number; maxActionMs: number; burstEvery: number; burstPauseMs: number };
@@ -68,7 +70,8 @@ function harness(script: Record<string, 'thread' | 'null' | '429' | 'throw'>, op
     async sleep(ms) { slept.push(ms); },
     async pace(ms) { paced.push(ms); },
     budget: opts?.budget,
-    pacing: opts?.pacing
+    pacing: opts?.pacing,
+    random: opts?.random
   };
 
   return { deps, opened, slept, paced, throttleRows };
@@ -145,9 +148,12 @@ describe('the budget in config is the budget that is used', () => {
   test('the backoff length comes from config, not from a constant in the loop', async () => {
     const h = harness({ l2: '429' }, {
       budget: { rateLimitBackoffMs: 1234, maxRateLimitRetries: 1 },
-      onRetry: { l2: 'thread' }
+      onRetry: { l2: 'thread' }, random: () => 0
     });
     await collectRun(LINKS, h.deps);
+    /* WAS `deepEqual(h.slept, [1234])`. The wait is now base * 2^(hit-1) plus up to 10% jitter
+       (src/throttle.ts), so the FIRST wait is still exactly the configured value with no jitter
+       drawn — and the assertion that matters, that it is never shorter, is below. */
     assert.deepEqual(h.slept, [1234], 'change the config and the wait must change with it');
   });
 
@@ -173,6 +179,66 @@ describe('the budget in config is the budget that is used', () => {
   });
 });
 
+
+/**
+ * MEASURED 2026-11-03 from the live `history` table: four read-path 429s across the day —
+ * 13:09:44Z r/webhosting, 20:08:39Z r/Wordpress, 23:49:21Z r/bigseo, 23:49:22Z r/webdev — and
+ * every one of them was answered with the same flat 300s wait, because `rateLimitBackoffMs` is one
+ * number that was re-used for every refusal. A host that is still refusing was asked again on
+ * exactly the schedule it had already refused.
+ */
+describe('the wait grows with each refusal', () => {
+  const GROW = { rateLimitBackoffMs: 1000, maxRateLimitRetries: 3, rateLimitBackoffMaxMs: 60_000 };
+
+  test('the second refusal waits twice as long as the first', async () => {
+    const h = harness({ l2: '429', l3: '429' }, {
+      budget: GROW, onRetry: { l2: 'thread', l3: 'thread' }, random: () => 0
+    });
+    const out = await collectRun(LINKS, h.deps);
+
+    assert.deepEqual(h.slept, [1000, 2000],
+      'a flat wait asks a refusing host again on the schedule it just refused');
+    assert.equal(out.threads.length, 5, 'and both throttled links were still collected');
+    assert.equal(out.stoppedEarly, false);
+  });
+
+  test('the growth is bounded, so a run cannot wait for hours', async () => {
+    const h = harness({ l2: '429', l3: '429', l4: '429' }, {
+      budget: { rateLimitBackoffMs: 1000, maxRateLimitRetries: 5, rateLimitBackoffMaxMs: 1500 },
+      onRetry: { l2: 'thread', l3: 'thread', l4: 'thread' }, random: () => 0
+    });
+    await collectRun(LINKS, h.deps);
+    assert.deepEqual(h.slept, [1000, 1500, 1500], 'the ceiling holds from the second hit on');
+  });
+
+  test('NO WAIT GETS SHORTER — the floor is the value this install waits today', async () => {
+    /* The SGEN standing rule on live scanning: we may only ADD waiting. Jitter is one-sided for
+       this reason, and the floor is asserted against the REAL config rather than a fixture, so
+       lowering `config.budget.rateLimitBackoffMs` fails here rather than in production. */
+    const { config } = await import('../config.js');
+    for (const r of [0, 0.5, 0.999]) {
+      const h = harness({ l2: '429' }, { onRetry: { l2: 'thread' }, random: () => r });
+      await collectRun(LINKS, h.deps);
+      assert.equal(h.slept.length, 1);
+      assert.ok(h.slept[0]! >= config.budget.rateLimitBackoffMs,
+        `random ${r} produced ${h.slept[0]}, under the configured ${config.budget.rateLimitBackoffMs}`);
+    }
+    assert.ok(config.budget.rateLimitBackoffMs >= 300_000, 'and the configured base is still 300s');
+    assert.ok(config.budget.rateLimitBackoffMaxMs >= config.budget.rateLimitBackoffMs,
+      'a ceiling below the base would be a shortening in disguise');
+  });
+
+  test('a throttled read is retried after the wait, not counted as a failure', async () => {
+    /* The done-when this file was opened for: `skipped` stays 0 and the thread is collected. */
+    const h = harness({ l3: '429' }, { onRetry: { l3: 'thread' }, random: () => 0 });
+    const out = await collectRun(LINKS, h.deps);
+
+    assert.equal(out.skipped, 0, 'a 429 is not a skip');
+    assert.equal(out.threads.length, 5, 'and the throttled link is collected after the wait');
+    assert.equal(h.slept.length, 1, 'which cost exactly one wait');
+    assert.equal(h.opened.filter((l) => l === 'l3').length, 2);
+  });
+});
 
 describe('the DEFECT-02 pacing envelope is actually applied', () => {
   /**

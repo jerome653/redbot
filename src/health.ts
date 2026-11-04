@@ -18,6 +18,7 @@
  * measured — because this account has published nothing yet.
  */
 import { policy } from './policy.js';
+import { isCooldownSkip } from './throttle.js';
 import { effectiveMaxRepliesPerDay } from './weekend.js';
 import { loadHistory } from './store.js';
 import { getPool } from './db.js';
@@ -298,7 +299,12 @@ export async function counters(
   const isPublishStage = (e: HistoryEntry): boolean =>
     (e.data as { stage?: unknown } | undefined)?.stage === 'publish';
   const rateLimits = h.filter((e) => e.kind === 'ratelimit' && isPublishStage(e));
-  const readRateLimits = h.filter((e) => e.kind === 'ratelimit' && !isPublishStage(e));
+  /* NOT OUR OWN SKIPS. src/commands/auto.ts files a `ratelimit` row when it leaves a subreddit
+     alone that recently 429d, so the decision is visible where the refusals are. Counting it here
+     would report redbot's own caution as Reddit throttling us, and the count would then grow with
+     every cycle that behaved correctly. */
+  const readRateLimits = h.filter(
+    (e) => e.kind === 'ratelimit' && !isPublishStage(e) && !isCooldownSkip(e));
   const loginFails = h.filter((e) => e.kind === 'login.fail');
 
   /* session durations: pair each start with the next end */

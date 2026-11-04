@@ -20,6 +20,7 @@
  */
 import { config } from '../config.js';
 import { sleep as realSleep, between } from '../pacing.js';
+import { backoffMs } from '../throttle.js';
 import type { Thread } from '../types.js';
 
 export interface CollectOutcome {
@@ -53,7 +54,14 @@ export interface CollectDeps {
    * run come to look identical.
    */
   pace?(ms: number): Promise<void>;
-  budget?: { rateLimitBackoffMs: number; maxRateLimitRetries: number };
+  budget?: {
+    rateLimitBackoffMs: number;
+    maxRateLimitRetries: number;
+    /** The ceiling the growing backoff may not pass; defaults to config when absent. */
+    rateLimitBackoffMaxMs?: number;
+  };
+  /** Seam for the backoff jitter, so a test can assert an exact wait. */
+  random?: () => number;
   pacing?: { minActionMs: number; maxActionMs: number; burstEvery: number; burstPauseMs: number };
 }
 
@@ -133,8 +141,19 @@ export async function collectRun(links: string[], deps: CollectDeps): Promise<Co
         };
       }
       retriesUsed++;
-      deps.onBackoff?.(budget.rateLimitBackoffMs, rateLimitHits);
-      await sleep(budget.rateLimitBackoffMs);
+      /**
+       * THE WAIT GROWS. It was one flat value, re-used for every refusal, so a host that is still
+       * refusing was asked again on precisely the schedule it had already refused — measured
+       * 2026-11-03: four read 429s across the day, two of them one second apart. `backoffMs`
+       * doubles from the same configured base, bounds the result, and jitters it upward only.
+       */
+      const waitMs = backoffMs(rateLimitHits, {
+        baseMs: budget.rateLimitBackoffMs,
+        maxMs: budget.rateLimitBackoffMaxMs ?? config.budget.rateLimitBackoffMaxMs,
+        random: deps.random
+      });
+      deps.onBackoff?.(waitMs, rateLimitHits);
+      await sleep(waitMs);
       /* Loop back and open the SAME link again — the one the throttle cost us. */
     }
 

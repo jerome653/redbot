@@ -38,3 +38,15 @@ export const FAILED = 1;
 
 /** There was nothing to do. Not zero — nothing downstream ran. Not a failure either. */
 export const NOTHING_TO_DO = 2;
+
+/**
+ * The command could not do the thing BECAUSE Reddit is throttling us.
+ *
+ * A fourth answer, added 2026-11-04. It exists because the cycle loop in src/commands/auto.ts has
+ * to tell "that source broke" from "we are going too fast", and a number was the only thing
+ * crossing that boundary: `read()` returned 1 for both, so two throttled reads were read as the
+ * host refusing this account and the rest of the cycle was abandoned (measured 2026-11-03,
+ * 23:49:22Z). Still non-zero and still a failure of the command — a run that was throttled did
+ * not collect — but not evidence that anything is broken. See src/collect-wall.ts.
+ */
+export const THROTTLED = 3;

@@ -11,6 +11,7 @@
 import { loadHistory } from './store.js';
 import { loadDrafts } from './store.js';
 import type { HistoryEntry } from './types.js';
+import { isCooldownSkip } from './throttle.js';
 
 export interface Rate {
   /** null when the denominator is 0. */
@@ -130,7 +131,9 @@ export async function computeMetrics(historyArg?: HistoryEntry[]): Promise<Metri
     return sum;
   }, 0);
 
-  const rateLimits = of('ratelimit').length;
+  /* Minus redbot's own cooldown skips — see src/throttle.ts `isCooldownSkip`. Counting them
+     would turn correct behaviour into a rising rate-limit figure. */
+  const rateLimits = of('ratelimit').filter((e) => !isCooldownSkip(e)).length;
   const errors = of('error');
 
   return {

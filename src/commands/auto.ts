@@ -22,7 +22,8 @@ import { counters, health, type HealthVerdict } from '../health.js';
 import { policy } from '../policy.js';
 import { isBrowserUp } from '../browser.js';
 import { observeDue, type ObserveDueResult } from './observe.js';
-import { hitCollectionWall } from '../collect-wall.js';
+import { runSources, type SourceRun } from '../collect-wall.js';
+import { backoffMs, cooldownSkipRow, planSources, SOURCE_COOLDOWN_MS } from '../throttle.js';
 import { read } from './read.js';
 import { search } from './search.js';
 import { opportunity } from './opportunity.js';
@@ -211,8 +212,47 @@ async function work(account: AccountRecord | null): Promise<number> {
    * and searches. It was counted nowhere before: collect-run.ts holds a retry budget WITHIN a
    * source, and nothing held one between them. Order is unchanged — subreddits, then searches.
    */
-  const sources: Array<{ step: string; run: () => Promise<number> }> = [
-    ...subs.map((s) => ({ step: `Reading r/${s}…`, run: () => read(s) })),
+  /* ONE history load for the whole cycle decision. Two readers need it — the per-source
+     cooldown below and `collectionDue` further down — and loading it twice would read every row
+     twice for one integer each, the mistake the comment above `before` records about
+     `countThreads`. */
+  const history = await loadHistory();
+
+  /**
+   * LEAVE ALONE WHAT JUST REFUSED US. Measured 2026-11-03: r/webhosting 429d at 13:09:44Z and
+   * r/Wordpress at 20:08:39Z, and both were in the next cycle's list unchanged. A subreddit that
+   * has answered 429 within SOURCE_COOLDOWN_MS is skipped here and the skip is recorded, so a
+   * short collection can be told from a quiet hour. `planSources` always keeps one source, so a
+   * cooldown can never empty a cycle — see src/throttle.ts.
+   */
+  /**
+   * WARMUP-FIRST TURNS. The rotation (tools/product/server.mjs rotationStart) sets
+   * REDBOT_COLLECT_EVERY_MINUTES so a turn re-collects only when the shared corpus is older than
+   * that; everything after collection — scoring, drafting, the warmup step — runs either way.
+   * Unset, this is always due and the loop collects every cycle exactly as before.
+   *
+   * ASKED BEFORE THE COOLDOWN, not after: a turn that is not collecting must not cool a source
+   * off, or a warmup-first rotation would file skip rows for sources it was never going to read.
+   */
+  const every = collectEveryMinutes();
+  const collect = every === null
+    ? { due: true, why: '' }
+    : collectionDue(lastCollectionAt(history), new Date(), every);
+  if (!collect.due) say.step(`Collection skipped — ${collect.why}`);
+
+  const plan = collect.due
+    ? planSources(subs, history, new Date(), SOURCE_COOLDOWN_MS)
+    : { read: [], skipped: [] };
+  for (const s of plan.skipped) {
+    say.warn(s.why);
+    /* The row's shape is `cooldownSkipRow`'s, not this file's — it is asserted there, and three
+       readers depend on its `cooldownSkip` flag. */
+    const row = cooldownSkipRow(s);
+    await record(row.kind, row.summary, row.data);
+  }
+
+  const sources: SourceRun[] = [
+    ...plan.read.map((s) => ({ step: `Reading r/${s}…`, run: () => read(s) })),
     /**
      * PREVIEW THEN COMMIT, per query. `search(q)` is preview-only (src/commands/search.ts:281
      * returns `preview(...)`), and nothing on this path ever committed. Measured 2026-09-28 across
@@ -241,41 +281,32 @@ async function work(account: AccountRecord | null): Promise<number> {
       }
     }))
   ];
+  if (!collect.due) sources.length = 0;
 
   /**
-   * WARMUP-FIRST TURNS. The rotation (tools/product/server.mjs rotationStart) sets
-   * REDBOT_COLLECT_EVERY_MINUTES so a turn re-collects only when the shared corpus is older than
-   * that; everything after collection — scoring, drafting, the warmup step — runs either way.
-   * Unset, this is always due and the loop collects every cycle exactly as before.
+   * THE LOOP IS IN src/collect-wall.ts, because what it decides — a throttle is a wait, a fault is
+   * a wall — is counting, and counting must be testable without a browser or a live 429. What was
+   * here counted every non-zero exit the same way: 2026-11-03 23:49:22Z, two 429s one second
+   * apart, "collection abandoned after 2 failures in a row", twice in one day.
    */
-  const every = collectEveryMinutes();
-  const collect = every === null
-    ? { due: true, why: '' }
-    : collectionDue(lastCollectionAt(await loadHistory()), new Date(), every);
-  if (!collect.due) {
-    say.step(`Collection skipped — ${collect.why}`);
-    sources.length = 0;
-  }
-
-  let failuresInARow = 0;
-  let abandoned = 0;
-  for (let i = 0; i < sources.length; i++) {
-    const wall = hitCollectionWall(failuresInARow, i, sources.length);
-    if (wall.abort) {
-      abandoned = sources.length - i;
-      say.warn(wall.why);
-      /* `stage: 'read'` is load-bearing — src/health.ts counts only PUBLISH-stage 429s toward a
-         cooldown, and a collection wall must not silence publishing on top of everything else. */
-      await record('ratelimit', `collection abandoned after ${failuresInARow} failures in a row`, {
-        status: 'blocked', stage: 'read', abandoned, attempted: i, configured: sources.length
-      });
-      break;
-    }
-    const src = sources[i]!;
-    say.step(src.step);
-    const code = await src.run();
-    failuresInARow = code === 0 ? 0 : failuresInARow + 1;
-  }
+  const ran = await runSources(sources, {
+    step: (line) => say.step(line),
+    warn: (line) => say.warn(line),
+    onThrottleWait: (ms, n) => say.warn(
+      `Throttled on ${n} source(s) in a row — waiting ${Math.round(ms / 1000)}s, then carrying on `
+      + `with the rest of the list.`
+    ),
+    sleep,
+    backoff: (n) => backoffMs(n, {
+      baseMs: config.budget.sourceBackoffMs, maxMs: config.budget.sourceBackoffMaxMs
+    }),
+    /* `stage: 'read'` is load-bearing — src/health.ts counts only PUBLISH-stage 429s toward a
+       cooldown, and a collection wall must not silence publishing on top of everything else. */
+    onAbandon: (why, info) => record('ratelimit', `collection stopped — ${why}`, {
+      status: 'blocked', stage: 'read', ...info
+    })
+  });
+  const abandoned = ran.abandoned;
 
   const collected = (await countThreads()) - before;
   say.step(`Collected ${collected} new thread(s).`);
