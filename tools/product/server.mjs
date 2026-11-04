@@ -52,7 +52,7 @@ import { fleetProblems } from './fleet-posture.mjs';
 import { bootBrowserSelection } from './boot-browsers.mjs';
 import { measureKarma } from './karma-measure.mjs';
 import { engineProblems } from './engine-posture.mjs';
-import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
+import { runError, runNote, nextThrottleCount, pacingFields, NOTHING_TO_DO } from './run-outcome.mjs';
 /* The order a browser start follows. Out here for the reason the module's header gives: the
    decisions were unreachable without spawning Chrome, which is why nothing tested them and
    why the two halves of detection could both be green while nothing connected them. */
@@ -170,6 +170,14 @@ let pushScheduler = null;
    a scheduled karma run simply measures (the pre-2026-11-04 behaviour). */
 let karmaMeasuredOnImpl = null;
 let vaultApi = null;
+/**
+ * How a throttled source is PACED, from the one typed implementation that already decides it.
+ *
+ * Null on an install whose build is missing, in which case the console keeps the pre-2026-11-04
+ * behaviour — and a missing build means no action can run at all, since every one of them spawns
+ * dist/cli.js.
+ */
+let pacingApi = null;
 try {
   const [d, a, db, src, cred, ports, dbAccounts, machine, pages, sum, pre, dbProxies, relay, align, relayCore, proxyCred, webshare, detect, dbLocations, dbLogs] = await Promise.all([
     import('../../dist/console-data.js'),
@@ -354,6 +362,26 @@ try {
    * One typed implementation, three readers.
    */
   configApi = (await import('../../dist/config.js'));
+  /**
+   * THE RATE LIMIT IS ONE POLICY, NOT TWO.
+   *
+   * `THROTTLED` (src/exit-codes.ts) is non-zero, so `ok: code === 0 || nothing` made it a failed
+   * run — and the collect panel's own loop throws on `!ok`, which abandoned every remaining
+   * subreddit and the scoring step the moment ONE source was throttled. The CLI's cycle does the
+   * opposite with the same exit code: `runSources` waits, moves to the next source, and gives up
+   * only at `CONSECUTIVE_THROTTLES_TO_ABORT` (src/collect-wall.ts) — the whole point of the code
+   * existing. Two callers, one number, opposite conclusions.
+   *
+   * The threshold and the wait are therefore taken from those modules rather than restated here,
+   * for the reason given at the top of this file: one typed implementation cannot drift from
+   * itself. What stays the console's own is the sentence it shows and its count of sources left,
+   * which only its loop knows.
+   */
+  pacingApi = {
+    THROTTLED: (await import('../../dist/exit-codes.js')).THROTTLED,
+    wallAt: (await import('../../dist/collect-wall.js')).CONSECUTIVE_THROTTLES_TO_ABORT,
+    backoffMs: (await import('../../dist/throttle.js')).backoffMs
+  };
   updateApi = (await import('../../dist/update.js'));
   /* Read the provider prohibition from the SAME module that enforces it at generation time, so
      the Setup screen cannot offer a provider src/llm.ts would then refuse. */
@@ -1185,6 +1213,16 @@ let runningAccount = null;
  */
 let runningOpening = false;
 /**
+ * How many runs IN A ROW have come back throttled.
+ *
+ * Here rather than in the browser because runs are serialised through the single `running` slot,
+ * so consecutive-ness is a property of this process, not of one panel. Any run that finishes
+ * without being throttled resets it: a source that answered is evidence the rate limit lifted,
+ * and a count that only ever grows would eventually abandon a cycle over throttles that have
+ * nothing to do with each other.
+ */
+let throttlesInARow = 0;
+/**
  * Opening an account's Chrome on demand before a browser-driving action, and the port read that
  * decides whether it is needed. Injectable in the same way as `portStatusImpl` — null until the
  * compiled modules load, then bound below `launchChrome`. See ./reply-browser.mjs.
@@ -1686,10 +1724,26 @@ function spawnRun(args, env, started) {
          statement of fact. The flag is what a caller branches on; the note is what it says. */
       const nothing = !stopped && code === NOTHING_TO_DO;
       const note = nothing ? runNote({ code, out, err }) : null;
+      /* THROTTLED IS A FAILURE OF THIS RUN AND NOT A REASON TO ABANDON THE REST. `ok` stays false
+         on purpose — src/exit-codes.ts is explicit that a throttled run did not collect — so what
+         is added here is the pacing a caller needs to carry on: that this was the rate limit, how
+         long to leave it, how many in a row, and the threshold at which giving up is the right
+         answer. The caller decides; it is no longer forced to decide from a bare number. */
+      throttlesInARow = nextThrottleCount(throttlesInARow, {
+        code, stopped, throttledCode: pacingApi && pacingApi.THROTTLED
+      });
+      const pacing = pacingApi === null ? {} : pacingFields(throttlesInARow, {
+        wallAt: pacingApi.wallAt,
+        backoff: (n) => pacingApi.backoffMs(n, {
+          baseMs: configApi.config.budget.sourceBackoffMs,
+          maxMs: configApi.config.budget.sourceBackoffMaxMs
+        })
+      });
       // Answered once the log on disk says the run finished, so a reader asking next finds it so.
       flushed.then(() => resolve({
         ok: code === 0 || nothing, code, stopped, ms: Date.now() - started,
         ...(nothing ? { nothing: true } : {}),
+        ...pacing,
         ...(note ? { note } : {}),
         ...(error ? { error } : {}),
         output: (out + err).slice(-24000), command: `redbot ${args.join(' ')}`

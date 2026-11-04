@@ -2668,6 +2668,49 @@ test('nothing-to-do is one number, and the console branches on it instead of fai
   assert.match(ui, /sc\.nothing\?/,
     'the collect chain must render the nothing-to-score case rather than throwing on it');
 });
+/**
+ * A THROTTLED run must pace the collect, not end it.
+ *
+ * Measured on cardinal 2026-11-03 23:49:22Z: two 429s one second apart ended a whole cycle's
+ * collection. THROTTLED exists so a caller can tell a rate limit from a broken source, and the
+ * console was the caller that never read it — exit 3 is not 0 and not NOTHING_TO_DO, so `ok` was
+ * false and the collect panel's throw-on-not-ok abandoned every remaining subreddit, every saved
+ * search and the scoring step. The CLI's own cycle, given the same code, tolerates four in a row.
+ *
+ * The number and the threshold are read from the compiled modules here, so the console cannot
+ * come to mean something different by exit 3 than the command that returns it.
+ */
+test('throttled is one number, and the console paces on it instead of giving up', async () => {
+  const { THROTTLED } = await import(`file://${join(ROOT, 'dist', 'exit-codes.js')}`);
+  const { CONSECUTIVE_THROTTLES_TO_ABORT } =
+    await import(`file://${join(ROOT, 'dist', 'collect-wall.js')}`);
+  assert.equal(THROTTLED, 3, 'exit 3 is the rate limit — the console reads it, never restates it');
+  assert.ok(CONSECUTIVE_THROTTLES_TO_ABORT > 1,
+    'a wall at one throttle is the defect this fixes, not a threshold');
+
+  const src = readFileSync(join(HERE, 'server.mjs'), 'utf8');
+  assert.ok(src.includes("THROTTLED: (await import('../../dist/exit-codes.js')).THROTTLED"),
+    'the console must take the code from the module that defines it, not a literal 3');
+  assert.ok(src.includes("wallAt: (await import('../../dist/collect-wall.js')).CONSECUTIVE_THROTTLES_TO_ABORT"),
+    'the threshold must come from collect-wall, so the console and the cycle give up together');
+  assert.ok(src.includes('ok: code === 0 || nothing'),
+    'a throttled run is still not ok — src/exit-codes.ts is explicit that it did not collect');
+  assert.ok(src.includes('throttlesInARow = nextThrottleCount('),
+    'the count must come from the tested pure function, not inline arithmetic');
+
+  /* THE ORDER IS THE FIX: the throttle branch has to be reached BEFORE the throw, in both loops,
+     or one 429 still ends the collect. Asserted on the slice between the first collect loop and
+     the scoring step, so it is this chain being measured and not some other loop on the page. */
+  const ui = readFileSync(join(HERE, 'index.html'), 'utf8');
+  const chain = ui.slice(ui.indexOf('for(let i=0;i<subs.length;i++)'),
+                         ui.indexOf("say('Working out which"));
+  assert.ok(chain.length > 0, 'the collect chain must still be one readable block');
+  assert.ok(chain.indexOf('paced(r,') < chain.indexOf('throw new Error(r.error'),
+    'the throttle branch must come before the throw, or one 429 abandons the whole collect');
+  assert.equal((chain.match(/await paced\(r,/g) || []).length, 2,
+    'both the subreddit loop and the saved-search loop must pace');
+});
+
 
 /**
  * The console must not keep a second opinion about which sources are live.
