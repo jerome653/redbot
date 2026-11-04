@@ -8,6 +8,7 @@
 import { login } from './commands/login.js';
 import { operators } from './commands/operators.js';
 import { vault } from './commands/vault.js';
+import { redditLogin } from './commands/reddit-login.js';
 import { proxy } from './commands/proxy.js';
 import { accounts } from './commands/accounts.js';
 import { personas } from './commands/personas.js';
@@ -61,7 +62,10 @@ redbot — Reddit engagement assistant
                                  where redbot looks for threads (the database is the record)
     redbot vault [list|check]    what secrets are stored, encrypted, in the database
     redbot vault set <name>      store one — piped in, never typed as an argument
-    redbot vault rm <name>       remove one
+    redbot reddit-login [list]   stored Reddit logins, metadata only
+    redbot reddit-login set <handle> --email <e>  store one — password piped in, gated on a confirmed login
+    redbot reddit-login get <handle>   whether a login is stored (never the password)
+    redbot reddit-login rm <handle>    remove one
     redbot proxy vet             check an exit address before an account signs in through it
                                  (proxy read from REDBOT_PROXY_HOST/PORT/USER/PASS)
     redbot session [--kind short|medium] [--sub <name>]
@@ -207,7 +211,10 @@ export const VALUE_FLAGS = new Set([
    *
    * It failed safe only because no account happens to be named "US". That is luck, not a design.
    */
-  'only', 'country', 'region', 'samples', 'hours'
+  'only', 'country', 'region', 'samples', 'hours',
+  // reddit-login set <handle> --email <e>: in space form the email would otherwise leak
+  // into `positional` and be read as the subcommand — the same D-10 shape as the rest.
+  'email'
 ]);
 
 export interface ParsedArgs {
@@ -296,7 +303,8 @@ async function main(): Promise<number> {
      * The value is never a positional argument — see src/commands/vault.ts. `--scope` names an
      * operator so two people on one machine can hold different keys under the same name.
      */
-    case 'vault':   return vault(positional[0], positional[1], flagValue('scope'));
+    /* Reddit login credentials, gated on a confirmed live session — see src/commands/reddit-login.ts. */
+    case 'reddit-login': return redditLogin(positional[0], positional[1], { email: flagValue('email') });
     /**
      * `redbot proxy vet` — check an exit address BEFORE an account signs in through it.
      *
