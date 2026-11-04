@@ -14,6 +14,8 @@ import { config } from '../config.js';
 import { sleep } from '../pacing.js';
 import { saveThreads } from '../store.js';
 import { record, say } from '../log.js';
+import { THROTTLED } from '../exit-codes.js';
+import { backoffMs, looksThrottled } from '../throttle.js';
 
 /**
  * `sort` matters more than it looks, and it used to default to `hot`, which is where warming
@@ -79,11 +81,18 @@ export async function read(subreddit: string | undefined, limit?: number, sort?:
          loop reads 25 sources per cycle, so it blocked itself for nine days. */
       await record('ratelimit', `429 opening r/${name}`, { subreddit: name, status: 'blocked', stage: 'read' });
       if (attempt >= config.budget.maxRateLimitRetries) {
-        say.fail(`Rate-limited on r/${name}. Nothing collected; try again in a few minutes.`);
-        return 1;
+        /* THROTTLED, not FAILED. The cycle loop counts these separately: two sources that broke
+           is the host refusing this account and ends collection, while two that were throttled is
+           a rate and must not — the rule that abandoned two whole cycles on 2026-11-03. The
+           subreddit is on cooldown from the row above either way (src/throttle.ts). */
+        say.fail(`Rate-limited on r/${name}. Nothing collected; it will be left alone for a while.`);
+        return THROTTLED;
       }
-      say.warn(`Rate-limited. Waiting ${Math.round(config.budget.rateLimitBackoffMs / 1000)}s before one retry…`);
-      await sleep(config.budget.rateLimitBackoffMs);
+      const waitMs = backoffMs(attempt + 1, {
+        baseMs: config.budget.rateLimitBackoffMs, maxMs: config.budget.rateLimitBackoffMaxMs
+      });
+      say.warn(`Rate-limited. Waiting ${Math.round(waitMs / 1000)}s before one retry…`);
+      await sleep(waitMs);
       await openSubreddit(s.page, name, feed);
     }
 
@@ -134,8 +143,15 @@ export async function read(subreddit: string | undefined, limit?: number, sort?:
     say.fail(msg);
     /* A navigation that dies ON a 429 arrives here as ERR_HTTP_RESPONSE_CODE_FAILURE and used to
        be filed as a generic error — invisible to the two counters that read `ratelimit` rows. */
-    const throttled = await isRateLimited(s.page).catch(() => false);
-    if (throttled) await record('ratelimit', `429 during read of r/${name}`, { subreddit: name, status: 'blocked', stage: 'read' });
+    /* A navigation that dies ON a 429 arrives here as ERR_HTTP_RESPONSE_CODE_FAILURE, and the
+       live page is often gone by the time we can ask it — so the MESSAGE is read too. Measured
+       2026-11-03 20:28:16Z, that shape was filed as a plain `error` row, which the two counters
+       that read `ratelimit` cannot see and the abandon rule counted as a fault. */
+    const throttled = (await isRateLimited(s.page).catch(() => false)) || looksThrottled(msg);
+    if (throttled) {
+      await record('ratelimit', `429 during read of r/${name}`, { subreddit: name, status: 'blocked', stage: 'read' });
+      return THROTTLED;
+    }
     await record('error', `read r/${name} failed: ${msg}`);
     return 1;
   } finally {

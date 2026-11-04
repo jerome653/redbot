@@ -227,3 +227,33 @@ test('counters roll up reads, sessions and dwell from the activity log', async (
   assert.equal(c.avgDwellMs, 40_000);
   assert.equal(c.avgSessionMs, 15 * 60_000);
 });
+
+/**
+ * OUR OWN CAUTION IS NOT REDDIT'S REFUSAL.
+ *
+ * src/commands/auto.ts files a `ratelimit` row when it leaves a subreddit alone that recently 429d
+ * (src/throttle.ts SOURCE_COOLDOWN_MS) — put there so the decision is visible where the refusals
+ * are, which means both read-429 counters have to exclude it. Counted, the figure would rise with
+ * every cycle that behaved correctly, and `readRateLimits24h` is the number an operator reads to
+ * decide whether collection is being throttled at all.
+ */
+test('a cooldown skip is not counted as a read rate limit', async () => {
+  const refusal = h('ratelimit', 30, { stage: 'read' });
+  const ourSkip = h('ratelimit', 20, { stage: 'read', cooldownSkip: true });
+
+  const c = await counters(ACC, NOW, { history: [refusal, ourSkip], observations: [] });
+  assert.equal(c.readRateLimits24h, 1, 'one refusal from Reddit, one decision of ours');
+  assert.equal(c.lastReadRateLimitAt, refusal.ts,
+    'and the last throttle is the 429, not the skip it caused');
+});
+
+test('nor in the metrics rate-limit total, which reads the same rows', async () => {
+  const { computeMetrics } = await import('../metrics.js');
+  const m = await computeMetrics([
+    h('ratelimit', 40, { stage: 'read' }),
+    h('ratelimit', 30, { stage: 'read', cooldownSkip: true }),
+    h('ratelimit', 20, { stage: 'read', cooldownSkip: true })
+  ]);
+  assert.equal(m.reliability.rateLimitHits, 1,
+    'two of those three rows are redbot leaving a source alone, which is not a rate-limit hit');
+});

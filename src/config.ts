@@ -461,9 +461,37 @@ export const config = {
   /** Hard stops that keep a run inside the measured envelope. */
   budget: {
     maxThreadsPerRun: 15,
-    /** on HTTP 429 / block page: wait this long, then retry once */
+    /**
+     * On HTTP 429 / block page: wait this long before the FIRST retry.
+     *
+     * Still the measured 300s — src/throttle.ts `backoffMs` takes it as the base and the floor, so
+     * an install that upgrades waits exactly as long as it does today on the first refusal and
+     * longer on each one after it. Shortening this is the one change the SGEN standing rule on
+     * live scanning forbids outright.
+     */
     rateLimitBackoffMs: 300_000,
-    maxRateLimitRetries: 1
+    /**
+     * The ceiling the doubling may not pass, 30 minutes.
+     *
+     * Chosen as the longest wait that still leaves a cycle able to finish: the rotation
+     * (tools/product/server.mjs) runs a turn roughly every 30 minutes, and policy.ts:168 records a
+     * measured recovery from a single 429 of under 5 minutes, so this is already a sixfold
+     * over-correction.
+     */
+    rateLimitBackoffMaxMs: 1_800_000,
+    maxRateLimitRetries: 1,
+    /**
+     * The wait BETWEEN sources after one of them is throttled, and its ceiling.
+     *
+     * A new delay rather than a changed one: nothing paced the source list at all, which is how 25
+     * sources died in 27 seconds on 2026-09-28 and how two 429s one second apart ended a whole
+     * cycle's collection on 2026-11-03. It is gentler than the within-source backoff on purpose —
+     * the next source is a different subreddit, and the one that refused us is already on its own
+     * cooldown (src/throttle.ts SOURCE_COOLDOWN_MS) — so a throttled cycle keeps collecting
+     * instead of being abandoned.
+     */
+    sourceBackoffMs: 60_000,
+    sourceBackoffMaxMs: 600_000
   },
 
   /**

@@ -32,6 +32,8 @@ import { sel } from '../reddit/selectors.js';
 import { config, DATA, ensureData } from '../config.js';
 import { saveThreads } from '../store.js';
 import { record, say } from '../log.js';
+import { THROTTLED } from '../exit-codes.js';
+import { looksThrottled } from '../throttle.js';
 import { sleep, between } from '../pacing.js';
 import { isQuestionShaped } from '../select.js';
 import { assessCompetence } from '../competence.js';
@@ -86,6 +88,10 @@ function annotate(title: string | null): { notes: string[]; clean: boolean } {
 }
 
 async function preview(query: string, max: number, time: SearchWindow): Promise<number> {
+  /* A search meets the same wall a read does — measured 2026-11-03 20:28:16Z:
+     `search preview "agency websites" failed: page.goto: net::ERR_HTTP_RESPONSE_CODE_FAILURE`.
+     That is a 429 in an `error` row: invisible to health.ts and metrics.ts, and counted as a
+     fault by the cycle's abandon rule. See the catch block below. */
   say.head(`redbot search "${query}" · past ${time}`);
   if (!(await isBrowserUp())) {
     say.fail(new NoBrowserError(config.browser.cdpEndpoint).message);
@@ -146,6 +152,10 @@ async function preview(query: string, max: number, time: SearchWindow): Promise<
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     say.fail(msg);
+    if (looksThrottled(msg)) {
+      await record('ratelimit', `429 during search "${query}"`, { query, status: 'blocked', stage: 'read' });
+      return THROTTLED;
+    }
     await record('error', `search preview "${query}" failed: ${msg}`);
     return 1;
   } finally {
