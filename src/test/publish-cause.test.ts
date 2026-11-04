@@ -357,6 +357,20 @@ test('no publish path re-submits: the submit click appears exactly once in the s
   assert.doesNotMatch(src, /re-?submit\(/, 'there is no re-submit helper to call');
 });
 
+test('the reply-back path names a cause too, instead of "thread locked, or archived"', () => {
+  /* The page composer stopped ORing causes; src/reddit/actions.ts was still doing it, and
+     src/commands/reply.ts printed it verbatim under cause `undetermined`, so a reply-back refusal
+     still handed the operator the diagnosis to do. */
+  const src = readFileSync(join(ROOT, 'src', 'reddit', 'actions.ts'), 'utf8');
+  assert.doesNotMatch(src, /thread locked, or archived/,
+    'one measured cause, read off the page, never two facts with different remedies');
+  assert.match(src, /explainBlockedPublish\(/, 'the same probe the page composer uses');
+
+  const reply = readFileSync(join(ROOT, 'src', 'commands', 'reply.ts'), 'utf8');
+  assert.match(reply, /r\.cause \?\? 'undetermined'/,
+    'and the cause it measured survives the hop into the publish result');
+});
+
 /* ------------------------------------------------------------------ *
  * 4. the history contract the console reads
  * ------------------------------------------------------------------ */

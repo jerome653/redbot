@@ -667,7 +667,9 @@ export async function reply(
                 error: 'submitted under the reply and not found there afterwards — the outcome is UNRESOLVED, ' +
                   'not failed. Check the thread by hand; redbot will NOT re-submit it.'
               }
-              : { ok: false, cause: 'undetermined', outcome: 'failed', permalink: target.permalink, error: r.error })
+              /* The cause the reply path measured, when it measured one (src/reddit/actions.ts);
+                 `undetermined` only when it genuinely could not name one. */
+              : { ok: false, cause: r.cause ?? 'undetermined', outcome: 'failed', permalink: target.permalink, error: r.error })
       : await publishComment(s.page, target.permalink, target.body);
 
     /**
