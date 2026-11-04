@@ -166,9 +166,12 @@ let pushScheduler = null;
  * four-character hint and which master key sealed it, which identifies a credential without
  * being usable as one.
  */
+/* Set when the db modules load; null on an install whose database never came up, in which case
+   a scheduled karma run simply measures (the pre-2026-11-04 behaviour). */
+let karmaMeasuredOnImpl = null;
 let vaultApi = null;
 try {
-  const [d, a, db, src, cred, ports, dbAccounts, machine, pages, sum, pre, dbProxies, relay, align, relayCore, proxyCred, webshare, detect, dbLocations] = await Promise.all([
+  const [d, a, db, src, cred, ports, dbAccounts, machine, pages, sum, pre, dbProxies, relay, align, relayCore, proxyCred, webshare, detect, dbLocations, dbLogs] = await Promise.all([
     import('../../dist/console-data.js'),
     import('../../dist/console-accounts.js'),
     import('../../dist/db.js'),
@@ -195,7 +198,9 @@ try {
     /* Where the browser ACTUALLY is, read from the browser itself. Cheap to load for the same
        reason align.js is: it imports nothing heavy until a detection actually runs. */
     import('../../dist/proxy/detect.js'),
-    import('../../dist/db/locations.js')
+    import('../../dist/db/locations.js'),
+    /* Only `karmaMeasuredOn` is wanted here: what a retried karma run must not measure twice. */
+    import('../../dist/db/logs.js')
   ]);
   domain = d.loadConsoleDomain;
   consoleAccounts = d.loadConsoleAccounts;
@@ -214,6 +219,7 @@ try {
   setUpHereImpl = a.setUpAccountHere;
   adoptProfileImpl = a.adoptProfileDir;
   boundHandlesImpl = () => dbAccounts.boundHandles(db.getPool());
+  karmaMeasuredOnImpl = (day) => dbLogs.karmaMeasuredOn(db.getPool(), day);
   /* Which exit each account owns. Read-only here — the console shows the address, it does not
      hand out the credential, which stays sealed in the vault (src/db/proxies.ts). */
   proxiesApi = () => dbProxies.loadAccountProxies(db.getPool());
@@ -3591,6 +3597,20 @@ const server = createServer((req, res) => {
         const { accounts: karmaAccts } = await consoleAccounts();
         const findAcct = async (h) => karmaAccts.find((x) => x.handle === h);
         const lines = [];
+        /**
+         * TODAY'S FIGURES, READ ONCE, AND ONLY FOR THE SCHEDULED RUN.
+         *
+         * `redbot-karma.timer` retries after a run that declined to race the rotation, so the
+         * scheduled path must not re-measure what it already has. A PERSON clicking measure is
+         * never suppressed: Clark re-reads karma by hand during his shift, and a button that
+         * silently does nothing because a timer was there first is a button nobody trusts.
+         */
+        const scheduled = !!(body && body.scheduled);
+        let onRecord = null;
+        if (scheduled && karmaMeasuredOnImpl) {
+          try { onRecord = await karmaMeasuredOnImpl(new Date().toISOString().slice(0, 10)); }
+          catch (e) { lines.push(`could not read today's figures, measuring anyway - ${e && e.message ? e.message : String(e)}`); }
+        }
         const r = await measureKarma({
           accounts: () => karmaAccts,
           browserState: async (h) => {
@@ -3619,6 +3639,7 @@ const server = createServer((req, res) => {
           }),
           busy: (h) => !!(running && ACTIONS[running] && ACTIONS[running].needsBrowser && runningAccount === h),
           rotationLive: () => rotationHolds.live,
+          measuredToday: (h) => !!(onRecord && onRecord.has(h)),
           hold: rotationHolds.hold,
           release: rotationHolds.release,
           log: (line) => lines.push(line)

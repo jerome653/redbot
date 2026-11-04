@@ -23,8 +23,15 @@
  * of several this reaches.
  *
  * EXIT CODE IS THE UNIT'S VERDICT. No console, no answer, or a measurement that failed all exit
- * non-zero, because `redbot-karma.service` has no `SuccessExitStatus` override: a run that
- * measured nothing has to show FAILED rather than report a success nobody reads.
+ * non-zero: a run that measured nothing has to show FAILED rather than report a success nobody
+ * reads. The ONE exception is 75 (EX_TEMPFAIL, `karma-measure.mjs`), which the route returns
+ * when nothing was free to measure - the rotation held the fleet, or every account was busy.
+ * `redbot-karma.service` declares `SuccessExitStatus=75` and the timer carries retry slots, so
+ * a deliberate refusal is a later rather than a red unit. Measured 2026-11-03: that refusal
+ * exited 1, the unit went red, and the day kept 4 of 13 accounts' karma instead of 13.
+ *
+ * `scheduled: true` marks this as the TIMER's run, which is the only run allowed to skip an
+ * account whose figure is already on record for the day. A person's click always measures.
  */
 import http from 'node:http';
 import { userDataDir, consoleBase } from './console-endpoint.mjs';
@@ -81,7 +88,7 @@ export async function requestKarma({
       /* `JSON.stringify` drops an undefined value, so no handle sends `{}` - which the route
          reads as "every configured account". The ternary this replaced was an equivalent
          mutant: both forms produced the same two bytes, and no test could tell them apart. */
-      body: JSON.stringify({ handle }),
+      body: JSON.stringify({ handle, scheduled: true }),
       timeoutMs
     });
   } catch (e) {

@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { measureKarma } from './karma-measure.mjs';
+import { measureKarma, EX_TEMPFAIL } from './karma-measure.mjs';
 import { holdRegistry } from './rotation.mjs';
 
 const FLEET = [
@@ -66,7 +66,12 @@ test('a browser that was ALREADY open is measured and left open', async () => {
 test('a tick in flight refuses the WHOLE run and touches no browser', async () => {
   const { deps, calls } = rig({ rotationLive: () => true });
   const r = await measureKarma(deps);
-  assert.equal(r.code, 1);
+  /* MEASURED 2026-11-03 13:30 PST: this refusal exited 1, systemd recorded
+     "status=1/FAILURE", the unit went red and stayed red, and the timer had no retry - so
+     3 Nov recorded karma for 4 of 13 accounts against 13 of 13 on 1 and 2 Nov. A refusal
+     the module makes on purpose is a LATER, not a failure. */
+  assert.equal(r.code, EX_TEMPFAIL, 'declining to race the rotation is this module working');
+  assert.notEqual(r.code, 1, 'exit 1 is what turned a deliberate skip into a red unit');
   assert.deepEqual(r.measured, []);
   assert.deepEqual(calls.opened, [], 'rotationTick picks its account after it starts - there is nothing safe to open');
   assert.deepEqual(calls.held, []);
@@ -87,7 +92,8 @@ test('a foreign or unidentifiable port is never driven', async () => {
     const r = await measureKarma(deps);
     assert.deepEqual(calls.opened, [], `${state}: that port is not ours`);
     assert.deepEqual(r.measured, []);
-    assert.equal(r.code, 1);
+    assert.equal(r.code, 1,
+      'a port we cannot drive will not fix itself by waiting 20 minutes - it stays a reported fault');
     assert.deepEqual(r.skipped.map((s) => s.why), [`port is ${state}`, `port is ${state}`]);
   }
 });
@@ -149,11 +155,51 @@ test('an unknown handle, or a fleet with no debug ports, is a refusal rather tha
   assert.equal(b.code, 1, 'an account with no debugPort cannot be probed');
 });
 
-test('every account busy is exit 1 and no failures - nothing was measured and nothing broke', async () => {
+test('every account busy is a RETRY and no failures - nothing was measured and nothing broke', async () => {
   const { deps, calls } = rig({ busy: () => true });
   const r = await measureKarma(deps);
-  assert.equal(r.code, 1);
+  assert.equal(r.code, EX_TEMPFAIL, 'every account in use right now is a later, not a fault');
   assert.deepEqual(r.failed, []);
   assert.equal(r.skipped.length, 2);
   assert.deepEqual(calls.opened, []);
+});
+
+/* ------------------------------------------------------------------------- *
+ * ALREADY MEASURED TODAY
+ *
+ * The retry that fixes the red unit above only costs nothing if a run that has nothing left
+ * to do opens no browser. Thirteen Chrome launches per retry, against a fleet a human is
+ * working in over VNC, is a worse defect than the one being fixed.
+ * ------------------------------------------------------------------------- */
+
+test('an account measured already today is skipped, and never opened or probed', async () => {
+  const { deps, calls } = rig({ measuredToday: (h) => h === 'jordangrowth' });
+  const r = await measureKarma(deps);
+  assert.deepEqual(r.measured, ['Big_Variation_8580']);
+  assert.deepEqual(r.skipped.map((s) => s.handle), ['jordangrowth']);
+  assert.deepEqual(calls.opened, ['Big_Variation_8580'], "today it is already on record");
+  assert.deepEqual(calls.probed, ['http://127.0.0.1:9223']);
+  assert.equal(r.code, 0);
+});
+
+test('a whole fleet already measured today is exit 0 - the day has its data', async () => {
+  const { deps, calls } = rig({ measuredToday: () => true });
+  const r = await measureKarma(deps);
+  assert.equal(r.code, 0, 'nothing to do is not a failure and not a retry');
+  assert.deepEqual(r.measured, []);
+  assert.deepEqual(r.failed, []);
+  assert.deepEqual(calls.opened, [], 'a retry that relaunches the fleet for nothing is worse than the red unit');
+  assert.deepEqual(calls.held, []);
+});
+
+test('without the measuredToday dep nothing is suppressed', async () => {
+  const { deps, calls } = rig();
+  const r = await measureKarma(deps);
+  assert.deepEqual(r.measured, ['jordangrowth', 'Big_Variation_8580']);
+  assert.equal(calls.opened.length, 2);
+  assert.equal(r.code, 0);
+});
+
+test('EX_TEMPFAIL is 75, the code the unit file declares a success', async () => {
+  assert.equal(EX_TEMPFAIL, 75);
 });
