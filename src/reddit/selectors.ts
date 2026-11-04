@@ -32,6 +32,27 @@ export const sel = {
   commentNode: ['shreddit-comment', 'div[data-testid="comment"]', 'div[data-type="comment"]'],
   commentBody: ['div[slot="comment"]', 'div[data-testid="comment"] p', 'p'],
 
+  /**
+   * Is the page rendered for a signed-in account, or for nobody?
+   *
+   * Reddit answers this on the app host itself (`user-logged-in`), which is the only marker that
+   * states the fact rather than implying it from a control. The rest are fallbacks for markup that
+   * does not carry the attribute. Signed-IN candidates are tried first: a signed-in page can still
+   * render a login link, and "signed out" on a signed-in session sends an operator to
+   * re-authenticate something that was never broken.
+   */
+  signedInMarker: [
+    'shreddit-app[user-logged-in="true"]',
+    'faceplate-tracker[noun="user_account_menu"]',
+    'button[aria-label*="Expand user menu" i]',
+    'shreddit-async-loader[bundlename="account_switcher"]'
+  ],
+  signedOutMarker: [
+    'shreddit-app[user-logged-in="false"]',
+    'faceplate-tracker[noun="login"]',
+    'a[href*="/login/"]'
+  ],
+
   /** Comment composer on a post detail page. */
   commentBoxTrigger: [
     /**

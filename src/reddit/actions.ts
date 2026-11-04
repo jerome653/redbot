@@ -22,12 +22,18 @@
  */
 import type { Page, Locator } from 'playwright';
 import { sel } from './selectors.js';
+import { explainBlockedPublish, probePageState, type PublishCause } from './publish-state.js';
 import { firstVisible } from './scrape.js';
 import { pause, sleep, typingDelay } from '../pacing.js';
 
 export interface ActionResult {
   ok: boolean;
   error?: string;
+  /**
+   * The ONE measured cause of a refusal, in the same closed vocabulary publishComment uses
+   * (src/reddit/publish-state.ts). Absent when the refusal is not one of those causes.
+   */
+  cause?: PublishCause;
   /** What the page showed afterwards, when it showed anything. Absent = could not confirm. */
   confirmed?: boolean;
   url?: string;
@@ -82,8 +88,28 @@ export async function replyToComment(
       return { ok: false, error: `comment ${commentId} is not on the page — deleted, collapsed, or on another page of comments` };
     }
 
+    /* ONE CAUSE, NOT AN OR. The old locked-or-archived message named two facts with different remedies
+       and read neither of them — an archive never lifts, a lock can, and markup drift is a code
+       change. The page is asked instead, by the same probe the page composer uses. */
     const replyBtn = await within(comment, sel.commentReplyButton);
-    if (!replyBtn) return { ok: false, error: 'no reply control on that comment — thread locked, or archived' };
+    if (!replyBtn) {
+      /* THE PROBE IS NOT OVERRIDDEN. Forcing `composerPresent: true` here reached
+         `explainBlockedPublish`'s `if (s.composerPresent) return null` before its unreadable-fact
+         branch, so `undetermined` became unreachable from this call site and a page that answered
+         NOTHING was told "signed in, unlocked and unarchived - go and look at the selectors": a
+         confident wrong cause, and the two halves of the publish path disagreeing about the same
+         facts, which is what TIER0-BLOCKER-2026-07-27 was. The page is read as it is. */
+      const blocked = explainBlockedPublish(await probePageState(page));
+      return blocked
+        ? { ok: false, cause: blocked.cause, error: blocked.message }
+        : {
+          ok: false,
+          cause: 'composer-missing',
+          error: 'no reply control on that comment, and the thread is signed in, unlocked and '
+            + 'unarchived — the reply-control selectors in src/reddit/selectors.ts have drifted '
+            + 'from the markup Reddit now serves. This needs a code change. Nothing was typed.'
+        };
+    }
     await replyBtn.click();
     await pause();
 
