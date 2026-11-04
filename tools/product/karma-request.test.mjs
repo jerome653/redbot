@@ -34,8 +34,9 @@ test('it posts to the console on file, as JSON, and passes a handle only when gi
     ['http://127.0.0.1:40547/api/karma/measure', 'http://127.0.0.1:40547/api/karma/measure']);
   assert.equal(seen[0].init.method, 'POST');
   assert.equal(seen[0].init.headers['content-type'], 'application/json');
-  assert.equal(seen[0].init.body, '{}', 'no handle means every configured account');
-  assert.equal(seen[1].init.body, '{"handle":"x"}');
+  assert.equal(seen[0].init.body, '{"scheduled":true}',
+    'no handle means every configured account, and `scheduled` marks this as the timer’s run - the only run allowed to skip an account whose figure is already on record');
+  assert.equal(seen[1].init.body, '{"handle":"x","scheduled":true}');
 });
 
 test("THE REGRESSION: a run that measured nothing is exit 1, whatever the HTTP status", async () => {
@@ -155,7 +156,7 @@ test('the default transport is not the global fetch', async () => {
     const lines = [];
     const code = await requestKarma({ base, log: (l) => lines.push(l) });
     assert.equal(code, 0, lines.join('\n'));
-    assert.deepEqual(lines, ['{}'], 'the request body reached the server');
+    assert.deepEqual(lines, ['{"scheduled":true}'], 'the request body reached the server');
   } finally { globalThis.fetch = real; srv.close(); }
 });
 
@@ -180,4 +181,18 @@ test('a timeout is exit 1 and names how long it waited', async () => {
     assert.equal(code, 1);
     assert.match(lines.join('\n'), /no answer within 100 ms/);
   } finally { srv.close(); }
+});
+
+test('EX_TEMPFAIL 75 reaches the unit unchanged - it is the code SuccessExitStatus declares', async () => {
+  /* MEASURED 2026-11-03 13:30 PST: the route answered "a rotation tick is in flight" with code 1
+     and systemd recorded status=1/FAILURE. 75 is that same refusal said properly; if this file
+     clamped it to 1 the unit would still go red and the retry slots would mean nothing. */
+  const lines = [];
+  const code = await requestKarma({
+    base: 'http://127.0.0.1:1',
+    fetchImpl: async () => ({ ok: false, status: 400, json: async () => ({ code: 75, output: ['a rotation tick is in flight - not measuring this run, a retry slot will come back for it'] }) }),
+    log: (l) => lines.push(l)
+  });
+  assert.equal(code, 75);
+  assert.ok(lines.some((l) => l.includes('rotation tick is in flight')), 'the reason is printed, not just the number');
 });

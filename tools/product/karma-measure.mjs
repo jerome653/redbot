@@ -41,6 +41,21 @@
  * browser once a day is a probe people switch off.
  */
 
+/**
+ * EX_TEMPFAIL, from sysexits(3): "try again later", not "something is broken".
+ *
+ * MEASURED 2026-11-03 13:30 PST. The rotation-in-flight refusal below returned 1, so systemd
+ * logged `status=1/FAILURE`, `redbot-karma.service` went red and stayed red, and because
+ * `redbot-karma.timer` has only two OnCalendar slots and no retry, the day's measurement was
+ * simply gone: 3 Nov recorded karma for 4 of 13 accounts, against 13 of 13 on 1 and 2 Nov.
+ *
+ * A refusal this module makes ON PURPOSE must be distinguishable from a measurement that
+ * failed, or the one signal an operator has - the unit's colour - reports the safe path as a
+ * fault. 75 is what the unit file declares via `SuccessExitStatus=`, and what the retry slots
+ * exist to come back for.
+ */
+export const EX_TEMPFAIL = 75;
+
 /** A port held by something that is not our Chrome, or that we cannot identify, is not ours to drive. */
 const UNTOUCHABLE = new Set(['foreign', 'unknown']);
 
@@ -57,6 +72,7 @@ const msg = (e) => (e instanceof Error ? e.message : String(e));
  *        resolves a port from via REDBOT_ACCOUNT. A caller uses whichever it actually runs.
  * @param {(h: string) => boolean} deps.busy                   a console button is driving it
  * @param {() => boolean} deps.rotationLive                    a rotation tick is in flight
+ * @param {(h: string) => boolean} [deps.measuredToday]        today's figure is already on record
  * @param {(h: string) => object} deps.hold                    take the turn-hold, returns a token
  * @param {(h: string, token: object) => void} deps.release
  * @param {(line: string) => void} [deps.log]
@@ -70,8 +86,8 @@ export async function measureKarma(deps, only) {
      answer while it is choosing is "not now". It runs for minutes; this runs once a day. A
      skipped day costs one data point. A guess costs a publish. */
   if (deps.rotationLive()) {
-    log('a rotation tick is in flight - not measuring this run');
-    return { ok: false, measured: [], skipped: [], failed: [], code: 1 };
+    log('a rotation tick is in flight - not measuring this run, a retry slot will come back for it');
+    return { ok: false, measured: [], skipped: [{ handle: '*', why: 'a rotation tick is in flight', kind: 'retry' }], failed: [], code: EX_TEMPFAIL };
   }
 
   const configured = deps.accounts().filter((a) => typeof a.debugPort === 'number' && a.debugPort > 0);
@@ -88,7 +104,16 @@ export async function measureKarma(deps, only) {
   for (const a of wanted) {
     const h = a.handle;
 
-    if (deps.busy(h)) { skipped.push({ handle: h, why: 'a console action is driving it' }); continue; }
+    if (deps.busy(h)) { skipped.push({ handle: h, why: 'a console action is driving it', kind: 'retry' }); continue; }
+
+    /* NOTHING TO DO IS NOT WORK TO REDO. The retry slots that fix the red unit only cost
+       nothing if a run whose figures are already on record opens no browser: 13 Chrome
+       launches per retry, into a fleet a person is working in over VNC, would be a worse
+       defect than the one being fixed. */
+    if (deps.measuredToday && deps.measuredToday(h)) {
+      skipped.push({ handle: h, why: "today's figure is already on record", kind: 'done' });
+      continue;
+    }
 
     /* Re-read per account rather than once up front: state changes under a loop that opens and
        closes browsers, and a stale answer is what puts two processes on one port. */
@@ -96,7 +121,9 @@ export async function measureKarma(deps, only) {
     try { state = await deps.browserState(h); }
     catch (e) { failed.push(h); log(`${h}: could not be checked - ${msg(e)}`); continue; }
 
-    if (UNTOUCHABLE.has(state)) { skipped.push({ handle: h, why: `port is ${state}` }); continue; }
+    /* A port we cannot drive will not come free by waiting 20 minutes, so this one keeps the
+       reported-fault exit code rather than becoming a silent retry. */
+    if (UNTOUCHABLE.has(state)) { skipped.push({ handle: h, why: `port is ${state}`, kind: 'problem' }); continue; }
 
     const token = deps.hold(h);
     let weOpened = false;
@@ -128,13 +155,27 @@ export async function measureKarma(deps, only) {
     }
   }
 
-  /* Exit 1 when nothing was measured, or when an account we actually tried failed: either way a
-     data point the operator expects is missing. An account SKIPPED for being busy is not a
-     failure - declining to drive a browser somebody else is using is this module working. */
-  const code = failed.length || !measured.length ? 1 : 0;
+  /* THREE OUTCOMES, NOT TWO.
+       1  a measurement was attempted and failed, or there was nothing configured to measure -
+          a data point the operator expects is missing and nobody will come back for it;
+       0  something was measured, OR every account already had today's figure on record;
+       75 nothing was measured and nothing broke, because the accounts were busy or the
+          rotation held the fleet - exactly the case a retry slot is for.
+     An account SKIPPED is not a failure; what changes with this is that a run made up only of
+     deliberate skips no longer reports itself as one. */
+  const retryable = skipped.filter((s) => s.kind === 'retry');
+  const problems = skipped.filter((s) => s.kind === 'problem');
+  let code;
+  if (failed.length) code = 1;
+  else if (measured.length) code = 0;
+  else if (!problems.length && !retryable.length && skipped.length) code = 0;  // all on record already
+  else if (retryable.length) code = EX_TEMPFAIL;
+  else code = 1;
+
   if (measured.length) log(`measured: ${measured.join(', ')}`);
   if (skipped.length) log(`skipped: ${skipped.map((s) => `${s.handle} (${s.why})`).join(', ')}`);
   if (failed.length) log(`not measured: ${failed.join(', ')}`);
-  if (!measured.length && !failed.length && skipped.length) log('every account was busy - nothing measured');
+  if (!measured.length && !failed.length && retryable.length) log('nothing was free to measure - a retry slot will come back for it');
+  if (!measured.length && !failed.length && !retryable.length && !problems.length && skipped.length) log("every account already has today's figure - nothing to measure");
   return { ok: code === 0, measured, skipped, failed, code };
 }

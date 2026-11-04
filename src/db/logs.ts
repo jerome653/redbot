@@ -122,6 +122,33 @@ export async function insertObservation(db: Db, o: Observation): Promise<void> {
   );
 }
 
+/**
+ * WHICH ACCOUNTS ALREADY HAVE A KARMA FIGURE FOR THIS UTC DAY.
+ *
+ * Exists so a retried karma run can decline to re-measure. `redbot-karma.timer` gained retry
+ * slots after 2026-11-03, when a run that refused to race the rotation exited 1 and the day's
+ * measurement was lost with it (4 of 13 accounts recorded, against 13 of 13 the two days
+ * before). A retry is only safe if a run with nothing left to do opens no browser - thirteen
+ * Chrome launches into a fleet a person is working in would be the worse defect.
+ *
+ * The day is a UTC calendar day because `observations.ts` is written in UTC with a `Z`, and the
+ * bounds are compared as a half-open range rather than with a substring, so an index on `ts`
+ * stays usable and the same statement holds on both backends.
+ */
+export async function karmaMeasuredOn(db: Db, day: string): Promise<Set<string>> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`not a UTC day: "${day}"`);
+  const next = new Date(`${day}T00:00:00.000Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  const r = await db.query<{ account: string | null }>(
+    `SELECT DISTINCT account FROM observations
+      WHERE kind = 'karma' AND account IS NOT NULL AND ts >= $1 AND ts < $2`,
+    [`${day}T00:00:00.000Z`, next.toISOString()]
+  );
+  const on = new Set<string>();
+  for (const row of r.rows) if (row.account) on.add(row.account);
+  return on;
+}
+
 export async function selectObservations(db: Db, t?: Tail): Promise<Observation[]> {
   const q = tail(t, []);
   const r = await db.query<ObservationRow>(
