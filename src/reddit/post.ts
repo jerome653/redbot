@@ -9,6 +9,11 @@ import { sel } from './selectors.js';
 import { firstVisible, firstUsable } from './scrape.js';
 import { pause, sleep, typingDelay } from '../pacing.js';
 import { config } from '../config.js';
+import type { EvidenceSource } from '../confirm.js';
+import {
+  probePageState, explainBlockedPublish, explainMissingSubmit, submitControlPresent,
+  type PublishCause, type CauseVerdict
+} from './publish-state.js';
 
 /**
  * Does a rendered comment node's text contain the body we just posted?
@@ -38,7 +43,36 @@ export interface PublishResult {
    */
   commentPermalink?: string;
   commentId?: string;
+  /**
+   * The ONE measured cause of a failure. Absent on success.
+   *
+   * The point of the field is that it is a closed set: a caller can act on it, and a message
+   * that ORs three causes cannot be put in it without choosing one.
+   */
+  cause?: PublishCause;
+  /**
+   * `failed` — nothing was submitted; the draft is untouched on Reddit.
+   * `unresolved` — the submit happened and the landing could NOT be established either way.
+   *
+   * These are not the same event and must never be reported as one. A re-send after `failed` is
+   * safe; a re-send after `unresolved` can duplicate a comment that landed, which cannot be
+   * taken back — so redbot never does it, and says so.
+   */
+  outcome?: 'failed' | 'unresolved';
+  /** The thread, carried on every non-success so a person can go and look. */
+  permalink?: string;
+  /**
+   * How the landing was, or was not, established — in the vocabulary of the `confirmations`
+   * table (src/confirm.ts), because that is where the caller writes it. `same-page` is a read
+   * off the page the submit touched and is NOT proof of anything more; `reloaded` is a read the
+   * server answered again.
+   */
+  evidence?: { confirmed: boolean; source: EvidenceSource; observed: string };
 }
+
+/** A refusal that names one measured cause. Nothing was submitted on any path that uses it. */
+const refuse = (v: CauseVerdict, permalink: string): PublishResult =>
+  ({ ok: false, cause: v.cause, outcome: 'failed', permalink, error: v.message });
 
 async function typeHuman(page: Page, text: string): Promise<void> {
   for (const ch of text) {
@@ -47,10 +81,40 @@ async function typeHuman(page: Page, text: string): Promise<void> {
   }
 }
 
-export async function publishComment(page: Page, permalink: string, body: string): Promise<PublishResult> {
+/**
+ * Waits are injectable ONLY so the unit suite does not sleep through them. Live callers pass
+ * nothing and get the measured pacing; a test passes a no-op and the same code path runs.
+ */
+export interface PublishHooks {
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export async function publishComment(
+  page: Page,
+  permalink: string,
+  body: string,
+  hooks?: PublishHooks
+): Promise<PublishResult> {
+  const nap = hooks?.sleep ?? sleep;
+  /* Set the instant the submit is clicked. It is the line between "nothing happened" and "we do
+     not know what happened", and every report below depends on which side of it we are on. */
+  let submitted = false;
   try {
     await page.goto(permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await pause();
+
+    /**
+     * PROBE BEFORE COMPOSING.
+     *
+     * Three different causes used to arrive as one message — "comment composer not found —
+     * logged out, or thread locked?" — on 2026-10-26, 10-28 and 10-30. Each fact is read
+     * separately here (signed-in state, lock, archive, composer presence) so a refusal can name
+     * the ONE that explains it, and so "nothing was typed" is true in every one of those
+     * messages: at this point not a character has been entered.
+     */
+    const state = await probePageState(page);
+    const blocked = explainBlockedPublish(state);
+    if (blocked) return refuse(blocked, permalink);
 
     /**
      * Open the lazy composer.
@@ -70,34 +134,49 @@ export async function publishComment(page: Page, permalink: string, body: string
       let trigger = null;
       for (let i = 0; i < 6 && !trigger; i++) {
         trigger = await firstVisible(page, sel.commentBoxTrigger);
-        if (!trigger) await sleep(700);
+        if (!trigger) await nap(700);
       }
       if (!trigger) {
-        return { ok: false, error: 'comment composer not found — logged out, or thread locked?' };
+        /* Read the page again rather than reuse the probe: a composer host can appear or vanish
+           between two reads, and the cause reported must be the state that actually refused. */
+        const now = await probePageState(page);
+        return refuse(explainBlockedPublish(now) ?? {
+          cause: 'composer-missing',
+          message: 'the composer host was there on the first read and gone on the second — the page changed ' +
+            'under the run. Nothing was typed; send the draft again.'
+        }, permalink);
       }
       await trigger.scrollIntoViewIfNeeded().catch(() => { /* already in view */ });
       await trigger.click().catch(() => { /* a host that is itself the composer needs no click */ });
       for (let i = 0; i < 10 && !editorVisible; i++) {
-        await sleep(500);
+        await nap(500);
         editorVisible = await page.locator(editorSel).first().isVisible().catch(() => false);
       }
     }
 
     const editor = await firstUsable(page, sel.commentEditor);
     if (!editor || !(await editor.isVisible().catch(() => false))) {
-      return { ok: false, error: 'comment editor did not open, or opened read-only' };
+      return refuse({
+        cause: 'composer-missing',
+        message: 'the composer opened but its editor never became usable — read-only, or the editor selectors ' +
+          'in src/reddit/selectors.ts have drifted from Reddit\'s markup. Nothing was typed.'
+      }, permalink);
     }
 
     await editor.click();
-    await sleep(400);
+    await nap(400);
     await typeHuman(page, body);
     await pause();
 
+    /* PRESENT-BUT-DISABLED AND ABSENT ARE DIFFERENT PROBLEMS, and 2026-10-29T03:47:42Z
+       Big_Variation_8580 got a message that would not say which: one is Reddit holding the button
+       until it accepts the composer's contents, the other is a selector that matches nothing. */
     const submit = await firstUsable(page, sel.commentSubmit);
-    if (!submit) return { ok: false, error: 'submit button not found, or still disabled' };
+    if (!submit) return refuse(explainMissingSubmit(await submitControlPresent(page)), permalink);
 
     await submit.click();
-    await sleep(3500);
+    submitted = true;
+    await nap(3500);
 
     /**
      * Confirm by finding OUR just-posted comment node and reading its own identity off it. The
@@ -115,15 +194,59 @@ export async function publishComment(page: Page, permalink: string, body: string
       }))
     ).catch(() => [] as CommentNode[]);
 
-    let ours: CommentNode | undefined;
-    for (let attempt = 0; attempt < 4 && !ours; attempt++) {
-      if (attempt) await sleep(2000);
-      const nodes = await readNodes();
-      ours = nodes.find((n) => commentTextMatches(n.text, body));
+    const look = async (tries: number): Promise<CommentNode | undefined> => {
+      for (let attempt = 0; attempt < tries; attempt++) {
+        if (attempt) await nap(2000);
+        const nodes = await readNodes();
+        const hit = nodes.find((n) => commentTextMatches(n.text, body));
+        if (hit) return hit;
+      }
+      return undefined;
+    };
+
+    /* Pass 1 — the page the submit touched. Enough to say the comment is there; not enough to
+       say anything stronger, which is exactly what `same-page` means in src/confirm.ts. */
+    let ours = await look(4);
+    let source: EvidenceSource = 'same-page';
+
+    /**
+     * Pass 2 — a FRESH NAVIGATION, which is what the `reloaded` confirmation kind is: state the
+     * server answered again. 2026-10-26T18:37:30Z evanwebtalk died at pass 1 with "submitted but
+     * the comment was not found on the page afterwards", and a comment that rendered a beat late
+     * produced the identical row as one that never landed. One navigation separates them.
+     */
+    if (!ours) {
+      await page.goto(permalink, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => null);
+      await nap(2500);
+      ours = await look(3);
+      source = 'reloaded';
     }
 
     if (!ours) {
-      return { ok: false, error: 'submitted but the comment was not found on the page afterwards' };
+      /**
+       * UNRESOLVED — not failed, and never a re-submit.
+       *
+       * The comment may be on Reddit and invisible to this session; a shadow removal reads
+       * exactly like this. A second submit on a comment that landed is a double post on
+       * somebody else's thread and cannot be taken back, so the outcome is handed to a person
+       * with the link, which is the only safe move available here.
+       */
+      return {
+        ok: false,
+        cause: 'unconfirmed',
+        outcome: 'unresolved',
+        permalink,
+        url: page.url(),
+        evidence: {
+          confirmed: false,
+          source: 'reloaded',
+          observed: 'the comment was not on the thread after the submit, nor after a fresh navigation'
+        },
+        error: `submitted, but the comment is not on ${permalink} — not on the page the submit touched, ` +
+          'and not after a fresh reload either. The outcome is UNRESOLVED, not failed: it may have landed ' +
+          'and be invisible to this session. Open that thread and check by hand. redbot will NOT re-submit ' +
+          'it — a double post cannot be taken back.'
+      };
     }
 
     const abs = ours.permalink
@@ -133,11 +256,36 @@ export async function publishComment(page: Page, permalink: string, body: string
     return {
       ok: true,
       url: page.url(),
+      permalink,
       ...(abs ? { commentPermalink: abs } : {}),
-      ...(ours.id ? { commentId: ours.id } : {})
+      ...(ours.id ? { commentId: ours.id } : {}),
+      evidence: {
+        confirmed: true,
+        source,
+        observed: (source === 'reloaded'
+          ? 'our comment is on the thread after a fresh navigation'
+          : 'our comment is on the thread the submit touched') + (abs ? ` — ${abs}` : '')
+      }
     };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    const msg = e instanceof Error ? e.message : String(e);
+    /* An exception AFTER the submit click is not a failure — the comment may be on Reddit. It
+       gets the unresolved reading for the same reason a verification miss does. */
+    return submitted
+      ? {
+        ok: false,
+        cause: 'unconfirmed',
+        outcome: 'unresolved',
+        permalink,
+        evidence: {
+          confirmed: false,
+          source: 'same-page',
+          observed: `the run broke after the submit click: ${msg}`
+        },
+        error: `submitted, and then the run broke before the landing could be verified (${msg}). The outcome ` +
+          `is UNRESOLVED, not failed — check ${permalink} by hand. redbot will NOT re-submit it.`
+      }
+      : { ok: false, cause: 'undetermined', outcome: 'failed', permalink, error: msg };
   }
 }
 

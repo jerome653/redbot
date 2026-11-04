@@ -31,6 +31,7 @@ import { appendInteraction, INTERACTION_SCHEMA_VERSION } from '../interactions.j
 import { currentAgeHours } from '../select.js';
 import { autoBackup } from '../backup.js';
 import { publishComment, type PublishResult } from '../reddit/post.js';
+import { recordConfirmation } from '../confirm.js';
 import { replyToComment } from '../reddit/actions.js';
 import { parseReplyBackDraftId, replyContext } from '../reply-back.js';
 import { loadInteractions } from '../interactions.js';
@@ -643,15 +644,51 @@ export async function reply(
     /* A reply-back is written in the reply's OWN composer (reddit/actions.ts replyToComment). An
        unconfirmed submit is reported as a failure with an unknown outcome — the attempt row above
        already stops it being answered again, so nothing retries it. */
+    const publishStartedAt = Date.now();
     const result: PublishResult = back
       ? await replyToComment(s.page, (() => {
           /* OUR comment's own page: it renders the reply beneath it even when the thread is long. */
           const parent = drafts.find((d) => d.id === back.parentDraftId);
           return parent ? observeUrl(parent) : target.permalink;
         })(), back.parentThingId, target.body).then((r) =>
-          r.ok && r.confirmed ? { ok: true, url: r.url }
-            : { ok: false, error: r.ok ? 'submitted under the reply but not found there afterwards — outcome UNKNOWN, check by hand' : r.error })
+          r.ok && r.confirmed
+            ? { ok: true, url: r.url }
+            : r.ok
+              ? {
+                ok: false, cause: 'unconfirmed', outcome: 'unresolved', permalink: target.permalink,
+                error: 'submitted under the reply and not found there afterwards — the outcome is UNRESOLVED, ' +
+                  'not failed. Check the thread by hand; redbot will NOT re-submit it.'
+              }
+              : { ok: false, cause: 'undetermined', outcome: 'failed', permalink: target.permalink, error: r.error })
       : await publishComment(s.page, target.permalink, target.body);
+
+    /**
+     * The landing goes in the `confirmations` table — the project's existing answer to "did the
+     * effect survive an independent read?" — rather than into a second record that would then
+     * have to be reconciled with it. The source is the publish path's own measurement:
+     * `reloaded` when it took a fresh navigation to see the comment, `same-page` when it did
+     * not, and same-page is deliberately not dressed up as more than it is (src/confirm.ts).
+     * A NEGATIVE confirmation is written too: an unresolved landing is the case worth studying.
+     */
+    const writeConfirmation = async (): Promise<void> => {
+      if (!result.evidence) return;
+      try {
+        await recordConfirmation({
+          ts: new Date().toISOString(),
+          action: 'publish:comment',
+          account: identity.username ?? target.account ?? '',
+          confirmed: result.evidence.confirmed,
+          source: result.evidence.source,
+          observed: result.evidence.observed,
+          ...(result.commentPermalink ? { permalink: result.commentPermalink } : {}),
+          ...(result.permalink && !result.commentPermalink ? { permalink: result.permalink } : {}),
+          visibility: 'unknown',
+          ms: Date.now() - publishStartedAt
+        });
+      } catch (e) {
+        say.warn(`confirmation row not written: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    };
 
     if (result.ok) {
       target.status = 'published';
@@ -667,6 +704,7 @@ export async function reply(
         draftId: target.id, url: result.url, commentPermalink: result.commentPermalink, commentId: result.commentId, ...warmTag, ...backTag,
         ...publishOkColumns(target.permalink, result)
       });
+      await writeConfirmation();
 
       /**
        * The publish row of the immutable interaction record.
@@ -716,12 +754,32 @@ export async function reply(
       return 0;
     }
 
+    /**
+     * Two different events, reported as two different things.
+     *
+     * `unresolved` means the submit happened and the landing could not be established — the
+     * comment may be on Reddit. The kind stays `publish.fail` so the console, stall-watch and
+     * every caller that counts those rows keep working; what the row now carries is the measured
+     * cause, which of the two events it was, and the thread to go and look at.
+     */
     target.status = 'failed';
     await saveDraft(target);
-    say.fail(`Publish failed: ${result.error}`);
-    say.warn('If you are unsure whether it landed, open the thread and check by hand before retrying.');
-    await record('publish.fail', `failed ${target.id}: ${result.error}`, {
-      draftId: target.id, error: result.error, ...warmTag, ...backTag
+    const unresolved = result.outcome === 'unresolved';
+    if (unresolved) {
+      say.fail(`Publish UNRESOLVED: ${result.error}`);
+      say.warn('Do NOT send this draft again before looking — it may already be on Reddit.');
+    } else {
+      say.fail(`Publish failed [${result.cause ?? 'undetermined'}]: ${result.error}`);
+      say.warn('Nothing was submitted. Fix the cause named above and send again.');
+    }
+    await writeConfirmation();
+    await record('publish.fail', `${unresolved ? 'unresolved' : 'failed'} ${target.id}: ${result.error}`, {
+      draftId: target.id,
+      error: result.error,
+      cause: result.cause ?? 'undetermined',
+      outcome: result.outcome ?? 'failed',
+      permalink: result.permalink ?? target.permalink,
+      ...warmTag, ...backTag
     });
     return 1;
   } finally {

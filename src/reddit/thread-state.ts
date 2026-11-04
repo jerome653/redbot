@@ -14,6 +14,7 @@
 import type { Page } from 'playwright';
 import { sel } from './selectors.js';
 import { firstVisible, firstUsable } from './scrape.js';
+import { readLockState } from './publish-state.js';
 
 export interface ThreadState {
   locked: boolean;
@@ -41,8 +42,6 @@ export interface ThreadState {
   commentCount: number | null;
 }
 
-const LOCK_TEXT = /this (?:thread|post) (?:is|has been) (?:locked|archived)|comments? (?:are|is) locked|archived post/i;
-
 export async function probeThreadState(page: Page, username: string | null): Promise<ThreadState> {
   const unknown: string[] = [];
   const anomalies: string[] = [];
@@ -58,32 +57,21 @@ export async function probeThreadState(page: Page, username: string | null): Pro
     anomalies.push(`URL is not a thread permalink: ${url}`);
   }
 
-  /* ---- lock / archive ---- */
-  let locked = false;
-  let archived = false;
-  const bodyText = await page.locator('body').innerText().catch(() => null);
-  if (bodyText == null) {
+  /* ---- lock / archive ---- *
+   * Read by `readLockState` (reddit/publish-state.ts), which the publish path also calls. Both
+   * halves of the publish path asking the same question of the same code is the point: when they
+   * had a copy each they disagreed, and the disagreement always resolved against publishing. */
+  const lock = await readLockState(page);
+  let locked = lock.locked;
+  let archived = lock.archived;
+  if (!lock.readable) {
     unknown.push('page text unreadable — cannot check for a lock or archive notice');
-  } else {
-    const notice = LOCK_TEXT.exec(bodyText);
-    if (notice) {
-      const hit = notice[0].toLowerCase();
-      locked = /lock/.test(hit);
-      archived = /archiv/.test(hit);
-    }
   }
 
-  // Reddit also marks the post element itself. Absence of the attribute is not proof of
-  // absence of a lock, which is why the text check above runs regardless.
   let postScore: number | null = null;
   let commentCount: number | null = null;
   const postEl = page.locator('shreddit-post').first();
   if (await postEl.count().then((n) => n > 0).catch(() => false)) {
-    const lockedAttr = await postEl.getAttribute('locked').catch(() => null);
-    const archivedAttr = await postEl.getAttribute('archived').catch(() => null);
-    if (lockedAttr !== null && lockedAttr !== 'false') locked = true;
-    if (archivedAttr !== null && archivedAttr !== 'false') archived = true;
-
     // Observation only — never allowed to throw into the publish path.
     const num = async (attr: string): Promise<number | null> => {
       const v = await postEl.getAttribute(attr).catch(() => null);
