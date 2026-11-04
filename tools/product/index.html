@@ -3233,14 +3233,42 @@ function collecting(root){
        * done: it is the app's global status surface, and a modal is not a reason to hide whether
        * something is running.
        */
-      for(const x of subs){
+      /**
+       * A THROTTLED SOURCE IS NOT A BROKEN COLLECT.
+       *
+       * This loop threw on `!r.ok`, and a throttled run is not ok (src/exit-codes.ts: it did not
+       * collect). So one rate-limited subreddit abandoned every remaining subreddit, every saved
+       * search and the scoring step — while the CLI's own cycle, given the SAME exit code, waits
+       * and carries on, giving up only after four in a row. The server now sends the pacing with
+       * the refusal (`throttled`, `retryAfterMs`, `throttlesInARow`, `throttleWallAt`), all of it
+       * from src/collect-wall.ts and src/throttle.ts, so this loop can follow the same rule
+       * instead of inventing a harsher one.
+       */
+      /* Two buckets, because the Done line counts subreddits and must not count a search as one. */
+      const skippedSubs=[],skippedQs=[],skipped=[];
+      const paced=async(r,what,left,bucket)=>{
+        if(!r.throttled)return false;
+        bucket.push(what);skipped.push(what);
+        if(r.throttlesInARow>=r.throttleWallAt)
+          throw new Error(`${r.throttlesInARow} in a row were rate-limited even with a growing wait between them `
+            +`— that is a limit on the account, not on ${what}. Left for the next collect: ${left} more, plus ${skipped.join(', ')}.`);
+        const secs=Math.max(1,Math.round((r.retryAfterMs||0)/1000));
+        say(`${what} is rate-limited — waiting ${secs}s, then carrying on with the rest…`);
+        await new Promise(done=>setTimeout(done,r.retryAfterMs||0));
+        return true;
+      };
+      for(let i=0;i<subs.length;i++){
+        const x=subs[i];
         say(`Looking through r/${x.name}…`);
         const r=await runNow({key:'find-threads',subreddit:x.name,account:acct});
+        if(await paced(r,`r/${x.name}`,subs.length-i-1,skippedSubs))continue;
         if(!r.ok)throw new Error(r.error||`r/${x.name} did not work`);
       }
-      for(const x of qs){
+      for(let i=0;i<qs.length;i++){
+        const x=qs[i];
         say(`Searching “${x.query}” — showing what is there, collecting nothing…`);
         const r=await runNow({key:'find-search',query:x.query,account:acct});
+        if(await paced(r,`“${x.query}”`,qs.length-i-1,skippedQs))continue;
         if(!r.ok)throw new Error(r.error||'that search did not work');
       }
       say('Working out which are worth answering…');
@@ -3257,7 +3285,10 @@ function collecting(root){
       await load();
       refreshCounts();
       /* Two numbers, because two different things happened and one number hid that for good. */
-      return `Done — collected from ${subs.length} subreddit${subs.length===1?'':'s'}.`
+      /* What was SKIPPED is part of what happened. A collect that quietly read 9 of 10 sources
+         and said "collected from 10" is the same lie by omission the two numbers above fixed. */
+      return `Done — collected from ${subs.length-skippedSubs.length} of ${subs.length} subreddit${subs.length===1?'':'s'}.`
+        +(skipped.length?` Rate-limited, left for the next collect: ${skipped.join(', ')}.`:'')
         +(qs.length?` ${qs.length} search${qs.length===1?'':'es'} looked but collected nothing — open one and press “Find & pick” to choose what goes in.`:'')
         +nothingScored;
     });

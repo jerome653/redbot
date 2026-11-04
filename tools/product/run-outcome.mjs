@@ -109,3 +109,55 @@ export function runError({ code, stopped, out = '', err = '' }) {
   if (chosen === undefined) return `redbot exited with code ${code}.`;
   return cap(undecorate(chosen));
 }
+
+/**
+ * How many runs in a row have been throttled, after this one.
+ *
+ * Pure, and separate from the fields below, because the two questions fail differently: the count
+ * is about SEQUENCE and the only way to get it wrong is to carry it across a run that succeeded,
+ * while the fields are about arithmetic. A run nobody throttled resets it — a source that answered
+ * is evidence the limit lifted, and a count that only grows abandons a cycle over throttles that
+ * have nothing to do with each other.
+ *
+ * `throttledCode` is passed in rather than redeclared: this module is plain JS the console loads
+ * with no build step, and the server reads the real constant from dist/exit-codes.js. A null means
+ * no build, so nothing is throttled and the count stays where it was — the pre-2026-11-04 shape.
+ *
+ * @param {number} previous
+ * @param {{code: number|null, stopped: boolean, throttledCode: number|null|undefined}} run
+ * @returns {number}
+ */
+export function nextThrottleCount(previous, { code, stopped, throttledCode }) {
+  if (throttledCode === null || throttledCode === undefined) return previous;
+  /* A run somebody stopped resets it, so that `pacingFields` can rely on one invariant: the count
+     is 1 or more only when the LAST run was throttled. Carrying the count across a stop would make
+     the next source wait on evidence from before a person intervened. */
+  if (stopped) return 0;
+  return code === throttledCode ? previous + 1 : 0;
+}
+
+/**
+ * What a caller needs to carry on after a throttled run, or nothing when the run was not throttled.
+ *
+ * THE DEFECT THIS CLOSES. `THROTTLED` is non-zero, so `ok: code === 0 || nothing` made it a failed
+ * run — and the collect panel threw on `!ok`, so ONE rate-limited subreddit abandoned every
+ * remaining subreddit, every saved search and the scoring step. The CLI's own cycle, given the
+ * same exit code, waits and moves to the next source, giving up only at
+ * `CONSECUTIVE_THROTTLES_TO_ABORT` (src/collect-wall.ts). Two callers, one number, opposite
+ * conclusions. `ok` stays false — src/exit-codes.ts is explicit that a throttled run did not
+ * collect — and what is added is the pacing, so the caller is no longer forced to decide from a
+ * bare number.
+ *
+ * @param {number} throttlesInARow  the count AFTER this run, from `nextThrottleCount`
+ * @param {{wallAt: number, backoff: (n: number) => number}} policy
+ * @returns {{}|{throttled: true, throttlesInARow: number, throttleWallAt: number, retryAfterMs: number}}
+ */
+export function pacingFields(throttlesInARow, { wallAt, backoff }) {
+  if (throttlesInARow < 1) return {};
+  return {
+    throttled: true,
+    throttlesInARow,
+    throttleWallAt: wallAt,
+    retryAfterMs: backoff(throttlesInARow)
+  };
+}

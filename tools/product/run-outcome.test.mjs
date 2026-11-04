@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runError, runNote, NOTHING_TO_DO } from './run-outcome.mjs';
+import { runError, runNote, nextThrottleCount, pacingFields, NOTHING_TO_DO } from './run-outcome.mjs';
 
 test('a run that succeeded has no error', () => {
   assert.equal(runError({ code: 0, stopped: false, out: 'all good\n', err: '' }), null);
@@ -117,4 +117,61 @@ test('a runaway line cannot flood the screen', () => {
 
 test('carriage returns from a Windows child do not survive into the message', () => {
   assert.equal(runError({ code: 1, stopped: false, out: '', err: '  !   bad thing\r\n' }), 'bad thing');
+});
+
+/**
+ * THE PACING. Measured 2026-11-03 23:49:22Z on cardinal: two 429s one second apart ended a whole
+ * cycle's collection. `THROTTLED` (exit 3) was added so the cycle could tell "that source broke"
+ * from "we are going too fast" — and the console was never taught the difference, so it kept
+ * abandoning the rest of the collect at the first one.
+ *
+ * THROTTLED is 3 in src/exit-codes.ts; it is passed in here rather than imported, for the same
+ * reason NOTHING_TO_DO is declared twice. tools/product/server.test.mjs pins the number.
+ */
+const T = { code: 3, stopped: false, throttledCode: 3 };
+
+test('a throttled run increments the count, and anything else resets it', () => {
+  assert.equal(nextThrottleCount(0, T), 1);
+  assert.equal(nextThrottleCount(3, T), 4);
+  assert.equal(nextThrottleCount(3, { code: 0, stopped: false, throttledCode: 3 }), 0);
+  assert.equal(nextThrottleCount(3, { code: 1, stopped: false, throttledCode: 3 }), 0,
+    'an ordinary failure is not a throttle and must not pace the next source');
+  assert.equal(nextThrottleCount(3, { code: 2, stopped: false, throttledCode: 3 }), 0);
+});
+
+test('a run somebody stopped resets the count rather than carrying it', () => {
+  assert.equal(nextThrottleCount(3, { code: null, stopped: true, throttledCode: 3 }), 0);
+  assert.equal(nextThrottleCount(3, { code: 3, stopped: true, throttledCode: 3 }), 0,
+    'a stop tells us nothing about the rate limit, so the next source must not wait on it');
+});
+
+test('with no build the console cannot know what 3 means, and the count does not move', () => {
+  assert.equal(nextThrottleCount(2, { code: 3, stopped: false, throttledCode: null }), 2);
+  assert.equal(nextThrottleCount(2, { code: 3, stopped: false, throttledCode: undefined }), 2);
+});
+
+test('THE REGRESSION: a throttled run carries the pacing a caller needs to carry on', () => {
+  const p = pacingFields(1, { wallAt: 4, backoff: (n) => n * 60_000 });
+  assert.equal(p.throttled, true, 'the caller must be able to tell a rate limit from a fault');
+  assert.equal(p.throttlesInARow, 1);
+  assert.equal(p.throttleWallAt, 4, 'the threshold must travel with the refusal, not be guessed');
+  assert.equal(p.retryAfterMs, 60_000);
+});
+
+test('a run that was not throttled carries no pacing at all', () => {
+  assert.deepEqual(pacingFields(0, { wallAt: 4, backoff: () => 1 }), {},
+    'an untruthful `throttled: false` would still be a field the front end branches on');
+});
+
+test('the wait grows with the count, from the one backoff the CLI uses', () => {
+  const backoff = (n) => Math.min(60_000 * 2 ** (n - 1), 600_000);
+  assert.equal(pacingFields(1, { wallAt: 4, backoff }).retryAfterMs, 60_000);
+  assert.equal(pacingFields(2, { wallAt: 4, backoff }).retryAfterMs, 120_000);
+  assert.equal(pacingFields(4, { wallAt: 4, backoff }).retryAfterMs, 480_000);
+});
+
+test('the count reaching the wall is reported, not swallowed', () => {
+  const p = pacingFields(4, { wallAt: 4, backoff: () => 1 });
+  assert.ok(p.throttlesInARow >= p.throttleWallAt,
+    'the caller decides to give up by comparing these two — both must be present');
 });
