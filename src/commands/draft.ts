@@ -28,6 +28,8 @@ import { draftTimeBlocks } from '../draft-gate.js';
 import { rankCandidates } from '../pick.js';
 import { warmingStage } from '../warming.js';
 import { counters } from '../health.js';
+import { policy } from '../policy.js';
+import { warmupFlooredSubs } from './warmup.js';
 import { draftCorrection } from '../prompts.js';
 import { findReference } from '../corpus.js';
 import { bannedPhraseHits } from '../persona.js';
@@ -145,7 +147,27 @@ export async function draft(threadIdArg?: string): Promise<number> {
    * from held 325 assessments, 40 of them 'contribute', 21 assessed over 24h earlier, and its top
    * two scored 100 on 2026-09-01 — 647.5 hours before the pick. See src/pick.ts.
    */
-  const candidates = rankCandidates({ assessments, threads, gaps, drafted, threadId: threadIdArg });
+  /**
+   * KARMA-FLOOR REROUTE (2026-11-09). An account under policy.cautionKarmaBelow may not post
+   * unattended to a floored sub (r/wordpress + subs the fleet's removals floored), and the
+   * opportunity score is anchored on wordpress, so the top pick for a low-karma account was
+   * routinely a r/wordpress thread the publish gate then refused: a draft spent, no karma earned,
+   * and the floor never opens. Those subs are left out of the pool so the next-best thread in a
+   * safe sub is drafted instead. The >= floor gate on r/wordpress itself is unchanged
+   * (autopublish.ts redditPlacement). Unreadable karma counts as under the floor, as in warmup.
+   */
+  let excludeSubs: ReadonlySet<string> | undefined;
+  if (!threadIdArg) {
+    try {
+      const acct = selectedAccount();
+      const h = await counters(acct?.handle ?? null, new Date(), undefined, acct?.timezone);
+      if (!(typeof h.karma === 'number' && h.karma >= policy.cautionKarmaBelow.value)) {
+        excludeSubs = await warmupFlooredSubs();
+        say.step(`Karma ${h.karma ?? 'unmeasured'} is under ${policy.cautionKarmaBelow.value}: not drafting for ${[...excludeSubs].map((s) => `r/${s}`).join(', ')}.`);
+      }
+    } catch { /* unreadable: the publish gate still refuses a floored sub, this only saves a model call */ }
+  }
+  const candidates = rankCandidates({ assessments, threads, gaps, drafted, threadId: threadIdArg, excludeSubs });
 
   const pick = candidates[0];
   if (!pick) {

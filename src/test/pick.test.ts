@@ -118,3 +118,18 @@ test('a candidate that cannot be re-assessed is dropped, not trusted', () => {
 test('an empty store yields no candidates rather than throwing', () => {
   assert.deepEqual(rankCandidates({ assessments: [], threads: [], gaps: [], drafted: new Set() }), []);
 });
+
+test('excludeSubs reroutes: a floored-sub thread is dropped and the next-best safe-sub thread wins', () => {
+  const wp = thread('t_wp', { subreddit: 'Wordpress' });
+  const safe = thread('t_safe', { subreddit: 'webdev' });
+  const base = { assessments: [stored('t_wp', 99), stored('t_safe', 50)], threads: [wp, safe], gaps: [gap('t_wp'), gap('t_safe')], drafted: new Set<string>() };
+  assert.equal(rankCandidates(base).length, 2, 'control: without the exclusion both threads are candidates');
+  const out = rankCandidates({ ...base, excludeSubs: new Set(['wordpress']) });
+  assert.deepEqual(out.map((o) => o.threadId), ['t_safe'], 'case-insensitive: r/Wordpress is excluded, r/webdev is kept');
+});
+
+test('excludeSubs is ignored when a thread is named explicitly', () => {
+  const wp = thread('t_wp', { subreddit: 'wordpress' });
+  const out = rankCandidates({ assessments: [stored('t_wp', 99)], threads: [wp], gaps: [gap('t_wp')], drafted: new Set(), threadId: 't_wp', excludeSubs: new Set(['wordpress']) });
+  assert.equal(out.length, 1);
+});
