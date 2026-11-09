@@ -161,7 +161,18 @@ export const BUILT_IN_CORPORA: CorpusConfig[] = [
       '\\bwp_debug\\b',
       '\\bwp_mail\\b',
       'custom_css|additional css',
-      '\\bmysqldump\\b'
+      '\\bmysqldump\\b',
+      // EXTENDED 2026-11-09 (retrieval-only, rules:false): WordPress security, block editor /
+      // page builders, and plugin compatibility. Product names (wordfence/elementor/divi/
+      // theme.json/gutenberg) and specific readme fields are the in-domain anchors, not bare
+      // keywords — the Part-A lesson applied here.
+      'hacked|\\bmalware\\b|site was hacked|compromised site|\\binfected\\b',
+      'wordfence|brute[ -]?force|failed login attempts?|login attempts|limit login',
+      'theme\\.json|global styles',
+      'site editor|full site editing|\\bblock theme\\b|\\bgutenberg\\b',
+      '\\belementor\\b',
+      '\\bdivi\\b',
+      'tested up to|requires php|requires at least'
     ],
     note:
       'Quoted primary documentation (dev.mysql.com, developer.wordpress.org). Rules only on ' +
@@ -192,7 +203,9 @@ export const BUILT_IN_CORPORA: CorpusConfig[] = [
       'robots\\.txt',
       '\\bsitemaps?\\b',
       'ranking drops?|lost rankings?|rankings? drops?|drop in (clicks|impressions|traffic|rankings?|position)|traffic drop|impressions.*drop|clicks.*drop',
-      'core update',
+      // `core update` alone matched WordPress-core-update PSAs (CVE threads). Require a
+      // Google/ranking co-signal so only a *Google* core update is in jurisdiction.
+      'core updates?(?=[\\s\\S]*\\b(?:google|rank(?:ing)?s?|serp|serps|algorithm)\\b)|\\b(?:google|rank(?:ing)?s?|serp|serps|algorithm)\\b[\\s\\S]*core updates?',
       'helpful, reliable|people-first',
       'ai overview'
     ],
@@ -218,17 +231,52 @@ export const BUILT_IN_CORPORA: CorpusConfig[] = [
     jurisdiction: [
       '\\.htaccess',
       'allowoverride',
-      '\\bnginx\\b',
+      // A bare `nginx` mention fired on off-domain Showoff posts. Require a web-server
+      // config / comparison / managed-stack co-signal (the other server name, .htaccess,
+      // rewrites, server/location blocks, proxy, fastcgi/fpm, a .conf, 'config', vhost,
+      // 'stack', or a hosting panel), in either order.
+      '\\bnginx\\b(?=[\\s\\S]*(?:apache|\\.htaccess|allowoverride|mod_rewrite|rewriterule|\\brewrite\\b|server\\s+block|location\\s+block|proxy_pass|fastcgi|php-?fpm|\\bfpm\\b|\\.conf\\b|config|virtual\\s*host|vhost|\\bstack\\b|cloudways|cpanel|plesk|litespeed|webmin))|(?:apache|\\.htaccess|allowoverride|mod_rewrite|rewriterule|\\brewrite\\b|server\\s+block|location\\s+block|proxy_pass|fastcgi|php-?fpm|\\bfpm\\b|\\.conf\\b|config|virtual\\s*host|vhost|\\bstack\\b|cloudways|cpanel|plesk|litespeed|webmin)[\\s\\S]*\\bnginx\\b',
       '301 redirect|\\b301\\b|\\brewriterule\\b|mod_rewrite',
       'php-?fpm|fastcgi process manager|fastcgi_pass',
       'max_execution_time',
       'display_errors',
       'php ?\\d|php version|end of life|\\beol\\b|unsupported php',
-      '\\bapache\\b'
+      // Same constraint as nginx: a bare `apache` mention fired on project-showcase posts.
+      '\\bapache\\b(?=[\\s\\S]*(?:nginx|\\.htaccess|allowoverride|mod_rewrite|rewriterule|\\brewrite\\b|server\\s+block|location\\s+block|proxy_pass|fastcgi|php-?fpm|\\bfpm\\b|\\.conf\\b|config|virtual\\s*host|vhost|\\bstack\\b|cloudways|cpanel|plesk|litespeed|webmin))|(?:nginx|\\.htaccess|allowoverride|mod_rewrite|rewriterule|\\brewrite\\b|server\\s+block|location\\s+block|proxy_pass|fastcgi|php-?fpm|\\bfpm\\b|\\.conf\\b|config|virtual\\s*host|vhost|\\bstack\\b|cloudways|cpanel|plesk|litespeed|webmin)[\\s\\S]*\\bapache\\b'
     ],
     note:
       'Quoted primary docs (httpd.apache.org, nginx.org, php.net). Retrieval-only; silent ' +
       'outside its cards. mod_security dropped for lack of an allowed-domain primary source.'
+  },
+  /**
+   * Primary e-commerce / payments documentation: WooCommerce order statuses and server
+   * requirements, Shopify direct-vs-external providers and third-party transaction fees,
+   * Stripe test cards and webhook-based fulfillment, and the PayPal sandbox. Sources are the
+   * products' own docs only (woocommerce.com/document, help.shopify.com, docs.stripe.com,
+   * developer.paypal.com). Retrieval-only (rules:false). Jurisdiction anchors are the product
+   * names plus card-backed payment terms — in-domain context, not bare keywords (the Part A
+   * lesson). corpus-standing.test.ts proves each anchor matches a held card.
+   */
+  {
+    id: 'commerce-primary',
+    label: 'e-commerce and payments primary documentation',
+    path: 'ground-truth/corpora/commerce-primary.json',
+    cardsAt: 'cards',
+    fields: { id: 'id', question: 'question', content: 'content' },
+    require: { verified: 'primary' },
+    rules: false,
+    draftable: true,
+    jurisdiction: [
+      'woocommerce',
+      'shopify',
+      '\\bstripe\\b',
+      'paypal',
+      'payment gateway|payment gateways|payment provider|payment processor',
+      'order status(?:es)?'
+    ],
+    note:
+      'Quoted primary docs (woocommerce.com/document, help.shopify.com, docs.stripe.com, ' +
+      'developer.paypal.com). Retrieval-only; silent outside its cards.'
   }
 ];
 

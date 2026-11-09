@@ -2,7 +2,7 @@
   "corpus": "wordpress-primary",
   "note": "Human-authored primary documentation, quoted rather than paraphrased. Every card records the URL it came from and the date it was read, so a reviewer can check the quote against the source instead of trusting this file. Nothing here is model output: that rule is in corpus.ts and it is the whole reason this corpus is allowed to rule on anything.",
   "retrieved": "2026-07-27",
-  "scope": "Deliberately narrow. These are the subjects redbot's own claim log actually argues about — measured across all 216 logged claims: max_allowed_packet x9, wp_options x6, admin-ajax.php x4, wp_mail x3, wp-cli x3, WP_DEBUG/WP_DEBUG_LOG. A corpus that claimed the whole WordPress domain would put nearly every claim in jurisdiction and reject the ones it holds nothing on, which is DEFECT-15 inverted.",
+  "scope": "Deliberately narrow. These are the subjects redbot's own claim log actually argues about — measured across all 216 logged claims: max_allowed_packet x9, wp_options x6, admin-ajax.php x4, wp_mail x3, wp-cli x3, WP_DEBUG/WP_DEBUG_LOG. A corpus that claimed the whole WordPress domain would put nearly every claim in jurisdiction and reject the ones it holds nothing on, which is DEFECT-15 inverted. Extended 2026-11-09 with WordPress security (hacked-site recovery, brute-force/Wordfence), block editor & page builders (theme.json, Site Editor/block themes, Elementor, Divi) and plugin compatibility (readme \"Tested up to\"). Third-party tool docs (wordfence.com, elementor.com, elegantthemes.com) count as primary FOR THAT TOOL.",
   "cards": [
     {
       "id": "wp-primary-packet-too-large",
@@ -59,6 +59,55 @@
       "question": "Where do mysqldump options come from, and what do the common ones do?",
       "source": "https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html",
       "content": "MySQL 8.4 Reference Manual, mysqldump. Options \"can be specified on the command line or in the [mysqldump] and [client] groups of an option file\". From the published option table: --add-drop-table adds a DROP TABLE statement before each CREATE TABLE statement; --complete-insert uses complete INSERT statements that include column names; --add-locks surrounds each table dump with LOCK TABLES and UNLOCK TABLES; --compact produces more compact output; --compatible produces output more compatible with other database systems or older MySQL servers."
+    },
+    {
+      "id": "wp-primary-hacked-site-recovery",
+      "verified": "primary",
+      "question": "My WordPress site was hacked (malware/defacement) - what are the official first steps to clean it up?",
+      "source": "https://wordpress.org/documentation/article/faq-my-site-was-hacked/",
+      "content": "WordPress.org's \"FAQ My site was hacked\" sets out the recovery order. Scan the site for malware (remote scanners, or application/plugin scanners such as Wordfence, Sucuri, Quttera, GOTMLS) and scan your local environment. Check with your host - on shared hosting a hack can affect neighbours and get your mail blacklisted. Improve access control: \"Complex, Long and Unique passwords\" for FTP/SFTP, wp-admin, cPanel and MySQL, for EVERY user, plus two-factor authentication. Lock attackers out immediately by generating new secret keys from the WordPress.org secret-key service and overwriting them in wp-config.php, which \"will force anyone that might still be logged in off.\" Reinstall by replacing /wp-admin and /wp-includes with the SAME WordPress version via FTP - NOT the dashboard re-install, because \"those installers often only overwrite existing files, and hacks often introduce new files.\" Then work through wp-content, and inspect .htaccess plus index.php, header.php, footer.php and functions.php for injected code. Once clean, update to the latest WordPress and \"Change the passwords again.\""
+    },
+    {
+      "id": "wp-primary-brute-force-protection",
+      "verified": "primary",
+      "question": "How does brute-force login protection (e.g. Wordfence) actually stop attacks on wp-admin / wp-login?",
+      "source": "https://www.wordfence.com/help/firewall/brute-force/",
+      "content": "Wordfence's own documentation: \"Brute Force Protection limits login attempts on your site. A brute force login attack consists of a large amount of repeated attempts at guessing your username and password to gain access to your WordPress administration screen. Limiting the amount of login attempts that your site allows and blocking users who try an invalid username are two ways of protecting yourself against this type of attack.\" It locks out an IP for a set time after a configured number of login failures - Wordfence recommends about 20, because \"it is common for real users to forget their passwords and generate up to 5 or more login attempts\" - limits \"Forgot password?\" attempts, and can \"immediately lock out someone who attempts to login with an invalid username\" (e.g. repeated tries on 'admin'). It can also enforce strong passwords and reject passwords known from breach lists. This is rate-limiting and lockout at the login layer; it does not clean an already-compromised site."
+    },
+    {
+      "id": "wp-primary-theme-json",
+      "verified": "primary",
+      "question": "What is theme.json and why does it, not CSS, control a block theme’s editor settings, colours and spacing?",
+      "source": "https://developer.wordpress.org/block-editor/how-to-guides/themes/global-settings-and-styles/",
+      "content": "The WordPress Block Editor Handbook: \"WordPress 5.8 comes with a new mechanism to configure the editor... the theme.json file. Instead of the proliferation of theme support flags or alternative methods, the theme.json files provides a canonical way to define the settings of the block editor.\" theme.json is a single JSON file at the theme root that controls editor SETTINGS (which colour palette, font sizes, spacing units and features are offered, and whether users may set custom values) and STYLES (default colours, typography and spacing applied site-wide and per block). In a block theme it is the source of truth the Site Editor and Global Styles read from - which is why, in a block theme, you change a palette or disable a feature in theme.json (or Global Styles) rather than only writing CSS, and why a hard-coded CSS override may be ignored or overridden by the generated theme.json styles."
+    },
+    {
+      "id": "wp-primary-site-editor-block-theme",
+      "verified": "primary",
+      "question": "Where is the Site Editor / Full Site Editing, and why can’t I find it on my theme?",
+      "source": "https://wordpress.org/documentation/article/site-editor/",
+      "content": "WordPress.org documentation: \"The Site editor allows you to design the entire site including the header, footer, and everything in between, with blocks,\" and - the decisive constraint - \"The Site Editor is only available when you install and activate a Block theme on your site.\" The Site Editor is part of the block editor (the Gutenberg project). So if Appearance shows a Customizer but no \"Editor\"/Site Editor entry, the active theme is a classic theme (many older themes and page-builder starter themes like Hello/Astra-style setups are classic), not a block theme. Activating a block theme (for example a default Twenty Twenty-Four/Five theme) enables the Site Editor; on a classic theme you edit via the Customizer, widgets and menus instead. \"Full Site Editing is missing\" is almost always a classic-theme situation, not a broken install."
+    },
+    {
+      "id": "wp-primary-elementor-requirements",
+      "verified": "primary",
+      "question": "What WordPress/PHP/memory does Elementor need, and is PHP 7.4 or a 128MB memory limit enough?",
+      "source": "https://elementor.com/help/requirements/",
+      "content": "Elementor's official System Requirements: WordPress \"6.8 or greater\"; PHP \"7.4 or Greater\", though Elementor says \"while Elementor will work with PHP 7.4, we highly recommend using PHP 8.3+\"; and a WP Memory Limit of \"256 MB (Elementor and Elementor Pro only), 512 MB recommended, 768 MB for best performance.\" A 64-128 MB memory limit or an old PHP build is a frequent cause of the Elementor editor failing to load, the endless spinner, or save/timeout errors. Note the 256 MB figure is for Elementor plus WordPress ALONE; a real site also running WooCommerce and other plugins typically needs the 512 MB recommended value. The memory limit is raised in php.ini / wp-config.php (WP_MEMORY_LIMIT) or by the host - not from inside Elementor."
+    },
+    {
+      "id": "wp-primary-divi-visual-builder",
+      "verified": "primary",
+      "question": "How does the Divi Visual Builder work - is it a front-end editor, and what are Sections/Rows/Modules?",
+      "source": "https://help.elegantthemes.com/en/articles/12991185-divi-5-visual-builder-interface",
+      "content": "Elegant Themes' Divi documentation describes the Visual Builder as a front-end (edit-on-the-live-page) editor with three areas: a top bar controlling \"device previews (desktop, tablet, phone), canvas width, zoom, history, and saving\"; a left sidebar for \"layouts, structure tools, builder settings, and help\"; and a right settings panel that opens \"when you click any Section, Row, Column, or Module\" and shows \"Content, Design, and Advanced tabs for that element.\" In the centre is \"the canvas, where you actually see and edit your layout.\" Divi therefore builds pages from a Section > Row > Column > Module hierarchy, edited live on the front end, with responsive design handled through the top-bar device-preview controls rather than through separate device templates."
+    },
+    {
+      "id": "wp-primary-plugin-tested-up-to",
+      "verified": "primary",
+      "question": "A plugin’s \"Tested up to\" shows an older WordPress version - does that mean it will not work on my newer WordPress?",
+      "source": "https://developer.wordpress.org/plugins/wordpress-org/how-your-readme-txt-works/",
+      "content": "WordPress's Plugin Handbook defines the readme header fields. \"Tested up to - The version of WordPress that the plugin has been tested against. This field ignores minor versions, as plugins shouldn't break with a minor update,\" and it is \"numbers only, so '4.9' and not 'WP 4.9'.\" \"Requires at least\" is the minimum WordPress version the plugin needs, and \"Requires PHP - the required minimum version of PHP needed for use with this plugin.\" So \"Tested up to\" records the newest MAJOR WordPress the author verified against - it is NOT a hard compatibility ceiling. A plugin whose \"Tested up to\" trails the current WordPress is not automatically broken; it simply has not been formally tested on the newest release. Treat a lagging \"Tested up to\" (especially alongside no updates for a long time) as a signal to test on staging, not as proof of incompatibility."
     }
   ]
 }
