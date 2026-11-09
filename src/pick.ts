@@ -48,6 +48,13 @@ export interface RankInput {
   threadId?: string | undefined;
   /** The clock the freshness order is read against. Injectable for the same reason as currentAgeHours. */
   now?: number;
+  /**
+   * Lower-case subreddits this account may not post to unattended yet (the karma floor). A thread
+   * there is not a candidate, so the pick REROUTES to the next-best thread in a safe sub instead of
+   * drafting for a sub the publish gate then refuses (src/autopublish.ts redditPlacement). Ignored
+   * when `threadId` is given: a person who names a thread has chosen it, and the gate still decides.
+   */
+  excludeSubs?: ReadonlySet<string> | undefined;
 }
 
 /**
@@ -70,6 +77,7 @@ export function rankCandidates(input: RankInput): OpportunityAssessment[] {
     const thread = byThread.get(stored.threadId);
     const gap = gapByThread.get(stored.threadId);
     if (!thread || !gap) continue;
+    if (!input.threadId && input.excludeSubs?.has((thread.subreddit ?? '').toLowerCase())) continue;
 
     /* The stored score and verdict are discarded here, deliberately and completely. */
     const fresh = assessOpportunity(thread, gap);
