@@ -44,6 +44,18 @@ import { userDataDir, consoleBase } from './console-endpoint.mjs';
 const TIMEOUT_MS = 12 * 60 * 1000;
 
 /**
+ * A TICK IN FLIGHT IS ASKED AGAIN, IN THE SAME RUN. The route refuses at once with 75 while a
+ * rotation tick holds the fleet, and the timer has only four slots a day (21:30-22:30 UTC). Each
+ * slot used to give up on its first refusal, so one busy minute spent a whole slot: measured on
+ * 2026-11-08, three of four slots exited 75 and the day kept one pass. Ticks are ~10.4 min apart
+ * and the rotation is idle ~67% of the time (history, 48 h), so a free window turns up within a
+ * few minutes. The wait budget plus a ~5 min fleet pass must stay under the unit's
+ * TimeoutStartSec (12 min), hence 4 min. Only 75 is retried: a real failure still exits at once.
+ */
+export const RETRY_EVERY_MS = 30 * 1000;
+export const RETRY_BUDGET_MS = 4 * 60 * 1000;
+
+/**
  * POST over node:http, with `timeoutMs` as its ONLY time limit. Not the global fetch: Node's
  * fetch has a headers timeout of 300 s that an AbortSignal cannot extend, so #69's 12 minutes
  * never applied. Measured 25 Oct: started 04:00:00 PDT, "did not answer - fetch failed" at
@@ -68,7 +80,7 @@ export function postJson(url, { method, headers, body, timeoutMs }) {
   });
 }
 
-export async function requestKarma({
+async function requestOnce({
   base = consoleBase(userDataDir()),
   handle,
   fetchImpl = postJson,
@@ -118,6 +130,23 @@ export async function requestKarma({
      print what came back before returning it. */
   log(`the console answered ${res.status} and no measurement: ${JSON.stringify(payload).slice(0, 300)}`);
   return res.ok ? 0 : 1;
+}
+
+export async function requestKarma({
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  retryEveryMs = RETRY_EVERY_MS,
+  retryBudgetMs = RETRY_BUDGET_MS,
+  ...opts
+} = {}) {
+  const log = opts.log ?? console.log;
+  let waited = 0;
+  for (;;) {
+    const code = await requestOnce(opts);
+    if (code !== 75 || waited + retryEveryMs > retryBudgetMs) return code;
+    log(`tick in flight - asking again in ${retryEveryMs / 1000}s (waited ${waited / 1000}s of ${retryBudgetMs / 1000}s)`);
+    await sleep(retryEveryMs);
+    waited += retryEveryMs;
+  }
 }
 
 /* Run only as the unit's entry, never on import by the test beside it. */
