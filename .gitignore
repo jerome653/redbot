@@ -127,3 +127,6 @@ electron/.shots/
 .exporttest/
 .eboot*/
 .pkgtest/
+
+# a symlinked node_modules (worktrees) is not matched by the directory form above
+node_modules
