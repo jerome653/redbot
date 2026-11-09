@@ -1,0 +1,85 @@
+{
+  "corpus": "seo-primary",
+  "note": "Human-curated primary documentation for the SEO subjects redbot's drafts repeatedly get wrong: Google ranking/traffic drops and core updates, AI Overviews, and the Search Console indexing states (crawled/discovered not indexed, Google-chosen canonical, noindex vs robots.txt, sitemaps). Every card records the exact doc URL it was read from and quotes or directly paraphrases that source. Nothing here is model output. SOURCING NOTE: two Search Console state definitions (crawled/discovered - currently not indexed) are quoted from Google's own Search Console Help (support.google.com/webmasters), the only Google primary that defines those exact states; everything else is developers.google.com (Google Search Central).",
+  "retrieved": "2026-11-09",
+  "scope": "Deliberately narrow: only subjects this corpus holds a quoted primary card for. Silent everywhere else, by design (rules:false; retrieval-only).",
+  "cards": [
+    {
+      "id": "seo-primary-crawled-not-indexed",
+      "verified": "primary",
+      "question": "What does \"Crawled - currently not indexed\" mean in Search Console, and is it a crawl error I can fix by resubmitting?",
+      "source": "https://support.google.com/webmasters/answer/7440203",
+      "content": "Google's Search Console Page indexing report defines this state verbatim: \"Crawled - currently not indexed: The page was crawled by Google but not indexed. Google doesn't index all pages across the web, so this is a common message for many sites and doesn't necessarily indicate an issue that needs attention.\" It is NOT a crawl error and NOT a blocked-page error: Googlebot already fetched the page and then chose not to index it (commonly because the page is judged thin, low-value, or duplicative). Because the page was already crawled, the report does not frame this as something fixed by resubmitting; it advises using the URL Inspection tool to diagnose whether something on the site is preventing the page from appearing. The lever is page quality and uniqueness, not re-requesting indexing."
+    },
+    {
+      "id": "seo-primary-discovered-not-indexed",
+      "verified": "primary",
+      "question": "What is the difference between \"Discovered - currently not indexed\" and \"Crawled - currently not indexed\"?",
+      "source": "https://support.google.com/webmasters/answer/7440203",
+      "content": "From Google's Search Console Page indexing report: \"Discovered - currently not indexed: The page was found by Google, but not crawled yet. Typically, Google wanted to crawl the URL but this was expected to overload the site; therefore Google rescheduled the crawl. This is why the last crawl date is empty on the report.\" So \"Discovered - currently not indexed\" means Google knows the URL but has not fetched it yet (often a crawl-capacity / site-speed signal on large or slow sites), whereas \"Crawled - currently not indexed\" means Google already fetched the page and then did not index it. They are different stages of the pipeline, not the same problem, and the fix differs: server capacity/crawl budget versus page quality."
+    },
+    {
+      "id": "seo-primary-robots-txt-blocks-noindex",
+      "verified": "primary",
+      "question": "If I add a noindex but the page is also blocked in robots.txt, will Google remove it from the index?",
+      "source": "https://developers.google.com/search/docs/crawling-indexing/block-indexing",
+      "content": "No. Google has to crawl a page to see its noindex rule, and a page blocked by robots.txt is not crawled, so the noindex is never seen. Google Search Central's noindex doc states: \"Specifying the noindex rule in the robots.txt file is not supported by Google\", and lists as a failure cause: \"the robots.txt file is blocking the URL from Google web crawlers, so they can't see the tag. To unblock your page from Google, you must edit your robots.txt file.\" A page blocked by robots.txt therefore cannot have its noindex (meta tag or X-Robots-Tag header) seen, so robots.txt + noindex together will NOT deindex it. To remove a page: allow crawling AND serve a noindex."
+    },
+    {
+      "id": "seo-primary-robots-not-for-hiding",
+      "verified": "primary",
+      "question": "Can I keep a page out of Google just by disallowing it in robots.txt?",
+      "source": "https://developers.google.com/search/docs/crawling-indexing/robots/intro",
+      "content": "No. Google Search Central: a robots.txt file \"is not a mechanism for keeping a web page out of Google\"; it is mainly for managing crawler traffic. \"A page that's disallowed in robots.txt can still be indexed if linked to from other sites\" - the URL \"and, potentially, other publicly available information such as anchor text in links to the page can still appear in Google Search results.\" A robots.txt-blocked page that gets indexed this way appears in results without a description. To actually keep a page out of Google, use a noindex rule or password-protect it; do not rely on robots.txt."
+    },
+    {
+      "id": "seo-primary-noindex-how",
+      "verified": "primary",
+      "question": "What is the correct way to stop a page from appearing in Google Search?",
+      "source": "https://developers.google.com/search/docs/crawling-indexing/block-indexing",
+      "content": "Use a noindex rule, implemented either as a meta tag in the page head (<meta name=\"robots\" content=\"noindex\">) or as an X-Robots-Tag: noindex HTTP response header (the header also works for non-HTML files such as PDFs). Google Search Central: \"When Googlebot crawls that page and extracts the tag or header, Google will drop that page entirely from Google Search results, regardless of whether other sites link to it.\" It depends on crawling: \"We have to crawl your page in order to see <meta> tags and HTTP headers\", so a newly added noindex only takes effect after Google next recrawls the page, which \"may take months\" for low-importance pages; the URL Inspection tool can request a recrawl to speed this up."
+    },
+    {
+      "id": "seo-primary-google-chosen-canonical",
+      "verified": "primary",
+      "question": "Why did Google pick a different canonical URL than the one I set - isn't rel=canonical a command?",
+      "source": "https://developers.google.com/search/docs/crawling-indexing/canonicalization",
+      "content": "rel=\"canonical\" is a hint, not a directive. Google Search Central's canonicalization doc: \"You can indicate your preference to Google using these techniques, but Google may choose a different page as canonical than you do, for various reasons. That is, indicating a canonical preference is a hint, not a rule.\" Google clusters duplicate or near-duplicate pages and marks the one its signals judge \"most complete and useful\" as the canonical; signals include HTTP vs HTTPS, redirects, presence of the URL in a sitemap, and rel=canonical annotations. When this disagrees with your choice, Search Console reports \"Duplicate, Google chose different canonical than user\"; use the URL Inspection tool to see the Google-selected canonical."
+    },
+    {
+      "id": "seo-primary-core-update",
+      "verified": "primary",
+      "question": "My rankings dropped right after a Google core update - does that mean my site was penalized or is bad?",
+      "source": "https://developers.google.com/search/docs/appearance/core-updates",
+      "content": "Not necessarily. Google Search Central: core updates \"are broad in nature, and don't target specific sites or individual web pages.\" In Google's own restaurant-list analogy, pages \"that move down aren't necessarily 'bad'; there are just other restaurants that make your top 20.\" A core-update drop is not a manual action or penalty. Recovery is not guaranteed by quick fixes: \"some changes can take effect in a few days, but it could take several months for our systems to learn and confirm that the site as a whole is now producing helpful, reliable, people-first content\", and you may have to wait for a later update. Google calls deleting content \"a last resort\" and warns against \"quick fix\" SEO changes."
+    },
+    {
+      "id": "seo-primary-traffic-drop-causes",
+      "verified": "primary",
+      "question": "My Google Search traffic / impressions suddenly dropped - how do I figure out why?",
+      "source": "https://developers.google.com/search/docs/monitor-debug/debugging-search-traffic-drops",
+      "content": "Google Search Central lists the main causes of an organic Search traffic drop to check in Search Console (GSC): an algorithmic update (including core updates); technical issues that block crawling, indexing, or serving (for example a misplaced noindex tag, server availability, robots.txt fetching, or \"page not found\"); security issues such as malware or phishing; spam issues / manual actions; seasonality; changing interests; and site moves or migrations. Diagnostic method: in the Performance report set the date range to 16 months and check whether impressions AND clicks both dropped (a ranking/visibility change) or only clicks dropped (likely a title or snippet issue). A host going down is a technical, page-serving cause of a drop."
+    },
+    {
+      "id": "seo-primary-helpful-content",
+      "verified": "primary",
+      "question": "Is there an ideal word count or SEO trick that makes content rank, and what does Google actually reward?",
+      "source": "https://developers.google.com/search/docs/fundamentals/creating-helpful-content",
+      "content": "Google's ranking systems \"prioritize helpful, reliable information that's created to benefit people, and not content that's created to manipulate search engine rankings.\" There is no preferred word count - a documented warning sign of search-engine-first content is: \"Are you writing to a particular word count because you've heard or read that Google has a preferred word count? (No, we don't.)\" Changing page dates to look fresh, or adding/removing content just to seem \"fresh\", also does not help (\"No, it won't\"). Google assesses content using E-E-A-T (experience, expertise, authoritativeness, trustworthiness), of which \"trust is most important\"; note that \"E-E-A-T itself isn't a specific ranking factor\" - it describes the people-first qualities the automated systems try to reward."
+    },
+    {
+      "id": "seo-primary-ai-overviews",
+      "verified": "primary",
+      "question": "What do I need to do to show up in Google's AI Overviews - is there special AI schema or optimization?",
+      "source": "https://developers.google.com/search/docs/appearance/ai-features",
+      "content": "No special optimization or schema is required. Google Search Central: to be eligible as a supporting link in AI Overviews or AI Mode, \"a page must be indexed and eligible to be shown in Google Search with a snippet, fulfilling the Search technical requirements. There are no additional technical requirements.\" The same SEO fundamentals apply (crawling allowed in robots.txt, good internal links, good page experience, important content available as text). AI Overviews \"are only shown when our systems determine that it is additive to classic Search, and as such, often don't trigger.\" Traffic from AI features is already counted in the Search Console Performance report under the \"Web\" search type; there is no separate AI Overviews ranking system to optimize for."
+    },
+    {
+      "id": "seo-primary-sitemap",
+      "verified": "primary",
+      "question": "Do I need an XML sitemap, and will submitting one get my pages indexed?",
+      "source": "https://developers.google.com/search/docs/crawling-indexing/sitemaps/overview",
+      "content": "A sitemap helps Google discover URLs but does not guarantee crawling or indexing. Google Search Central: \"If your site's pages are properly linked, Google can usually discover most of your site.\" You might need a sitemap if the site is large, is new with few external links pointing to it, or has a lot of video/image/news content. \"You might not need a sitemap\" if the site is \"small\" - defined as \"about 500 pages or fewer\" that you want in search results - and is comprehensively linked internally. A sitemap tells Google which pages you consider important and supplies metadata (such as last-updated time and alternate-language versions); it is an aid to crawling, not a command to index."
+    }
+  ]
+}
