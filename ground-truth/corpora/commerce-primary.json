@@ -1,0 +1,71 @@
+{
+  "corpus": "commerce-primary",
+  "note": "Human-curated primary documentation for the e-commerce / payments subjects redbot answers in r/woocommerce, r/Wordpress, r/webdev and r/smallbusiness: WooCommerce order statuses and server requirements, Shopify direct vs external payment providers and third-party transaction fees, Stripe test cards and webhook-based fulfillment, and the PayPal sandbox. Every card quotes or directly paraphrases the exact primary URL it was read from (woocommerce.com/document, help.shopify.com, docs.stripe.com, developer.paypal.com). Nothing here is model output. Cards are chosen to correct the common false claims (e.g. 'Processing means unpaid', 'fulfill on the redirect page', 'a real card in test mode').",
+  "retrieved": "2026-11-09",
+  "scope": "Deliberately narrow: only the checkout/payments/orders subjects this corpus holds a quoted primary card for. Silent everywhere else, by design (rules:false; retrieval-only). Jurisdiction anchors require in-domain commerce context, not bare keywords.",
+  "cards": [
+    {
+      "id": "commerce-primary-woo-status-processing",
+      "verified": "primary",
+      "question": "In WooCommerce, does the \"Processing\" order status mean the customer has not paid yet?",
+      "source": "https://woocommerce.com/document/managing-orders/order-statuses/",
+      "content": "No - it means the opposite. WooCommerce's Order Statuses documentation defines Processing verbatim: \"Payment has been received (paid), and the stock has been reduced. The order is awaiting fulfillment.\" So Processing means the payment cleared and the order is waiting to be shipped or fulfilled, not that it is unpaid or stuck. The docs add that Processing \"is the store owner's or warehouse's cue to ship the order and manually change the status to Completed,\" and that \"All orders require processing except those in which all products are both virtual and downloadable.\" The genuinely-unpaid state is a different status: \"Pending payment - The order has been received, but no payment has been made.\""
+    },
+    {
+      "id": "commerce-primary-woo-status-on-hold",
+      "verified": "primary",
+      "question": "What does the \"On hold\" order status mean in WooCommerce, and why is my order stuck there?",
+      "source": "https://woocommerce.com/document/managing-orders/order-statuses/",
+      "content": "WooCommerce's Order Statuses doc defines On hold as \"The order is awaiting payment confirmation. Stock is reduced, but you need to confirm payment.\" It states the On hold status \"is generally assigned to an order when a customer pays via an 'offline' payment method that does not have immediate payment confirmation, like the BACS gateway\" (direct bank transfer), and that such offline methods \"require you to manually verify the payment was processed.\" It can also appear temporarily for delayed-notification methods like SEPA Direct Debit, or when a gateway separates the authorization and capture of funds. An order sitting On hold almost always means an offline/bank-transfer payment that no one has confirmed yet - not a bug - and it moves on once you confirm payment (or the gateway clears it)."
+    },
+    {
+      "id": "commerce-primary-woo-virtual-downloadable",
+      "verified": "primary",
+      "question": "Why does my WooCommerce order jump straight to Completed (or skip Processing) for a digital product?",
+      "source": "https://woocommerce.com/document/managing-orders/order-statuses/",
+      "content": "WooCommerce's Order Statuses documentation states that \"All orders require processing except those in which all products are both virtual and downloadable.\" A Processing order \"is the store owner's or warehouse's cue to ship the order and manually change the status to Completed.\" An order whose line items are ALL marked both Virtual and Downloadable has nothing to ship, so WooCommerce can move it straight to Completed once payment is received. The practical consequence: if a digital order is NOT auto-completing, check that every product in it is flagged both Virtual and Downloadable - a single physical (non-virtual) item makes the whole order require Processing and manual completion."
+    },
+    {
+      "id": "commerce-primary-woo-server-requirements",
+      "verified": "primary",
+      "question": "What are the recommended server requirements for a WooCommerce store (PHP, memory, database)?",
+      "source": "https://woocommerce.com/document/server-requirements/",
+      "content": "WooCommerce's official Server Recommendations list: WordPress version 6.9 or greater; PHP version 8.3 or greater (tested up to PHP 8.4); MySQL version 8.0 or greater, OR MariaDB version 10.6 or greater; HTTPS support; and a WordPress memory limit of 256 MB or greater. Running below these values - for example an end-of-life PHP version, or a 64-128 MB memory limit - is a common cause of white-screen (fatal memory) errors, failed or timing-out checkouts, and slow or crashing wp-admin on WooCommerce sites. The memory figure is a floor for WooCommerce itself; stores with many extensions typically need more."
+    },
+    {
+      "id": "commerce-primary-shopify-direct-vs-external",
+      "verified": "primary",
+      "question": "On Shopify, what is the difference between a direct and an external third-party payment provider?",
+      "source": "https://help.shopify.com/en/manual/payments/third-party-providers",
+      "content": "Shopify's Help Center: to take cards through a provider other than Shopify Payments you can choose from over 100 third-party credit card payment providers, and \"Shopify supports two different types of credit card payment providers: direct providers and external providers. If you're using a direct provider, then your customers can complete their purchases directly on your online store without having to pay at a third-party checkout. If you're using an external provider, then your customers must complete their purchases on a checkout page that's hosted outside of your online store.\" So an external gateway redirects the buyer off your store to pay and send them back, while a direct gateway keeps the card entry inside your Shopify checkout. This distinction - not the brand - is what determines whether buyers leave your checkout flow."
+    },
+    {
+      "id": "commerce-primary-shopify-third-party-fee",
+      "verified": "primary",
+      "question": "Does Shopify charge an extra transaction fee if I use Stripe/PayPal instead of Shopify Payments?",
+      "source": "https://help.shopify.com/en/manual/payments/shopify-payments",
+      "content": "Shopify's Help Center on Shopify Payments states: \"When you use Shopify Payments, you aren't charged third-party transaction fees for orders that are processed through Shopify Payments, Shop Pay, and Shop Pay Installments, and you aren't charged transaction fees on manual payment methods such as cash, cash on delivery (COD), and bank transfers. If you use Shopify Payments alongside a third-party provider, then transaction fees apply.\" In practice this means routing card payments through a third-party gateway (anything that is not Shopify Payments) adds Shopify's own transaction fee ON TOP of that gateway's processing fees; those extra Shopify fees do not apply to sales taken through Shopify Payments itself. The gateway's own rate is separate from Shopify's added fee."
+    },
+    {
+      "id": "commerce-primary-stripe-test-cards",
+      "verified": "primary",
+      "question": "How do I test a Stripe payment without a real card, and can I use a real card in test mode?",
+      "source": "https://docs.stripe.com/testing",
+      "content": "Stripe's testing documentation is explicit that test mode and live mode are separate. The Stripe Services Agreement \"prohibits testing in live mode using real payment method details.\" To test interactively, \"use a card number, such as 4242 4242 4242 4242,\" with \"a valid future date, such as 12/34\" for the expiry and \"any three-digit CVC (four digits for American Express cards).\" A real card number is not accepted in test mode, and the 4242... test card only works in test mode (it is declined in live mode). Stripe publishes many documented test cards to simulate successful payments, declines, card errors and authentication, so you never need to run a personal card to verify an integration."
+    },
+    {
+      "id": "commerce-primary-stripe-fulfillment-webhooks",
+      "verified": "primary",
+      "question": "Should I fulfill a Stripe order on the success/thank-you redirect page, or from a webhook?",
+      "source": "https://docs.stripe.com/checkout/fulfillment",
+      "content": "Stripe's \"Fulfill orders\" guide states: \"Webhooks are required for fulfillment. You can't rely on triggering fulfillment only from your checkout landing page, because it's not guaranteed customers visit that page. For example, a customer can pay successfully and then lose their internet connection before your landing page loads.\" Stripe's recommended design handles the payment event (checkout.session.completed) with a server-side webhook, which \"provide[s] the most reliable way to confirm when you get paid\"; if delivery fails, \"Stripe retries multiple times.\" The success redirect is fine for showing the buyer a confirmation, but the actual fulfillment logic (granting access, shipping, marking the order paid) must run from the webhook - otherwise some paid orders are never fulfilled."
+    },
+    {
+      "id": "commerce-primary-paypal-sandbox",
+      "verified": "primary",
+      "question": "What is the PayPal sandbox and do I need it to test a PayPal integration?",
+      "source": "https://developer.paypal.com/tools/sandbox/",
+      "content": "PayPal's developer documentation: \"The PayPal sandbox is a self-contained, virtual testing environment that simulates the live PayPal production environment. By using fictitious sandbox accounts with their associated authentication credentials in your PayPal API calls, you can test and debug your apps without referencing any real PayPal users or live PayPal accounts.\" So PayPal integration testing is done with sandbox business and personal test accounts (created in the developer dashboard) and sandbox API credentials rather than your live account, so no real money moves. Going live is a credential swap: replace the sandbox client ID and secret with live ones. A charge that \"works\" is only a real charge when it ran against live credentials, not sandbox ones."
+    }
+  ]
+}
