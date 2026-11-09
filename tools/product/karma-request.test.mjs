@@ -191,8 +191,47 @@ test('EX_TEMPFAIL 75 reaches the unit unchanged - it is the code SuccessExitStat
   const code = await requestKarma({
     base: 'http://127.0.0.1:1',
     fetchImpl: async () => ({ ok: false, status: 400, json: async () => ({ code: 75, output: ['a rotation tick is in flight - not measuring this run, a retry slot will come back for it'] }) }),
-    log: (l) => lines.push(l)
+    log: (l) => lines.push(l),
+    retryBudgetMs: 0
   });
   assert.equal(code, 75);
   assert.ok(lines.some((l) => l.includes('rotation tick is in flight')), 'the reason is printed, not just the number');
+});
+
+/* A TICK IN FLIGHT IS ASKED AGAIN IN THE SAME RUN (fix/karma-probe-starvation). */
+const busy = async () => ({ ok: false, status: 400, json: async () => ({ code: 75, output: [] }) });
+
+test('a refusal for a tick in flight is retried and the run that then measures exits 0', async () => {
+  const answers = [busy, busy, ok({ ok: true, code: 0, measured: ['a'], output: [] })];
+  const sleeps = [];
+  const code = await requestKarma({
+    base: 'http://127.0.0.1:1', fetchImpl: (...a) => answers.shift()(...a), log: silent,
+    sleep: async (ms) => { sleeps.push(ms); }, retryEveryMs: 30_000, retryBudgetMs: 240_000
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(sleeps, [30_000, 30_000], 'it waited once per refusal, and not after the success');
+  assert.equal(answers.length, 0);
+});
+
+test('a tick that never lets go costs the retry budget and no more, then exits 75 for the next slot', async () => {
+  let calls = 0; const sleeps = [];
+  const code = await requestKarma({
+    base: 'http://127.0.0.1:1', fetchImpl: async () => { calls++; return busy(); }, log: silent,
+    sleep: async (ms) => { sleeps.push(ms); }, retryEveryMs: 30_000, retryBudgetMs: 120_000
+  });
+  assert.equal(code, 75);
+  assert.equal(sleeps.length, 4, 'budget 120 s at 30 s steps is four waits');
+  assert.equal(calls, 5, 'the first ask plus one per wait');
+});
+
+test('only 75 is retried - a real failure exits at once with nothing slept', async () => {
+  let calls = 0; const sleeps = [];
+  const code = await requestKarma({
+    base: 'http://127.0.0.1:1',
+    fetchImpl: async () => { calls++; return { ok: false, status: 400, json: async () => ({ code: 1, output: [] }) }; },
+    log: silent, sleep: async (ms) => { sleeps.push(ms); }
+  });
+  assert.equal(code, 1);
+  assert.equal(calls, 1);
+  assert.deepEqual(sleeps, []);
 });
