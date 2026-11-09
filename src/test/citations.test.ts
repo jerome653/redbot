@@ -24,7 +24,7 @@ process.env.REDBOT_DATA = mkdtempSync(join(tmpdir(), 'redbot-corpus-'));
 
 const {
   terms, findSupport, findReference, corpora, resetCorpora, corporaPath, CorpusError,
-  SUPPORT_MIN_TERMS, SUPPORT_MIN_COVERAGE, REFERENCE_MIN_SCORE
+  SUPPORT_MIN_TERMS, SUPPORT_MIN_COVERAGE, REFERENCE_MIN_SCORE, deriveAnchorSet
 } = await import('../corpus.js');
 const { checkCitations } = await import('../argus/citations.js');
 const { certify } = await import('../argus/certify.js');
@@ -51,6 +51,7 @@ function corpusOf(rows: Array<{ id: string; question: string; content: string }>
       haystack: `${r.question}\n${r.content}`.toLowerCase()
     })),
     jurisdiction: CFG.jurisdiction.map((s) => new RegExp(s, 'i')),
+    anchors: deriveAnchorSet(CFG.jurisdiction),
     resolvedPath: '/tmp/test'
   };
 }

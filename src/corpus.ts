@@ -331,6 +331,129 @@ export function terms(text: string): string[] {
   )];
 }
 
+/* ------------------------------------------------------------------ *
+ * Distinctive-anchor derivation — the precision floor on grounding
+ * ------------------------------------------------------------------ */
+
+/**
+ * The gate above (jurisdiction opens the corpus) and the floor below (≥2 shared terms summing
+ * past REFERENCE_MIN_SCORE) still let a card ground on GENERIC ENGLISH alone. Measured on the
+ * 30-day REJECT set: of 64 grounded threads, 38 shared no domain term with the chosen card —
+ * a "My interactive Three.js portfolio" thread grounding to `wp-primary-elementor-requirements`
+ * on *while, run, work, wordpress*; "How else can I fix my website?" grounding to the
+ * traffic-drop card on *search, console, change, page*. idf over 9–15 cards cannot tell
+ * "woocommerce" from "payment": two mid-frequency words sum past 2.0 once any weak jurisdiction
+ * branch (`payment`, `search console`, `php\d`, `order status`) opens the gate. A true-but-
+ * irrelevant fact in an off-topic reply is the DEFECT-15 class this file documents, and the
+ * karma harm we are fixing.
+ *
+ * The fix: a grounded card must ALSO share at least one DISTINCTIVE domain term with the thread
+ * — not just generic English. The distinctive vocabulary is not invented; it is derived from
+ * each corpus's own `jurisdiction` anchor literals, which corpus-standing.test.ts already proves
+ * match a held card. Compound terms (`max_execution_time`, `theme.json`, `custom_css`,
+ * `wp_mail`, `robots.txt`, `php-fpm`) survive `terms()` whole and so are single-token anchors.
+ * A generic multi-word branch (`additional css`, `search console`) contributes only its
+ * distinctive component (`css`) — never the generic co-signal word — because every token is run
+ * through ANCHOR_GENERIC. The derivation is per-corpus and done once at load, so a corpus added
+ * at runtime (the citations reload test's `probe`/`kestrel`) is anchored from ITS jurisdiction.
+ */
+const ANCHOR_GENERIC = new Set<string>([
+  // regex class letters left behind by a bare backslash escape (\b \s \d \w)
+  'b', 's', 'd', 'w',
+  // pure English / structural co-signals
+  'not', 'and', 'the', 'for', 'with', 'your', 'you', 'can', 'how', 'why', 'what', 'when', 'out',
+  'off', 'all', 'any', 'via', 'per', 'own', 'one', 'two', 'into', 'onto', 'change', 'page',
+  'pages', 'site', 'sites', 'was', 'way', 'back', 'something', 'anything', 'whether', 'check',
+  'through', 'directly', 'help', 'our', 'where', 'every', 'might', 'never', 'still', 'set',
+  'report', 'those',
+  // SEO weak gate-openers (the ranking/traffic branch, "search console", "core update")
+  'ranking', 'rankings', 'lost', 'drop', 'drops', 'clicks', 'impressions', 'traffic', 'position',
+  'core', 'update', 'updates', 'search', 'console', 'google', 'rank', 'ranks', 'serp', 'serps',
+  'algorithm', 'helpful', 'reliable', 'people', 'first', 'overview', 'currently', 'discovered',
+  'crawled',
+  // WP weak co-signals (each branch's strong token is its own single-literal branch)
+  'login', 'attempts', 'attempt', 'limit', 'global', 'styles', 'block', 'editor', 'editing',
+  'full', 'tested', 'requires', 'least', 'additional', 'error', 'custom', 'failed', 'brute',
+  'force', 'theme', 'ing',
+  // webdev weak co-signals
+  'server', 'location', 'virtual', 'host', 'config', 'stack', 'end', 'life', 'version',
+  'redirect', 'display', 'process', 'manager', 'rewrite', 'proxy', 'unsupported', 'php',
+  // commerce weak gate-openers
+  'payment', 'gateway', 'gateways', 'provider', 'processor', 'order', 'status', 'statuses'
+]);
+
+const BACKSLASH = String.fromCharCode(92);
+
+/** Strip `(?=…) (?!…) (?<=…) (?<!…)` lookaround groups — co-signal context, never the anchor. */
+function stripLookaround(pattern: string): string {
+  let out = ''; let i = 0;
+  while (i < pattern.length) {
+    if (pattern.startsWith('(?=', i) || pattern.startsWith('(?!', i)
+      || pattern.startsWith('(?<=', i) || pattern.startsWith('(?<!', i)) {
+      let depth = 0;
+      while (i < pattern.length) {
+        const ch = pattern[i];
+        if (ch === BACKSLASH) { i += 2; continue; }
+        if (ch === '(') depth++;
+        else if (ch === ')') { depth--; if (depth === 0) { i++; break; } }
+        i++;
+      }
+      continue;
+    }
+    out += pattern[i]; i++;
+  }
+  return out;
+}
+
+/**
+ * The literal alphanumeric tokens a jurisdiction regex is built from, normalised the same way
+ * `terms()` normalises thread text so the two can be compared. Scaffolding (`\b \s \d \w`, char
+ * classes, groups, quantifiers, alternation) breaks a token run; escaped literals and the
+ * join characters `. _ -` continue one, so `theme\.json` → `theme.json` and `max_execution_time`
+ * stays whole.
+ */
+export function literalTokens(pattern: string): string[] {
+  const body = stripLookaround(pattern);
+  const tokens: string[] = [];
+  let cur = '';
+  const flush = () => { if (cur) { tokens.push(cur); cur = ''; } };
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]!;
+    if (ch === BACKSLASH) {
+      const nx = body[i + 1] ?? '';
+      i++;
+      if (/[a-z]/i.test(nx)) { flush(); continue; }  // \b \s \d \w … — a separator
+      if (/[._/-]/.test(nx)) { cur += nx; continue; } // \. \- \/ — a literal join char
+      flush(); continue;                              // other escaped punctuation — a separator
+    }
+    if (/[a-z0-9]/i.test(ch)) { cur += ch; continue; }
+    if (ch === '_' || ch === '.' || ch === '-') { cur += ch; continue; } // terms() keeps these
+    flush();                                          // ( ) | [ ] ? + * ^ $ whitespace , …
+  }
+  flush();
+  return tokens
+    .map((t) => t.toLowerCase().replace(/^[._-]+|[._-]+$/g, ''))
+    .filter((t) => t.length >= 3);
+}
+
+/**
+ * The distinctive single-token anchors for a corpus, derived from its jurisdiction patterns:
+ * every literal token that is not generic English or regex scaffolding.
+ */
+export function deriveAnchorSet(patterns: string[]): Set<string> {
+  const out = new Set<string>();
+  for (const p of patterns) for (const t of literalTokens(p)) if (!ANCHOR_GENERIC.has(t)) out.add(t);
+  return out;
+}
+
+/** A thread term grounds against a distinctive anchor, tolerating a single trailing plural `s`. */
+function termMatchesAnchor(anchors: Set<string>, t: string): boolean {
+  if (anchors.has(t)) return true;
+  if (anchors.has(t + 's')) return true;                        // thread singular, anchor plural
+  if (t.endsWith('s') && anchors.has(t.slice(0, -1))) return true; // thread plural, anchor singular
+  return false;
+}
+
 export interface CorpusCard {
   id: string;
   question: string;
@@ -345,6 +468,8 @@ export interface LoadedCorpus {
   cards: CorpusCard[] | null;
   unavailable?: string;
   jurisdiction: RegExp[];
+  /** Distinctive domain terms derived from `jurisdiction`; a ground must share one. */
+  anchors: Set<string>;
   resolvedPath: string;
   /** So a review package can say which snapshot ruled. */
   fileModified?: string;
@@ -358,10 +483,11 @@ function dig(obj: unknown, path: string): unknown {
 function loadOne(cfg: CorpusConfig): LoadedCorpus {
   const resolvedPath = isAbsolute(cfg.path) ? cfg.path : join(ROOT, cfg.path);
   const jurisdiction = (cfg.jurisdiction ?? []).map((s) => new RegExp(s, 'i'));
+  const anchors = deriveAnchorSet(cfg.jurisdiction ?? []);
 
   if (!existsSync(resolvedPath)) {
     return {
-      config: cfg, cards: null, jurisdiction, resolvedPath,
+      config: cfg, cards: null, jurisdiction, anchors, resolvedPath,
       unavailable: `not found at ${resolvedPath}`
     };
   }
@@ -370,7 +496,7 @@ function loadOne(cfg: CorpusConfig): LoadedCorpus {
     const parsed = JSON.parse(readFileSync(resolvedPath, 'utf8'));
     const rows = dig(parsed, cfg.cardsAt);
     if (!Array.isArray(rows)) {
-      return { config: cfg, cards: null, jurisdiction, resolvedPath, unavailable: `no array at "${cfg.cardsAt}"` };
+      return { config: cfg, cards: null, jurisdiction, anchors, resolvedPath, unavailable: `no array at "${cfg.cardsAt}"` };
     }
 
     const cards: CorpusCard[] = [];
@@ -391,12 +517,12 @@ function loadOne(cfg: CorpusConfig): LoadedCorpus {
     }
 
     return {
-      config: cfg, cards, jurisdiction, resolvedPath,
+      config: cfg, cards, jurisdiction, anchors, resolvedPath,
       fileModified: statSync(resolvedPath).mtime.toISOString()
     };
   } catch (e) {
     return {
-      config: cfg, cards: null, jurisdiction, resolvedPath,
+      config: cfg, cards: null, jurisdiction, anchors, resolvedPath,
       unavailable: `unreadable (${(e as Error).message.slice(0, 120)})`
     };
   }
@@ -581,6 +707,18 @@ export function findReference(subject: string, limit = 4): ReferenceHit[] {
       // Below the floor the card is only sharing common English with the thread. Returning it
       // anyway is what made retrieval fire on 56 of 58 threads.
       if (score < REFERENCE_MIN_SCORE) continue;
+
+      // DISTINCTIVE-ANCHOR FLOOR. Jurisdiction opening the corpus and the rarity floor still let
+      // a card ground on generic English alone: measured on the 30-day REJECT set, 38 of 64
+      // grounds shared NO domain term with the chosen card (a Three.js-portfolio thread on
+      // *while, run, work, wordpress*; a "fix my website" thread on *search, console, change,
+      // page*). idf over 9–15 cards cannot separate "woocommerce" from "payment", so two
+      // mid-frequency words sum past 2.0 once any weak branch opens the gate. Require that the
+      // shared terms include a DISTINCTIVE anchor — the corpus's own jurisdiction vocabulary,
+      // derived at load — or the card does not ground and the thread's Sources stay empty.
+      // Raising REFERENCE_MIN_SCORE instead would drop real grounds and leave this leak; the
+      // distinctive-term requirement is the point.
+      if (!matched.some((t) => termMatchesAnchor(c.anchors, t))) continue;
 
       hits.push({
         corpusId: c.config.id,
