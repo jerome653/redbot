@@ -166,6 +166,69 @@ export const BUILT_IN_CORPORA: CorpusConfig[] = [
     note:
       'Quoted primary documentation (dev.mysql.com, developer.wordpress.org). Rules only on ' +
       'the subjects it holds cards for; silent on the rest of WordPress.'
+  },
+  /**
+   * Primary SEO documentation, for the subjects redbot's SEO drafts repeatedly get wrong:
+   * ranking / traffic drops and core updates, AI Overviews, and the Search Console indexing
+   * states (crawled/discovered currently not indexed, Google-chosen canonical, noindex vs
+   * robots.txt, sitemaps). Retrieval-only (rules:false): it steers what redbot writes but
+   * never adjudicates. Jurisdiction patterns are plain-language anchors tuned to real thread
+   * titles/bodies; corpus-standing.test.ts proves each matches a held card.
+   */
+  {
+    id: 'seo-primary',
+    label: 'Google Search SEO primary documentation',
+    path: 'ground-truth/corpora/seo-primary.json',
+    cardsAt: 'cards',
+    fields: { id: 'id', question: 'question', content: 'content' },
+    require: { verified: 'primary' },
+    rules: false,
+    draftable: true,
+    jurisdiction: [
+      'not indexed|crawled[ -]*(currently )?not indexed|discovered[ -]*(currently )?not indexed',
+      'search console|\\bgsc\\b',
+      '\\bcanonical',
+      '\\bnoindex\\b',
+      'robots\\.txt',
+      '\\bsitemaps?\\b',
+      'ranking drops?|lost rankings?|rankings? drops?|drop in (clicks|impressions|traffic|rankings?|position)|traffic drop|impressions.*drop|clicks.*drop',
+      'core update',
+      'helpful, reliable|people-first',
+      'ai overview'
+    ],
+    note:
+      'Quoted Google primary docs (developers.google.com/search; two Search Console state ' +
+      'definitions from support.google.com/webmasters). Retrieval-only; silent outside its cards.'
+  },
+  /**
+   * Primary web-dev / hosting documentation: Apache .htaccess / AllowOverride / 301 rewrites,
+   * nginx vs Apache config, PHP-FPM, max_execution_time, display_errors, PHP versions. Sources
+   * are httpd.apache.org, nginx.org and php.net only. mod_security is intentionally absent: no
+   * page exists for it on the allowed primary domains, so no card could be cited. Retrieval-only.
+   */
+  {
+    id: 'webdev-hosting-primary',
+    label: 'web-dev and hosting primary documentation',
+    path: 'ground-truth/corpora/webdev-hosting-primary.json',
+    cardsAt: 'cards',
+    fields: { id: 'id', question: 'question', content: 'content' },
+    require: { verified: 'primary' },
+    rules: false,
+    draftable: true,
+    jurisdiction: [
+      '\\.htaccess',
+      'allowoverride',
+      '\\bnginx\\b',
+      '301 redirect|\\b301\\b|\\brewriterule\\b|mod_rewrite',
+      'php-?fpm|fastcgi process manager|fastcgi_pass',
+      'max_execution_time',
+      'display_errors',
+      'php ?\\d|php version|end of life|\\beol\\b|unsupported php',
+      '\\bapache\\b'
+    ],
+    note:
+      'Quoted primary docs (httpd.apache.org, nginx.org, php.net). Retrieval-only; silent ' +
+      'outside its cards. mod_security dropped for lack of an allowed-domain primary source.'
   }
 ];
 

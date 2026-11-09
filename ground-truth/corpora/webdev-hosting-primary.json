@@ -1,0 +1,57 @@
+{
+  "corpus": "webdev-hosting-primary",
+  "note": "Human-curated primary documentation for the web-server, PHP, and hosting subjects redbot's drafts repeatedly get wrong: Apache .htaccess / AllowOverride / 301 rewrites, nginx vs Apache config, PHP-FPM, max_execution_time, display_errors, and PHP version support. Every card quotes or directly paraphrases the exact doc URL it was read from (httpd.apache.org, nginx.org, php.net). Nothing here is model output. mod_security was intentionally DROPPED from this batch: it is a third-party module with no page on the allowed primary domains, so no card could be cited for it.",
+  "retrieved": "2026-11-09",
+  "scope": "Deliberately narrow: only subjects this corpus holds a quoted primary card for. Silent everywhere else, by design (rules:false; retrieval-only).",
+  "cards": [
+    {
+      "id": "hosting-primary-htaccess-allowoverride",
+      "verified": "primary",
+      "question": "Why is my .htaccess (301 redirect / rewrite) being ignored?",
+      "source": "https://httpd.apache.org/docs/current/howto/htaccess.html",
+      "content": "An .htaccess 301 redirect - or any .htaccess directive - only works when Apache is configured to read .htaccess for that directory. Apache's .htaccess tutorial states: \"The default value of AllowOverride is None. This means .htaccess files are completely ignored unless you explicitly enable them for a directory.\" For mod_rewrite / Redirect rules to be honored, AllowOverride must permit them (for example AllowOverride FileInfo); under AllowOverride None the whole file is silently ignored, no error shown. Quick diagnostic from the docs: put a nonsense word such as \"TestMe\" in the .htaccess and reload - \"If a server error (HTTP 500) is not generated, then you almost certainly have AllowOverride None in effect.\" .htaccess is an Apache feature and has no effect on servers like nginx."
+    },
+    {
+      "id": "hosting-primary-htaccess-vs-main-config",
+      "verified": "primary",
+      "question": "Should rewrite/redirect rules go in .htaccess or the main Apache config, and does .htaccess slow the site down?",
+      "source": "https://httpd.apache.org/docs/current/howto/htaccess.html",
+      "content": "Apache recommends the main server config over .htaccess whenever you have access to it: \"you should put all of your configuration there instead of in .htaccess files. This includes user authentication, mod_rewrite rules, and anything else you might be tempted to put in .htaccess... mod_rewrite in particular works better in server configuration context.\" The reasons are performance and security. When AllowOverride permits .htaccess, \"httpd will look in every directory for .htaccess files\" on every request (a filesystem cost \"whether or not you actually even use them\"); the \".htaccess file is loaded every time a document is requested\"; and in .htaccess context \"regular expressions are recompiled on every request\", whereas in the main config they are compiled once and cached. .htaccess exists mainly for content providers who \"do not have root access on the server system\" (shared / cPanel hosting)."
+    },
+    {
+      "id": "hosting-primary-nginx-no-htaccess",
+      "verified": "primary",
+      "question": "What is the nginx equivalent of an .htaccess 301 redirect?",
+      "source": "https://nginx.org/en/docs/http/converting_rewrite_rules.html",
+      "content": "nginx does not use per-directory .htaccess files; redirects and rewrites live in the main nginx configuration inside server / location blocks. nginx's \"Converting rewrite rules\" doc shows the correct way to do a canonical-domain 301 that Apache users would write with RewriteCond/RewriteRule in .htaccess - a dedicated server block that returns the redirect: server { listen 80; server_name example.org; return 301 http://www.example.org$request_uri; }. The doc explicitly calls the naive if()-based port of .htaccess rules \"a wrong, cumbersome, and ineffective way\" and recommends defining a separate server block with return 301 instead. Dropping an Apache .htaccess file into an nginx document root does nothing, because nginx reads its directives from the nginx configuration, not from per-directory files."
+    },
+    {
+      "id": "hosting-primary-php-fpm",
+      "verified": "primary",
+      "question": "What is PHP-FPM, what does the pm (process manager) setting do, and why must it not be exposed to the network?",
+      "source": "https://www.php.net/manual/en/install.fpm.php",
+      "content": "PHP-FPM (FastCGI Process Manager) is, per php.net, \"a primary PHP FastCGI implementation containing some features (mostly) useful for heavy-loaded sites.\" It runs pools of worker processes; a pool can start workers \"with different uid/gid/chroot/environment, listening on different ports and using different php.ini\", and supports \"dynamic/ondemand/static child spawning\" (the pm mode that controls how many PHP workers exist). Security warning from php.net: \"php-fpm must not be reachable from an untrusted network. A client that can open a FastCGI connection controls the configuration used for the request, including auto_prepend_file, and can therefore execute arbitrary code.\" Access is restricted via the listen and listen.allowed_clients directives - the FPM socket/port should be reachable only by the local web server (e.g. nginx or Apache)."
+    },
+    {
+      "id": "hosting-primary-max-execution-time",
+      "verified": "primary",
+      "question": "I raised PHP max_execution_time but the script still times out - why, and what is the default?",
+      "source": "https://www.php.net/manual/en/info.configuration.php",
+      "content": "php.net: max_execution_time \"sets the maximum time in seconds a script is allowed to run before it is terminated by the parser... The default setting is 30. When running PHP from the command line the default setting is 0\" (unlimited on CLI). Two reasons raising it may not help. (1) By default (setitimer ITIMER_PROF) it measures CPU time, not wall-clock: \"On non Windows systems, the maximum execution time is not affected by system calls, stream operations etc.\" - so time waiting on a slow database query or network I/O does not count toward it unless PHP was built with --enable-zend-max-execution-timers. (2) The web server has its own timeout that also interrupts PHP: \"Your web server can have other timeout configurations that may also interrupt PHP execution. Apache has a Timeout directive and IIS has a CGI timeout function. Both default to 300 seconds.\" If the server (or FastCGI) timeout fires first, raising only the PHP value does nothing."
+    },
+    {
+      "id": "hosting-primary-display-errors",
+      "verified": "primary",
+      "question": "Why do I get a blank white page instead of a PHP error, and should display_errors be on in production?",
+      "source": "https://www.php.net/manual/en/errorfunc.configuration.php",
+      "content": "display_errors controls whether PHP prints errors into the page output: php.net - \"Off - do not display any errors. On or stdout - display errors to stdout. This is the default.\" The bundled php.ini-development sets it On; php.ini-production sets it Off, and php.net warns display_errors \"should never be used on production systems (e.g. systems connected to the internet).\" Key gotcha behind the \"white screen of death\": \"Although display_errors may be set at runtime (with ini_set()), it won't have any effect if the script has fatal errors. This is because the desired runtime action does not get executed.\" So ini_set('display_errors', 1) at the top of a file will NOT reveal a parse or fatal error - set it in php.ini, and in production use log_errors (default Off) writing to error_log instead of showing errors to visitors."
+    },
+    {
+      "id": "hosting-primary-php-versions",
+      "verified": "primary",
+      "question": "Is my PHP version still supported, and how long does a PHP release get updates?",
+      "source": "https://www.php.net/supported-versions.php",
+      "content": "php.net's support policy: \"Each release branch of PHP is fully supported for two years from its initial stable release\" (bug and security fixes, regular point releases), then it is \"supported for two additional years for critical security issues only\", and after those four years \"the branch reaches its end of life and is no longer supported.\" As of November 2026 the supported branches are PHP 8.2 (security-fixes only, end of life 31 Dec 2026), 8.3 (active support ended 31 Dec 2025, security until 31 Dec 2027), 8.4 (active support until 31 Dec 2026, security until 31 Dec 2028), and 8.5 (initial release 20 Nov 2025). PHP 8.1 and anything older is end of life and receives no further security fixes, so sites on it should upgrade."
+    }
+  ]
+}
