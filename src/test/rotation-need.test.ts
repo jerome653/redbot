@@ -25,15 +25,15 @@ const acct = (over: Partial<AccountRecord> = {}): AccountRecord => ({
 const none = { repliesToday: 0, lastReplyAt: null };
 
 test('the daily target IS the ceiling checkWindow enforces — no lower rotation-only number', () => {
-  // Weekday: the cap is 3, and the rotation works an account all the way up to it.
-  assert.equal(dailyCeilingFor(acct({ dailyCeiling: 10 }), AWAKE_NOW), policy.maxRepliesPerDay.value, 'never above the weekday cap');
+  // Weekday: the cap is 10, and the rotation works an account all the way up to it.
+  assert.equal(dailyCeilingFor(acct({ dailyCeiling: 96 }), AWAKE_NOW), policy.maxRepliesPerDay.value, 'never above the weekday cap');
   assert.equal(dailyCeilingFor(acct({ dailyCeiling: 1 }), AWAKE_NOW), 1);
   assert.equal(dailyCeilingFor(acct({ dailyCeiling: undefined }), AWAKE_NOW), policy.maxRepliesPerDay.value);
-  assert.equal(dailyTargetFor(acct({ dailyCeiling: 10 }), AWAKE_NOW), 3, 'weekday target is the cap of 3');
+  assert.equal(dailyTargetFor(acct({ dailyCeiling: 96 }), AWAKE_NOW), 10, 'weekday target is the cap of 10');
   assert.equal(dailyTargetFor(acct({ dailyCeiling: 1 }), AWAKE_NOW), 1);
-  // Weekend: the cap is 6 and the target is all of it; a lower account cap still wins.
-  assert.equal(dailyCeilingFor(acct({ dailyCeiling: 10 }), WEEKEND_AWAKE), 6, 'weekend cap');
-  assert.equal(dailyTargetFor(acct({ dailyCeiling: 10 }), WEEKEND_AWAKE), 6, 'weekend target is the full weekend cap');
+  // Weekend: the cap is 20 and the target is all of it; a lower account cap still wins.
+  assert.equal(dailyCeilingFor(acct({ dailyCeiling: 96 }), WEEKEND_AWAKE), 20, 'weekend cap');
+  assert.equal(dailyTargetFor(acct({ dailyCeiling: 96 }), WEEKEND_AWAKE), 20, 'weekend target is the full weekend cap');
   assert.equal(dailyTargetFor(acct({ dailyCeiling: 0 }), WEEKEND_AWAKE), 0, 'a benched account (ceiling 0) stays benched');
   assert.equal(dailyTargetFor(acct({ dailyCeiling: 1 }), WEEKEND_AWAKE), 1, 'a ceiling-1 account still targets 1');
 });
@@ -51,20 +51,20 @@ test('an unreadable timezone is not due (checkWindow fails closed, so does this)
 });
 
 test('an account that reached its target today is done for today', () => {
-  // A weekend instant: the target is the full weekend cap of 6.
-  const five = accountNeed(acct(), { repliesToday: 5, lastReplyAt: '2026-10-21T20:00:00Z' }, WEEKEND_AWAKE);
-  assert.equal(five.due, true, 'under the weekend cap is still due — the old rotation target stopped at 2');
-  const n = accountNeed(acct(), { repliesToday: 6, lastReplyAt: '2026-10-21T20:00:00Z' }, WEEKEND_AWAKE);
+  // A weekend instant: the default account's ceiling is 10, so min(10, weekend cap 20) = 10 is the target.
+  const nine = accountNeed(acct(), { repliesToday: 9, lastReplyAt: '2026-10-21T20:00:00Z' }, WEEKEND_AWAKE);
+  assert.equal(nine.due, true, 'under the target is still due');
+  const n = accountNeed(acct(), { repliesToday: 10, lastReplyAt: '2026-10-21T20:00:00Z' }, WEEKEND_AWAKE);
   assert.equal(n.due, false);
-  assert.equal(n.servedToday, 6);
-  assert.equal(n.target, 6);
+  assert.equal(n.servedToday, 10);
+  assert.equal(n.target, 10);
 
   const one = accountNeed(acct({ dailyCeiling: 1 }), { repliesToday: 1, lastReplyAt: '2026-10-21T20:00:00Z' }, WEEKEND_AWAKE);
   assert.equal(one.due, false, 'a ceiling-1 account is done after one');
 });
 
 test('an account inside the spacing window is not due yet', () => {
-  // Weekend instant: 1 reply is under the target of 6, so the spacing rule is what holds it, not the ceiling.
+  // Weekend instant: 1 reply is under the target of 10, so the spacing rule is what holds it, not the ceiling.
   const last = new Date(WEEKEND_AWAKE.getTime() - (policy.minMinutesBetweenReplies.value - 1) * 60_000).toISOString();
   const n = accountNeed(acct(), { repliesToday: 1, lastReplyAt: last }, WEEKEND_AWAKE);
   assert.equal(n.due, false);
@@ -75,7 +75,7 @@ test('an account inside the spacing window is not due yet', () => {
 });
 
 test('awake, under target, past spacing: due, with its count carried for least-served ordering', () => {
-  // Weekend instant: target 2, so a single reply is still under target and due.
+  // Weekend instant: target 10, so a single reply is still under target and due.
   const n = accountNeed(acct(), { repliesToday: 1, lastReplyAt: '2026-10-21T20:00:00Z' }, WEEKEND_AWAKE);
   assert.equal(n.due, true);
   assert.equal(n.rule, 'due');

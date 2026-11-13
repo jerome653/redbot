@@ -1,0 +1,17 @@
+-- 0026_stage_cadence_pin_young_ceilings (down) — deliberately a no-op on the data.
+--
+-- The up step NORMALISED a data column (accounts.daily_ceiling) from per-account operator values
+-- into a rule-derived state. The pre-migration per-account values (production held 10 on some rows
+-- and 1 on others) are NOT recorded anywhere this file can read, so there is nothing honest to
+-- restore them to — fabricating a single value for every row would be a worse state than the one
+-- the up step produced, not the original.
+--
+-- The behavioural reversal of slice 4 is the CODE revert: set policy.maxRepliesPerDay back to 3 in
+-- src/policy.ts. With the global cap at 3, every account's effective ceiling is Math.min(whatever,
+-- 3) <= 3 again regardless of these pins, so backing out the raise does not depend on un-pinning.
+--
+-- To re-establish specific per-account ceilings, set them explicitly (operator action) or re-run
+-- this migration's up step, which re-derives the pins from current karma.
+--
+-- Intentionally no statements.
+SELECT 1 WHERE 0;
