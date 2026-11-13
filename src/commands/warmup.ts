@@ -81,7 +81,7 @@ export function warmupDraftCheck(body: string, thread: Pick<Thread, 'title' | 'b
   const warm = checkWarmingComment(body);
   const generic = assessQuality(body, { thread }).issues.find((i) => i.code === 'generic');
   if (!generic) return warm;
-  return { ...warm, ok: false, issues: [...warm.issues, { rule: 'generic', detail: `${generic.message}; name something specific from the post` }] };
+  return { ...warm, ok: false, issues: [...warm.issues, { rule: 'generic', detail: `${generic.message}; reuse an exact distinctive term from the post word for word (a filename, error string, version, plugin or tool name) — generic words like "website", "wordpress" or "problem" do not count` }] };
 }
 
 interface RawWarm { comment?: unknown; why?: unknown; decline?: unknown }

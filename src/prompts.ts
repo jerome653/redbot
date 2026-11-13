@@ -164,6 +164,16 @@ first-person line on what you would check first ("I'd look at X first."). A comm
 is genuinely useful and cannot be wrong. Every sentence you add beyond that is a claim a fact
 checker will test, and one it can contradict throws the whole comment away.
 
+Ground it in THEIR post. Reuse, word for word, at least one DISTINCTIVE term the post already
+contains — a filename (wp-cron.php), an error string or code (504, ERR_TIMEOUT), a version
+(6.4.2), a plugin, theme or tool name they named, a path or a setting. Copy it exactly as they
+wrote it; do not paraphrase it and do not invent a detail they never mentioned. A check after
+you counts the words your comment shares with the post, so a fresh precise-sounding detail that
+is not in their post counts for nothing and the comment is thrown away.
+Generic nouns do NOT count: "website", "wordpress", "problem", "issue", "error", "site", "page"
+and the like are ignored by that check, so naming one of those is the same as naming nothing.
+Reuse the specific, unusual term — the one that could only have come from reading their post.
+
 HARD RULES — a draft breaking any of these is thrown away by a check after you
 1. **No links of any kind.** Not documentation, not a guide, nothing. From a new account even
    a helpful link reads as promotion.
