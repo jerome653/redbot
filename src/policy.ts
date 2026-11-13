@@ -143,9 +143,15 @@ export const policy = {
    * dailyCeilingFor, warming.ts pace, health.ts assess) now reads instead of this value directly.
    */
   maxRepliesPerDay: L(
-    3, 'replies/day (weekday)', 'declared',
-    'operator instruction 2026-10-28 (Jerome: "1 karma a day is not good at all") — weekday cap 1 -> 3. Was 1 from 2026-10-24. '
-    + 'Measured 21-27 Oct: every eligible account hit the cap of 1 on a weekday, so the cap, not the engine, was the limit'
+    10, 'replies/day (weekday)', 'declared',
+    'slice 4, 2026-11-13 — weekday cap 3 -> 10 so the PROVEN accounts (karma >= cautionKarmaBelow) post more. '
+    + 'This restores the value the arithmetic in this comment was written to justify (above what the 120-min loop can '
+    + 'produce, below what the 45-min spacing permits); it was reverted to 3 only because of the karma-1 ban risk the '
+    + '"⚠ THE RISK" note below describes. That risk is now removed for the young fleet WITHOUT karma-gating any enforcer: '
+    + 'db/sqlite/migrations/0026 PINS every account whose latest measured karma is below cautionKarmaBelow to daily_ceiling 3, '
+    + 'and window.ts dailyCeilingFor takes Math.min(account.dailyCeiling, this), so a karma-1 account stays at 3 while an '
+    + 'unpinned mature account rides 10. The pin lands ATOMIC WITH this raise (same commit/deploy, migrations before restart), '
+    + 'so there is no window where the raised cap is live and the young ceilings are unset. Was 3 from 2026-10-28 (1 -> 3), 1 from 2026-10-24'
   ),
   weekendReplyMultiplier: L(
     2, 'x weekday cap', 'declared',
