@@ -1660,6 +1660,7 @@ body.compact .ph{padding-top:.55rem;padding-bottom:.55rem}
     <button class="step" data-v="review">Review <span class="g" id="nRev">0</span></button>
     <button class="step" data-v="outcomes">Results <span class="g" id="nOut">0</span></button>
     <button class="step" data-v="accounts">Accounts <span class="g" id="nAcc">0</span></button>
+     <button class="step" data-v="summary">Summary</button>
     <!-- Log is NOT a tab. It is where you go when something has gone wrong or you want to watch a
          run you did not start — which is not five times a day, and a permanent tab for it costs
          every other tab a share of the row. It is a button in Settings, and `#nLog` still lives
@@ -1814,6 +1815,7 @@ body.compact .ph{padding-top:.55rem;padding-bottom:.55rem}
 <section id="v-today" class="sheet" hidden></section>
 <section id="v-discovery" class="sheet" hidden></section>
 <section id="v-accounts" class="sheet" hidden></section>
+<section id="v-summary" class="sheet" hidden></section>
 <section id="v-outcomes" class="sheet" hidden></section>
 <section id="v-logs" class="sheet" hidden></section>
 
@@ -7165,7 +7167,65 @@ function resetPanel(){
  * but one — leaving setup in would hide `#v-setup` on every navigation, including while the
  * Settings panel is open in front of the person reading it.
  */
-const R={today,accounts,review,discovery,outcomes,logs};
+function summary(){
+  const r=$('#v-summary'); r.textContent='';
+  const accts=(S.accounts||[]);
+  const head=el('div');
+  head.append(el('h2','sec','Summary'));
+  head.append(el('div','sub','the fleet at a glance'));
+  r.append(head);
+  const measured=accts.filter(a=>a.karma!=null);
+  const net=measured.reduce((s,a)=>s+a.karma,0);
+  const below=measured.filter(a=>a.karma<10).length;
+  const established=measured.filter(a=>a.karma>=10).length;
+  const negatives=measured.filter(a=>a.karma<0);
+  const totalPub=accts.reduce((s,a)=>s+(a.published||0),0);
+  let ageTxt='no measurement yet';
+  const times=measured.map(a=>a.karmaMeasuredAt).filter(Boolean).map(t=>new Date(t).getTime()).filter(n=>!isNaN(n));
+  if(times.length){
+    const newest=Math.max.apply(null,times);
+    const mins=Math.max(0,Math.round((Date.now()-newest)/60000));
+    ageTxt=mins<60?(mins+' min ago'):mins<1440?(Math.round(mins/60)+'h ago'):(Math.round(mins/1440)+'d ago');
+  }
+  const band=el('div','grid2');
+  const stat=(label,val,note)=>{
+    const p=panel(label,null);
+    p.append(el('div','score',esc(String(val))));
+    if(note)p.append(el('div','sub',esc(note)));
+    return p;
+  };
+  band.append(stat('Fleet net karma',net,measured.length+' of '+accts.length+' accounts measured'));
+  band.append(stat('Accounts',accts.length,established+' over the pitch floor, '+below+' still warming'));
+  r.append(band);
+  r.append(el('p','sub','Last measured '+esc(ageTxt)+'. '+esc(String(totalPub))+' repl'+(totalPub===1?'y':'ies')+' published all-time.'));
+  const rows=accts.slice().sort((a,b)=>((b.karma==null?-Infinity:b.karma)-(a.karma==null?-Infinity:a.karma)));
+  const list=panel('Karma by account','highest first');
+  rows.forEach(a=>{
+    const st=STAGE(a.karma);
+    const cls=a.karma==null?'':st.n===1?' stop':' look';
+    const tag=a.karma==null?'stop':st.n===1?'stop':'look';
+    const job=el('div','job'+cls);
+    job.append(el('div','sp'));
+    const b=el('div','jb');
+    b.append(el('div','jmeta',
+      '<span class="tag '+tag+'">'+esc(a.karma==null?'never measured':st.label)+'</span>'+
+      '<span class="sr">'+esc(a.handle)+'</span>'));
+    job.append(b);
+    job.append(el('div','jr',
+      '<span class="score"'+(a.karma==null?' style="color:var(--ink-3)"':'')+'>'+(a.karma==null?'-':esc(String(a.karma)))+'</span>'));
+    list.append(job);
+  });
+  r.append(list);
+  if(negatives.length){
+    const warn=el('div','prose');
+    warn.innerHTML='<b>'+esc(String(negatives.length))+' account'+(negatives.length===1?'':'s')+' below zero:</b> '+
+      negatives.map(a=>esc(a.handle)+' ('+esc(String(a.karma))+')').join(', ')+
+      ' - removed comments drag karma negative; candidate to reset or retire.';
+    r.append(warn);
+  }
+}
+
+const R={today,accounts,review,discovery,outcomes,logs,summary};
 function go(v){
   CUR=v;
   document.querySelectorAll('.steps .step').forEach(b=>b.setAttribute('aria-current',b.dataset.v===v?'page':'false'));

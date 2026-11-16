@@ -590,6 +590,18 @@ test('every screen is reachable from the bar and renders its own heading', async
  * Review — the screen with the most to lose
  * ================================================================== */
 
+test('the summary tab rolls up fleet karma', async () => {
+  const { context, page, errors } = await open();
+  try {
+    await tab(page, 'summary');
+    const txt = await page.textContent('#v-summary');
+    assert.match(txt, /Fleet net karma/i, 'the summary names the fleet net');
+    assert.match(txt, /213/, 'net karma = 212 + 1 across the two fixture accounts');
+    assert.match(txt, /docs-architect/, 'the roll-up lists accounts');
+    assert.deepEqual(errors, [], 'the summary must render with a clean console');
+  } finally { await context.close(); }
+});
+
 test('the queue hides ignored replies behind a toggle that says how many', async () => {
   const { context, page } = await open();
   try {
