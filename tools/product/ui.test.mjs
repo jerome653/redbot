@@ -318,14 +318,22 @@ async function tab(page, v) {
  */
 async function openStep(page, title) {
   const head = page.locator('#v-setup .wiz-h').filter({ hasText: title }).first();
-  await head.waitFor({ state: 'visible', timeout: 5000 });
-  if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click();
-  await page.waitForFunction(
-    (t) => {
-      const h = [...document.querySelectorAll('#v-setup .wiz-h')]
-        .find((x) => x.textContent.includes(t));
-      return !!h && h.getAttribute('aria-expanded') === 'true';
-    }, title, { timeout: 5000 });
+  await head.waitFor({ state: 'visible', timeout: 20000 });
+  /* The setup view re-renders on every pulse poll, and under test-runner load a tab's first
+     render can be CPU-starved past a tight deadline. Poll click-until-open instead of a single
+     click + single wait, tolerant of a header detached by a concurrent re-render. */
+  const expanded = () => page.evaluate((t) => {
+    const h = [...document.querySelectorAll('#v-setup .wiz-h')].find((x) => x.textContent.includes(t));
+    return !!h && h.getAttribute('aria-expanded') === 'true';
+  }, title);
+  const t0 = Date.now();
+  while (!(await expanded())) {
+    if (Date.now() - t0 > 20000) throw new Error(`setup step "${title}" never opened`);
+    try {
+      if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click({ timeout: 2000 });
+    } catch { /* header detached by a concurrent re-render; retry */ }
+    await new Promise((r) => setTimeout(r, 120));
+  }
 }
 
 const shot = (page, name) => page.screenshot({ path: join(SHOTS, name + '.png') });
