@@ -566,7 +566,8 @@ export async function factCheckThenPublish(
    * FIX-AND-RECHECK (Jerome, 2026-10-18). A REJECT whose only hard findings are claims proven false
    * (and claims resting on them) has those sentences deleted and is certified ONCE more; the publish
    * decision then runs on the new draft. Deletion, never a model rewrite — see src/refuted-strip.ts.
-   * Each strip costs one more certification (12-19 model calls); REDBOT_STRIP_REFUTED=0 turns it off.
+   * Each strip costs one more certification (12-19 model calls); REDBOT_STRIP_REFUTED=0 turns it off,
+   * and REDBOT_STRIP_SOFT=0 turns off the unsupported-tail half while keeping the proven-false half.
    */
   const target = stripRefutedEnabled() ? await recheckWithoutRefuted(draftId, deps.certify) : draftId;
   const fresh = (await loadDrafts()).find((d) => d.id === target);

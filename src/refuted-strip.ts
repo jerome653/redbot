@@ -23,6 +23,15 @@ export const SOFT_RULES: ReadonlySet<string> = new Set([
   'overconfident-language', 'low-confidence-as-fact', 'no-provenance', 'falsifiable-claim-weak-evidence'
 ]);
 /**
+ * Every rule a deletion can answer: a claim proven false (STRIP_RULES) and a claim that merely fails
+ * to support itself (SOFT_RULES). Both name a specific claim, so both are fixed by deleting the
+ * sentence that claim came from. A REJECT or ESCALATE made of these alone is the shape the pipeline
+ * otherwise discards — a sound diagnostic spine with an unsupported behavioural tail. Deleting the
+ * tail leaves the spine the certifier accepts. (Measured 2026-11-18: of 572 non-CERTIFIED drafts the
+ * dominant reasons are low-confidence-as-fact and no-provenance, not fatal-contradiction.)
+ */
+export const STRIPPABLE_RULES: ReadonlySet<string> = new Set([...STRIP_RULES, ...SOFT_RULES]);
+/**
  * What is left must still be a reply: at least this many sentences (disclosure lines not counted)…
  * One, not two: replayed on cardinal's 24 drafts carrying a refuted claim (18 Oct), a floor of 2
  * refused 16 of them and let 6 through; 1 lets 10 through. The drafting prompt writes one-sentence
@@ -43,22 +52,57 @@ export function stripRefutedEnabled(env: Record<string, string | undefined> = pr
   return env.REDBOT_STRIP_REFUTED !== '0';
 }
 
+/**
+ * The SOFT half — deleting an unsupported (not proven-false) tail claim — on unless REDBOT_STRIP_SOFT=0.
+ * Independent of REDBOT_STRIP_REFUTED so the proven-false strip and the unsupported-tail strip can be
+ * turned off separately. Each soft strip, like a refuted one, costs one more certification.
+ */
+export function stripSoftEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return env.REDBOT_STRIP_SOFT !== '0';
+}
+
 /** A REJECT that names a claim proven false. Anything else has nothing to strip, so nothing is refused. */
 export function hasRefutedClaim(cert: Certification | undefined): boolean {
   return cert?.verdict === 'REJECT' && cert.reasons.some((r) => r.rule === 'fatal-contradiction');
+}
+
+/**
+ * A certification a deletion could answer: a verdict short of CERTIFIED whose blocking reasons name a
+ * claim and are deletion-answerable. A proven-false claim (STRIP_RULES) always qualifies; an
+ * unsupported tail claim (SOFT_RULES) qualifies only when `stripSoftEnabled`, so the soft half keeps
+ * its own kill switch. The which-sentences decision stays in planStrip; this is only the cheap "is it
+ * worth loading the draft" gate the recheck entry uses.
+ */
+export function hasStrippableClaim(
+  cert: Certification | undefined, env: Record<string, string | undefined> = process.env
+): boolean {
+  if (!cert || cert.verdict === 'CERTIFIED') return false;
+  const soft = stripSoftEnabled(env);
+  return cert.reasons.some(
+    (r) => !!r.claimId && (r.rule === 'fatal-contradiction' || (soft && SOFT_RULES.has(r.rule)))
+  );
 }
 
 export type Eligibility = { ok: true; refuted: string[]; dependents: string[] } | { ok: false; why: string };
 
 export function stripEligibility(cert: Certification | undefined): Eligibility {
   if (!cert) return { ok: false, why: 'the draft has no certification' };
-  if (cert.verdict !== 'REJECT') return { ok: false, why: `the verdict is ${cert.verdict}, not REJECT` };
-  const hard = [...new Set(cert.reasons.map((r) => r.rule))].filter((r) => !STRIP_RULES.has(r) && !SOFT_RULES.has(r));
+  if (cert.verdict === 'CERTIFIED') return { ok: false, why: 'the verdict is CERTIFIED, nothing to strip' };
+  const hard = [...new Set(cert.reasons.map((r) => r.rule))].filter((r) => !STRIPPABLE_RULES.has(r));
   if (hard.length) return { ok: false, why: `${hard.join(', ')} cannot be fixed by deleting a sentence` };
-  const fatal = cert.reasons.filter((r) => r.rule === 'fatal-contradiction');
-  if (!fatal.length) return { ok: false, why: 'no claim was proven false' };
-  if (fatal.some((r) => !r.claimId)) return { ok: false, why: 'a fatal contradiction names no claim' };
-  const refuted = [...new Set(fatal.map((r) => r.claimId!))];
+  // A fatal contradiction with no claim is a hard stop: there is a proven-false claim we cannot
+  // locate. A soft reason with no claim is merely skipped — another reason may name a locatable one.
+  if (cert.reasons.some((r) => r.rule === 'fatal-contradiction' && !r.claimId)) {
+    return { ok: false, why: 'a fatal contradiction names no claim' };
+  }
+  // A fatal contradiction strips exactly as before: only the proven-false claim and its dependents,
+  // leaving any soft reason on a KEPT claim for the bar check to weigh (#30). Only when NOTHING was
+  // proven false do the soft reasons seed the strip themselves — the unsupported-tail case.
+  const fatalIds = cert.reasons.filter((r) => r.rule === 'fatal-contradiction' && r.claimId).map((r) => r.claimId!);
+  const refuted = fatalIds.length
+    ? [...new Set(fatalIds)]
+    : [...new Set(cert.reasons.filter((r) => r.claimId && SOFT_RULES.has(r.rule)).map((r) => r.claimId!))];
+  if (!refuted.length) return { ok: false, why: 'no strippable claim names a sentence to delete' };
 
   /* Everything resting on a refuted claim, transitively, by the certification's own graph — plus the
      checker's own invalidations of it, which name the same claims by the first failed root found. */

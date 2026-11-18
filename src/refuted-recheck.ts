@@ -15,7 +15,7 @@ import { config, selectedAccount } from './config.js';
 import { lintDraft } from './disclosure.js';
 import { checkNovelty } from './novelty.js';
 import { loadDraftChecks, draftBlocks, newDraftId } from './commands/draft.js';
-import { planStrip, hasRefutedClaim } from './refuted-strip.js';
+import { planStrip, hasStrippableClaim } from './refuted-strip.js';
 import { publishBar } from './autopublish.js';
 import { record, say } from './log.js';
 import type { Draft } from './types.js';
@@ -31,7 +31,7 @@ async function prepare(draftId: string): Promise<Prepared> {
   const db = getPool();
   const certs = await selectCertifications(db, { draftIds: [draftId] });
   const latest = certs[certs.length - 1];
-  if (!hasRefutedClaim(latest)) return { skip: `no claim in ${draftId} was proven false (verdict: ${latest?.verdict ?? 'none'})` };
+  if (!hasStrippableClaim(latest)) return { skip: `no claim in ${draftId} can be fixed by deleting a sentence (verdict: ${latest?.verdict ?? 'none'})` };
   const plan = planStrip({
     body: old.body,
     certs,

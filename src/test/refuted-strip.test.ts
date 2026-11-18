@@ -4,7 +4,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { planStrip, stripEligibility, sentenceSpans, stripRefutedEnabled, type StripBar } from '../refuted-strip.js';
+import { planStrip, stripEligibility, hasStrippableClaim, sentenceSpans, stripRefutedEnabled, stripSoftEnabled, type StripBar } from '../refuted-strip.js';
 import type { Certification, Claim, VerdictReason } from '../argus/types.js';
 
 const DISCLOSURE = 'Disclosure: I work on SGEN.';
@@ -318,16 +318,18 @@ describe('what qualifies', () => {
     assert.equal(e.ok, true, e.ok ? '' : e.why);
   });
 
-  test('CERTIFIED and ESCALATE are never touched', () => {
-    for (const verdict of ['CERTIFIED', 'ESCALATE'] as const) {
-      const p = planStrip({ body: BODY, certs: [cert({ verdict, reasons: [fatal('c2')], claims: [claim('c2', 'truncates an oversized row silently')] })] });
-      assert.equal(p.ok, false, verdict);
-    }
+  test('CERTIFIED is never touched; ESCALATE now is', () => {
+    const c = planStrip({ body: BODY, certs: [cert({ verdict: 'CERTIFIED', reasons: [fatal('c2')], claims: [claim('c2', 'truncates an oversized row silently')] })] });
+    assert.equal(c.ok, false, 'CERTIFIED');
+    const e = planStrip({ body: BODY, minSentences: 1, minKeepRatio: 0, certs: [cert({ verdict: 'ESCALATE', reasons: [fatal('c2')], claims: [claim('c2', 'truncates an oversized row silently')] })] });
+    assert.equal(e.ok, true, e.ok ? 'ESCALATE' : e.why);
   });
 
-  test('a REJECT with no fatal contradiction has nothing to strip', () => {
-    const e = stripEligibility(cert({ reasons: [{ rule: 'no-provenance', claimId: 'c1', detail: '' }], claims: [claim('c1', 'x')] }));
-    assert.equal(e.ok, false);
+  test('a REJECT whose soft reason names a claim is now strippable; one naming none is not', () => {
+    const withClaim = stripEligibility(cert({ reasons: [{ rule: 'no-provenance', claimId: 'c1', detail: '' }], claims: [claim('c1', 'failing on the packet size')] }));
+    assert.equal(withClaim.ok, true, withClaim.ok ? '' : withClaim.why);
+    const noClaim = stripEligibility(cert({ reasons: [{ rule: 'no-provenance', detail: '' } as VerdictReason], claims: [claim('c1', 'x')] }));
+    assert.equal(noClaim.ok, false);
   });
 
   test('only the LATEST certification counts', () => {
@@ -400,5 +402,66 @@ describe('the bar in force', () => {
       const p = plan(bar, [fatal('c2'), soft('no-provenance', 'c1')]);
       assert.equal(p.ok, true, `${bar}: ${p.ok ? '' : p.why}`);
     }
+  });
+});
+
+
+/* SOFT-STRIP TESTS (unsupported tail claims) — a draft rejected/escalated on an unsupported tail claim (no-provenance,
+   low-confidence-as-fact, overconfident-language, falsifiable-claim-weak-evidence) has that
+   sentence deleted the same way a proven-false one does, gated by REDBOT_STRIP_SOFT. */
+const prov = (claimId: string): VerdictReason => ({ rule: 'no-provenance', claimId, detail: 'a factual claim must say where it comes from' });
+const lowc = (claimId: string): VerdictReason => ({ rule: 'low-confidence-as-fact', claimId, detail: 'low confidence, not marked speculation' });
+
+describe('deleting an unsupported tail claim, not only a refuted one', () => {
+  test('a REJECT whose only reason is no-provenance strips that sentence', () => {
+    const p = planStrip({
+      body: BODY,
+      certs: [cert({ reasons: [prov('c2')], claims: [claim('c1', 'failing on the packet size'), claim('c2', 'truncates an oversized row silently')] })]
+    });
+    assert.equal(p.ok, true, p.ok ? '' : p.why);
+    if (!p.ok) return;
+    assert.equal(p.removed, 1);
+    assert.equal(p.body, 'Your import is failing on the packet size. Raise max_allowed_packet in my.cnf and ' +
+      'restart the service. Then rerun the import from the shell.');
+  });
+
+  test('an ESCALATE on low-confidence-as-fact is eligible and strips', () => {
+    const e = stripEligibility(cert({ verdict: 'ESCALATE', reasons: [lowc('c2')], claims: [claim('c2', 'truncates an oversized row silently')] }));
+    assert.equal(e.ok, true, e.ok ? '' : e.why);
+    const p = planStrip({
+      body: BODY, minSentences: 1, minKeepRatio: 0,
+      certs: [cert({ verdict: 'ESCALATE', reasons: [lowc('c2')], claims: [claim('c2', 'truncates an oversized row silently')] })]
+    });
+    assert.equal(p.ok, true, p.ok ? '' : p.why);
+  });
+
+  test('a soft reason naming no claim refuses, but a fatal naming no claim still hard-refuses', () => {
+    const noName = stripEligibility(cert({ reasons: [{ rule: 'no-provenance', detail: 'x' } as VerdictReason], claims: [claim('c2', 'truncates an oversized row silently')] }));
+    assert.equal(noName.ok, false);
+    if (!noName.ok) assert.match(noName.why, /no strippable claim names a sentence/);
+  });
+
+  test('a non-strippable hard reason still refuses the whole strip', () => {
+    const e = stripEligibility(cert({ reasons: [prov('c2'), { rule: 'thread-resolved', detail: 'answered' } as VerdictReason], claims: [claim('c2', 'truncates an oversized row silently')] }));
+    assert.equal(e.ok, false);
+    if (!e.ok) assert.match(e.why, /thread-resolved/);
+  });
+});
+
+describe('hasStrippableClaim gate', () => {
+  test('true for a proven-false REJECT and for a no-provenance REJECT', () => {
+    assert.equal(hasStrippableClaim(cert({ reasons: [{ rule: 'fatal-contradiction', claimId: 'c2', detail: 'x' }], claims: [claim('c2', 'q')] })), true);
+    assert.equal(hasStrippableClaim(cert({ reasons: [prov('c2')], claims: [claim('c2', 'q')] })), true);
+  });
+  test('false for CERTIFIED and when a reason names no claim', () => {
+    assert.equal(hasStrippableClaim(cert({ verdict: 'CERTIFIED', reasons: [], claims: [claim('c2', 'q')] })), false);
+    assert.equal(hasStrippableClaim(cert({ reasons: [{ rule: 'no-provenance', detail: 'x' } as VerdictReason], claims: [claim('c2', 'q')] })), false);
+  });
+  test('REDBOT_STRIP_SOFT=0 drops the soft half but keeps the proven-false half', () => {
+    const softOnly = cert({ reasons: [prov('c2')], claims: [claim('c2', 'q')] });
+    const fatalOne = cert({ reasons: [{ rule: 'fatal-contradiction', claimId: 'c2', detail: 'x' }], claims: [claim('c2', 'q')] });
+    assert.equal(stripSoftEnabled({ REDBOT_STRIP_SOFT: '0' }), false);
+    assert.equal(hasStrippableClaim(softOnly, { REDBOT_STRIP_SOFT: '0' }), false);
+    assert.equal(hasStrippableClaim(fatalOne, { REDBOT_STRIP_SOFT: '0' }), true);
   });
 });
